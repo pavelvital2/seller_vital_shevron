@@ -374,7 +374,7 @@ def run_wb_actions_discount_plan(
     credentials: AppCredentials,
     data_dir: Path = Path("data"),
     run_id: str | None = None,
-    scheme_text: str = "65-50-50",
+    scheme_text: str = "70-55-55",
     actions_dir: Path | None = None,
     prices_json: Path | None = None,
 ) -> dict[str, Any]:

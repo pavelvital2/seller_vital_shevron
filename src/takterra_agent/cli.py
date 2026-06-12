@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from decimal import Decimal
 import json
 from pathlib import Path
 import sys
@@ -9,12 +10,18 @@ from takterra_agent.config import load_credentials
 from takterra_agent.tasks.catalog_fetch import run_catalog_fetch
 from takterra_agent.tasks.actions_apply import run_actions_apply
 from takterra_agent.tasks.daily_morning_report import run_daily_morning_report
+from takterra_agent.tasks.ozon_cpc_bids_apply import run_ozon_cpc_bids_apply
+from takterra_agent.tasks.ozon_elastic_apply import run_ozon_elastic_apply
+from takterra_agent.tasks.ozon_cpc_optimization_plan import CpcOptimizationThresholds, run_ozon_cpc_optimization_plan
 from takterra_agent.tasks.ozon_elastic_plan import run_ozon_elastic_plan
 from takterra_agent.tasks.reviews_questions import run_reviews_questions, run_reviews_questions_apply
 from takterra_agent.tasks.status_preflight import run_status_preflight
 from takterra_agent.tasks.wb_actions_discount_plan import run_wb_actions_discount_plan
 from takterra_agent.tasks.wb_card_create_apply import run_wb_card_create_apply
 from takterra_agent.tasks.wb_card_create_plan import run_wb_card_create_plan
+from takterra_agent.tasks.wb_promotion_bid_plan import WbPromotionBidThresholds, run_wb_promotion_bid_plan
+from takterra_agent.tasks.wb_promotion_bids_apply import run_wb_promotion_bids_apply
+from takterra_agent.tasks.wb_promotion_report import run_wb_promotion_report
 from takterra_agent.sessions.manager import install_systemd_units, restore_ozon_session, run_session_manager
 
 
@@ -149,6 +156,101 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional stable run id.",
     )
 
+    apply_ozon_elastic = subparsers.add_parser(
+        "apply-ozon-elastic",
+        help="Apply approved Ozon Elastic Boosting dry-run after fresh preflight and drift-check.",
+    )
+    apply_ozon_elastic.add_argument(
+        "--data-dir",
+        default="data",
+        help="Project data directory.",
+    )
+    apply_ozon_elastic.add_argument(
+        "--plan-run-id",
+        default=None,
+        help="Approved Ozon Elastic plan run id. Defaults to the latest ozon_elastic_plan_* run.",
+    )
+    apply_ozon_elastic.add_argument(
+        "--run-id",
+        default=None,
+        help="Optional stable run id.",
+    )
+    apply_ozon_elastic.add_argument(
+        "--confirmed-by-user",
+        action="store_true",
+        help="Required explicit confirmation for external Ozon write operations.",
+    )
+
+    ozon_cpc_optimization = subparsers.add_parser(
+        "plan-ozon-cpc-optimization",
+        help="Build dry-run optimization recommendations from an Ozon CPC efficiency report.",
+    )
+    ozon_cpc_optimization.add_argument(
+        "--data-dir",
+        default="data",
+        help="Project data directory.",
+    )
+    ozon_cpc_optimization.add_argument(
+        "--run-id",
+        default=None,
+        help="Optional stable run id.",
+    )
+    ozon_cpc_optimization.add_argument(
+        "--source-run-id",
+        default=None,
+        help="Ozon CPC efficiency run id. Defaults to latest ozon_cpc_efficiency_* run.",
+    )
+    ozon_cpc_optimization.add_argument(
+        "--rows-csv",
+        default=None,
+        help="Explicit processed rows.csv from an Ozon CPC efficiency run.",
+    )
+    ozon_cpc_optimization.add_argument(
+        "--current-bids-json",
+        default=None,
+        help="Optional current_bids.json snapshot from Ozon Performance API /v2/products.",
+    )
+    ozon_cpc_optimization.add_argument("--zero-orders-spend", default="50")
+    ozon_cpc_optimization.add_argument("--high-drr-percent", default="12")
+    ozon_cpc_optimization.add_argument("--high-drr-min-spend", default="100")
+    ozon_cpc_optimization.add_argument("--scale-min-orders", type=int, default=8)
+    ozon_cpc_optimization.add_argument("--scale-max-drr-percent", default="5")
+    ozon_cpc_optimization.add_argument("--card-review-reduce-percent", default="30")
+    ozon_cpc_optimization.add_argument("--max-reduce-percent", default="50")
+    ozon_cpc_optimization.add_argument("--scale-low-drr-percent", default="20")
+    ozon_cpc_optimization.add_argument("--scale-mid-drr-percent", default="15")
+    ozon_cpc_optimization.add_argument("--scale-high-drr-percent", default="10")
+
+    apply_ozon_cpc_bids = subparsers.add_parser(
+        "apply-ozon-cpc-bids",
+        help="Apply approved Ozon CPC bid changes after fresh preflight, current-bid snapshot and drift-check.",
+    )
+    apply_ozon_cpc_bids.add_argument(
+        "--data-dir",
+        default="data",
+        help="Project data directory.",
+    )
+    apply_ozon_cpc_bids.add_argument(
+        "--plan-run-id",
+        default=None,
+        help="Approved Ozon CPC optimization plan run id. Defaults to the latest ozon_cpc_optimization_plan_* run.",
+    )
+    apply_ozon_cpc_bids.add_argument(
+        "--run-id",
+        default=None,
+        help="Optional stable run id.",
+    )
+    apply_ozon_cpc_bids.add_argument(
+        "--confirmed-by-user",
+        action="store_true",
+        help="Required explicit confirmation for external Ozon write operations.",
+    )
+    apply_ozon_cpc_bids.add_argument(
+        "--min-bid",
+        default="1.00",
+        help="Safe minimum bid in rubles. Lower target bids are skipped, not clamped.",
+    )
+
     wb_actions = subparsers.add_parser(
         "plan-wb-actions-discounts",
         help="Download WB active actions and build discount dry-run plan.",
@@ -165,7 +267,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     wb_actions.add_argument(
         "--scheme",
-        default="65-50-50",
+        default="70-55-55",
         help="Discount scheme THRESHOLD-NO_PROMO_FALLBACK-OVER_THRESHOLD_FALLBACK.",
     )
     wb_actions.add_argument(
@@ -179,9 +281,119 @@ def build_parser() -> argparse.ArgumentParser:
         help="Existing current prices JSON from WB LK snapshot.",
     )
 
+    wb_promotion = subparsers.add_parser(
+        "wb-promotion-report",
+        help="Build read-only WB Promotion campaigns and statistics report.",
+    )
+    wb_promotion.add_argument(
+        "--data-dir",
+        default="data",
+        help="Project data directory.",
+    )
+    wb_promotion.add_argument(
+        "--run-id",
+        default=None,
+        help="Optional stable run id.",
+    )
+    wb_promotion.add_argument(
+        "--date-from",
+        default=None,
+        help="Period start date YYYY-MM-DD. Defaults to last 14 days.",
+    )
+    wb_promotion.add_argument(
+        "--date-to",
+        default=None,
+        help="Period end date YYYY-MM-DD. Defaults to today.",
+    )
+    wb_promotion.add_argument(
+        "--payment-type",
+        choices=("cpc", "cpm"),
+        default=None,
+        help="Optional campaign payment type filter.",
+    )
+
+    wb_promotion_bid_plan = subparsers.add_parser(
+        "plan-wb-promotion-bids",
+        help="Build dry-run WB Promotion bid optimization recommendations from a WB promotion report.",
+    )
+    wb_promotion_bid_plan.add_argument(
+        "--data-dir",
+        default="data",
+        help="Project data directory.",
+    )
+    wb_promotion_bid_plan.add_argument(
+        "--run-id",
+        default=None,
+        help="Optional stable run id.",
+    )
+    wb_promotion_bid_plan.add_argument(
+        "--source-run-id",
+        default=None,
+        help="WB promotion report run id. Defaults to latest wb_promotion_report_* run.",
+    )
+    wb_promotion_bid_plan.add_argument(
+        "--products-csv",
+        default=None,
+        help="Explicit wb_promotion_products.csv from a WB promotion report.",
+    )
+    wb_promotion_bid_plan.add_argument(
+        "--campaigns-json",
+        default=None,
+        help="Explicit raw/campaigns.json from a WB promotion report.",
+    )
+    wb_promotion_bid_plan.add_argument("--include-inactive", action="store_true")
+    wb_promotion_bid_plan.add_argument("--zero-orders-spend", default="10")
+    wb_promotion_bid_plan.add_argument("--high-drr-percent", default="5")
+    wb_promotion_bid_plan.add_argument("--high-drr-min-spend", default="30")
+    wb_promotion_bid_plan.add_argument("--scale-min-orders", type=int, default=3)
+    wb_promotion_bid_plan.add_argument("--scale-max-drr-percent", default="1")
+    wb_promotion_bid_plan.add_argument("--card-review-reduce-percent", default="20")
+    wb_promotion_bid_plan.add_argument("--zero-no-cart-reduce-percent", default="30")
+    wb_promotion_bid_plan.add_argument("--max-reduce-percent", default="30")
+    wb_promotion_bid_plan.add_argument("--scale-low-drr-percent", default="20")
+    wb_promotion_bid_plan.add_argument("--scale-mid-drr-percent", default="15")
+    wb_promotion_bid_plan.add_argument("--scale-high-drr-percent", default="10")
+    wb_promotion_bid_plan.add_argument("--min-bid", default="1.00")
+
+    apply_wb_promotion_bids = subparsers.add_parser(
+        "apply-wb-promotion-bids",
+        help="Apply approved WB Promotion bid changes after fresh report, fresh dry-run, drift-check and verify.",
+    )
+    apply_wb_promotion_bids.add_argument(
+        "--data-dir",
+        default="data",
+        help="Project data directory.",
+    )
+    apply_wb_promotion_bids.add_argument(
+        "--plan-run-id",
+        default=None,
+        help="Approved WB promotion bid plan run id. Defaults to latest wb_promotion_bid_plan_* run.",
+    )
+    apply_wb_promotion_bids.add_argument(
+        "--run-id",
+        default=None,
+        help="Optional stable run id.",
+    )
+    apply_wb_promotion_bids.add_argument(
+        "--confirmed-by-user",
+        action="store_true",
+        help="Required explicit confirmation for external WB write operations.",
+    )
+    apply_wb_promotion_bids.add_argument(
+        "--actions",
+        default="scale_candidate",
+        help="Comma-separated recommended_action values to apply. Defaults to scale_candidate.",
+    )
+    apply_wb_promotion_bids.add_argument(
+        "--wait-seconds",
+        type=int,
+        default=45,
+        help="Seconds to wait before verify because WB bid changes are asynchronous.",
+    )
+
     apply_actions = subparsers.add_parser(
         "apply-actions",
-        help="Apply confirmed Ozon Elastic and WB 65-50-50 actions after fresh preflight/dry-run/drift-check.",
+        help="Legacy combined apply for confirmed Ozon Elastic and WB actions after fresh preflight/dry-run/drift-check.",
     )
     apply_actions.add_argument(
         "--data-dir",
@@ -394,6 +606,52 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
 
+    if args.command == "apply-ozon-elastic":
+        result = run_ozon_elastic_apply(
+            credentials=load_credentials(),
+            data_dir=Path(args.data_dir),
+            plan_run_id=args.plan_run_id,
+            run_id=args.run_id,
+            confirmed_by_user=args.confirmed_by_user,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
+
+    if args.command == "plan-ozon-cpc-optimization":
+        result = run_ozon_cpc_optimization_plan(
+            data_dir=Path(args.data_dir),
+            run_id=args.run_id,
+            source_run_id=args.source_run_id,
+            rows_csv=Path(args.rows_csv) if args.rows_csv else None,
+            current_bids_json=Path(args.current_bids_json) if args.current_bids_json else None,
+            thresholds=CpcOptimizationThresholds(
+                zero_orders_spend=args.zero_orders_spend,
+                high_drr_percent=args.high_drr_percent,
+                high_drr_min_spend=args.high_drr_min_spend,
+                scale_min_orders=args.scale_min_orders,
+                scale_max_drr_percent=args.scale_max_drr_percent,
+                card_review_reduce_percent=args.card_review_reduce_percent,
+                max_reduce_percent=args.max_reduce_percent,
+                scale_low_drr_percent=args.scale_low_drr_percent,
+                scale_mid_drr_percent=args.scale_mid_drr_percent,
+                scale_high_drr_percent=args.scale_high_drr_percent,
+            ),
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "apply-ozon-cpc-bids":
+        result = run_ozon_cpc_bids_apply(
+            credentials=load_credentials(),
+            data_dir=Path(args.data_dir),
+            plan_run_id=args.plan_run_id,
+            run_id=args.run_id,
+            confirmed_by_user=args.confirmed_by_user,
+            min_bid=Decimal(args.min_bid),
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
+
     if args.command == "plan-wb-actions-discounts":
         result = run_wb_actions_discount_plan(
             credentials=load_credentials(),
@@ -405,6 +663,57 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
+
+    if args.command == "wb-promotion-report":
+        result = run_wb_promotion_report(
+            credentials=load_credentials(),
+            data_dir=Path(args.data_dir),
+            run_id=args.run_id,
+            date_from=args.date_from,
+            date_to=args.date_to,
+            payment_type=args.payment_type,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "plan-wb-promotion-bids":
+        result = run_wb_promotion_bid_plan(
+            data_dir=Path(args.data_dir),
+            run_id=args.run_id,
+            source_run_id=args.source_run_id,
+            products_csv=Path(args.products_csv) if args.products_csv else None,
+            campaigns_json=Path(args.campaigns_json) if args.campaigns_json else None,
+            active_cpc_only=not args.include_inactive,
+            thresholds=WbPromotionBidThresholds(
+                zero_orders_spend=args.zero_orders_spend,
+                high_drr_percent=args.high_drr_percent,
+                high_drr_min_spend=args.high_drr_min_spend,
+                scale_min_orders=args.scale_min_orders,
+                scale_max_drr_percent=args.scale_max_drr_percent,
+                card_review_reduce_percent=args.card_review_reduce_percent,
+                zero_no_cart_reduce_percent=args.zero_no_cart_reduce_percent,
+                max_reduce_percent=args.max_reduce_percent,
+                scale_low_drr_percent=args.scale_low_drr_percent,
+                scale_mid_drr_percent=args.scale_mid_drr_percent,
+                scale_high_drr_percent=args.scale_high_drr_percent,
+                min_bid=args.min_bid,
+            ),
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "apply-wb-promotion-bids":
+        result = run_wb_promotion_bids_apply(
+            credentials=load_credentials(),
+            data_dir=Path(args.data_dir),
+            plan_run_id=args.plan_run_id,
+            run_id=args.run_id,
+            confirmed_by_user=args.confirmed_by_user,
+            allowed_actions={item.strip() for item in args.actions.split(",") if item.strip()},
+            wait_seconds=args.wait_seconds,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
 
     if args.command == "apply-actions":
         result = run_actions_apply(

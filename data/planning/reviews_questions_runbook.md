@@ -3,8 +3,19 @@
 ## Read-only сбор
 
 ```bash
-PYTHONPATH=src python3 -m takterra_agent.cli reviews-questions --dry-run
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m takterra_agent.cli reviews-questions --marketplace all
 ```
+
+Для проверки только WB:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m takterra_agent.cli reviews-questions --marketplace wb
+```
+
+Команда выполняет read-only сбор отзывов и вопросов, готовит отчет и не
+публикует ответы.
 
 ## Apply
 
@@ -20,4 +31,3 @@ read-only -> draft answers -> owner review -> approved -> apply -> verify -> res
 
 Отзывы/вопросы обрабатываются по native ID маркетплейса. Mapping нужен только
 для объединенной аналитики по одному товару между Ozon и WB.
-

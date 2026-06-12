@@ -36,25 +36,37 @@ data/catalog/unified/
 ## Быстрые команды
 
 ```bash
-PYTHONPATH=src pytest -q
-PYTHONPATH=src python3 -m takterra_agent.cli --help
-PYTHONPATH=src python3 -m takterra_agent.cli status-preflight --skip-lk
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/pytest -q
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli --help
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli status-preflight --skip-lk
 ```
 
 После получения API credentials:
 
 ```bash
-PYTHONPATH=src python3 -m takterra_agent.cli fetch-catalog
-PYTHONPATH=src python3 -m takterra_agent.cli daily-morning-report
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli fetch-catalog
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli daily-morning-report
 ```
 
 Сессии ЛК:
 
 ```bash
-PYTHONPATH=src python3 -m takterra_agent.cli sessions status
-PYTHONPATH=src python3 -m takterra_agent.cli sessions restart --marketplace ozon
-PYTHONPATH=src python3 -m takterra_agent.cli install-session-systemd
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli sessions status
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli sessions restart --marketplace ozon
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli install-session-systemd
 ```
+
+## Операционные инструкции
+
+Основные постоянные инструкции находятся в `data/planning/`:
+
+- `status_preflight_runbook.md` - единая проверка состояния.
+- `daily_morning_report_runbook.md` - утренний отчет.
+- `catalog_mapping_runbook.md` - Ozon/WB catalog mapping.
+- `ozon_elastic_runbook.md` - Ozon Elastic Boosting.
+- `ozon_cpc_efficiency_runbook.md` - Ozon CPC эффективность и ставки.
+- `wb_actions_runbook.md` - WB акции и скидки.
+- `wb_promotion_runbook.md` - WB promotion отчеты, dry-run и apply ставок.
 
 ## Секреты
 
@@ -70,6 +82,13 @@ cp .env.example .env
 
 ## GitHub
 
-После проверки чистоты проекта создать локальный git и GitHub repository.
-Перед первым commit обязательно проверить `git status --short` и отсутствие
-секретов/сессий/операционных артефактов.
+Репозиторий создан и подключен:
+
+```text
+https://github.com/pavelvital2/seller_vital_shevron
+branch: main
+visibility: PRIVATE
+```
+
+Перед каждым commit обязательно проверить `git status --short` и отсутствие
+секретов, сессий и операционных артефактов в индексе.

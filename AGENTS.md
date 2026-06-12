@@ -37,8 +37,10 @@
 
 - `AGENTS.md` - корневые правила работы агентов.
 - `data/planning/project_map.md` - карта структуры проекта.
-- `data/planning/fresh_agent_handoff_2026-06-12.md` - актуальная передача
+- `data/planning/fresh_agent_handoff_2026-06-13.md` - актуальная передача
   состояния fresh-агенту.
+- `data/planning/revision_2026-06-13.md` - ревизия проекта после настройки
+  Ozon/WB операций и apply WB promotion ставок.
 - `data/planning/recommendations_index.md` - реестр рекомендаций.
 - `data/planning/vital_shevron_bootstrap_plan.md` - план первичного запуска.
 - `data/planning/catalog_mapping_runbook.md` - работа с отдельными каталогами
@@ -48,6 +50,11 @@
 - `data/planning/status_preflight_runbook.md` - единая проверка состояния.
 - `data/planning/daily_morning_report_runbook.md` - утренний отчет.
 - `data/planning/reviews_questions_runbook.md` - отзывы и вопросы.
+- `data/planning/ozon_elastic_runbook.md` - Ozon Elastic Boosting.
+- `data/planning/ozon_cpc_efficiency_runbook.md` - эффективность Ozon
+  продвижения `Оплата за клик`.
+- `data/planning/wb_promotion_runbook.md` - эффективность WB продвижения.
+- `data/planning/wb_actions_runbook.md` - акции и скидки WB.
 
 ## Источники опыта
 
@@ -144,6 +151,20 @@ API, API не дает нужного метода, либо API-метод не
 
 Допустимо фиксировать только факт использования переменных окружения или
 внешних файлов с секретами без их содержимого.
+
+## Инструменты агентов
+
+Агенты не устанавливают системные или проектные инструменты самостоятельно.
+Если для работы нужен новый инструмент, нужно написать владельцу, что именно
+требуется; установка выполняется централизованно.
+
+Использовать уже подготовленные централизованные инструменты:
+
+```text
+/home/Codex/agent-tools/python/bin/python
+/home/Codex/agent-tools/python/bin/pytest
+/home/Codex/agent-tools/node/node_modules
+```
 
 ## Git/GitHub
 

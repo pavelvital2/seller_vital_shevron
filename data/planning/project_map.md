@@ -1,6 +1,6 @@
 # Vital Shevron Project Map
 
-Дата: 2026-06-12
+Дата: 2026-06-13
 
 ```text
 /home/pavel/projects/seller_vital_shevron
@@ -26,6 +26,20 @@
 
 - `src/takterra_agent/` - рабочий Python package. Имя оставлено временно для
   снижения риска при переносе; отдельный rename stage вынесен в рекомендации.
+- `src/takterra_agent/tasks/ozon_elastic_apply.py` - применение согласованного
+  Ozon Elastic dry-run с fresh preflight, drift-check и verify.
+- `src/takterra_agent/tasks/ozon_cpc_optimization_plan.py` - SKU-level dry-run
+  план рекомендаций для Ozon CPC.
+- `src/takterra_agent/tasks/ozon_cpc_bids_apply.py` - применение согласованных
+  ставок Ozon CPC через Performance API с API-only preflight, drift-check и
+  verify.
+- `src/takterra_agent/tasks/wb_promotion_report.py` - read-only отчет по WB
+  продвижению через Promotion API.
+- `src/takterra_agent/tasks/wb_promotion_bid_plan.py` - dry-run план изменений
+  ставок WB продвижения по активным CPC-кампаниям.
+- `src/takterra_agent/tasks/wb_promotion_bids_apply.py` - применение
+  согласованных ставок WB promotion через Promotion API с fresh report,
+  drift-check и verify.
 - `scripts/` - JS/Bash helpers для ЛК, сессий, отзывов/вопросов и операций.
 - `tests/` - тесты переносимого каркаса.
 
@@ -61,7 +75,9 @@ Ozon CDP port по умолчанию: `9544`.
 
 ## Planning
 
-- `data/planning/fresh_agent_handoff_2026-06-12.md`
+- `data/planning/fresh_agent_handoff_2026-06-13.md` - актуальный handoff.
+- `data/planning/fresh_agent_handoff_2026-06-12.md` - исторический handoff.
+- `data/planning/revision_2026-06-13.md`
 - `data/planning/recommendations_index.md`
 - `data/planning/vital_shevron_bootstrap_plan.md`
 - `data/planning/catalog_mapping_runbook.md`
@@ -70,6 +86,10 @@ Ozon CDP port по умолчанию: `9544`.
 - `data/planning/status_preflight_runbook.md`
 - `data/planning/daily_morning_report_runbook.md`
 - `data/planning/reviews_questions_runbook.md`
+- `data/planning/ozon_elastic_runbook.md`
+- `data/planning/ozon_cpc_efficiency_runbook.md`
+- `data/planning/wb_promotion_runbook.md`
+- `data/planning/wb_actions_runbook.md`
 
 ## Sessions
 
