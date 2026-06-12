@@ -61,6 +61,7 @@ Ozon CDP port по умолчанию: `9544`.
 
 ## Planning
 
+- `data/planning/fresh_agent_handoff_2026-06-12.md`
 - `data/planning/recommendations_index.md`
 - `data/planning/vital_shevron_bootstrap_plan.md`
 - `data/planning/catalog_mapping_runbook.md`

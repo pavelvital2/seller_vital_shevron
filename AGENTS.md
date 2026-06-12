@@ -37,6 +37,8 @@
 
 - `AGENTS.md` - корневые правила работы агентов.
 - `data/planning/project_map.md` - карта структуры проекта.
+- `data/planning/fresh_agent_handoff_2026-06-12.md` - актуальная передача
+  состояния fresh-агенту.
 - `data/planning/recommendations_index.md` - реестр рекомендаций.
 - `data/planning/vital_shevron_bootstrap_plan.md` - план первичного запуска.
 - `data/planning/catalog_mapping_runbook.md` - работа с отдельными каталогами
@@ -170,4 +172,3 @@ GitHub-репозиторий.
 - нужно ли обновить `data/planning/recommendations_index.md`;
 - нужно ли обновить `data/planning/project_map.md`;
 - нужно ли создать или дополнить инструкцию по операции.
-
