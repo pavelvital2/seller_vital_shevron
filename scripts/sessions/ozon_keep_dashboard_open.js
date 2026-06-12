@@ -36,6 +36,27 @@ function classify(summary) {
   };
 }
 
+async function seedProfileFromState(context, stateFile) {
+  if (!fs.existsSync(stateFile)) return false;
+
+  const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+  if (Array.isArray(state.cookies) && state.cookies.length) {
+    await context.addCookies(state.cookies);
+  }
+
+  const page = await context.newPage();
+  for (const originState of state.origins || []) {
+    const entries = originState.localStorage || [];
+    if (!originState.origin || entries.length === 0) continue;
+    await page.goto(originState.origin, { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => null);
+    await page.evaluate((items) => {
+      for (const item of items) localStorage.setItem(item.name, item.value);
+    }, entries).catch(() => null);
+  }
+  await page.close().catch(() => null);
+  return true;
+}
+
 (async () => {
   fs.mkdirSync(profile, { recursive: true });
   fs.mkdirSync(path.dirname(statePath), { recursive: true });
@@ -55,6 +76,7 @@ function classify(summary) {
     ],
   }));
 
+  const seeded = await seedProfileFromState(context, statePath);
   const page = context.pages()[0] || await context.newPage();
   await page.goto('https://seller.ozon.ru/app/dashboard/main', { waitUntil: 'domcontentloaded', timeout: 90000 }).catch(() => null);
   await page.waitForTimeout(10000);
@@ -78,6 +100,7 @@ function classify(summary) {
     needsLogin: status.needsLogin,
     cdp,
     statePath,
+    seeded,
     stateExported: open,
     valuesPrinted: false,
     keptOpen: true,

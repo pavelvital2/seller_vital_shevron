@@ -11,10 +11,28 @@ EOF
   exit 0
 fi
 
-PROJECT_ROOT="/home/pavel/projects/seller_takterra"
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 LOG_DIR="$PROJECT_ROOT/.sessions/wb/session_refresh_logs"
 LOCK_FILE="$PROJECT_ROOT/.sessions/wb/wb-session-refresh.lock"
 NODE_SCRIPT="$PROJECT_ROOT/scripts/sessions/wb_persistent_session.js"
+KEEPALIVE_SCRIPT="$PROJECT_ROOT/scripts/sessions/wb_session_keepalive.js"
+
+load_env_value() {
+  local key="$1"
+  local value
+  value="$(grep -m1 -E "^${key}=" "$PROJECT_ROOT/.env" 2>/dev/null | sed -E "s/^${key}=//" || true)"
+  value="${value%\"}"
+  value="${value#\"}"
+  value="${value%\'}"
+  value="${value#\'}"
+  if [[ -n "$value" ]]; then
+    export "$key=$value"
+  fi
+}
+
+if [[ -z "${WB_EXPECTED_SELLER:-}" ]]; then
+  load_env_value "WB_EXPECTED_SELLER"
+fi
 
 mkdir -p "$LOG_DIR"
 
@@ -53,6 +71,13 @@ run_refresh() {
   run_refresh "seller.wildberries.ru" "https://seller.wildberries.ru/"
   echo
   run_refresh "cmp.wildberries.ru" "https://cmp.wildberries.ru/campaigns/list"
+  echo
+  echo "== wb_session_keepalive =="
+  if node "$KEEPALIVE_SCRIPT"; then
+    echo "keepalive_status=ok"
+  else
+    echo "keepalive_status=failed"
+  fi
   echo
   echo "finished_at=$(date --iso-8601=seconds)"
 } >> "$log_file" 2>&1
