@@ -20,6 +20,9 @@ data/catalog/mapping/ozon_wb_product_mapping_review.md
 data/catalog/unified/future_seller_sku_plan.csv
 ```
 
+Файлы mapping и unified plan считаются рабочими бизнес-данными и по умолчанию
+не коммитятся в GitHub. В git остается только инструкция `README.md`.
+
 ## Получение каталогов
 
 ```bash
@@ -84,4 +87,3 @@ dry-run rename plan -> owner approval -> apply -> verify -> result
 
 Перед apply проверить официальные API/ЛК ограничения Ozon/WB на изменение
 `offer_id` и `vendorCode` у существующих карточек.
-

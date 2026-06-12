@@ -65,6 +65,18 @@ visibility: PRIVATE
 default branch: main
 ```
 
+Статус API/catalog на 2026-06-12:
+
+```text
+Ozon Seller API: ok
+Ozon Performance API: ok
+WB API: ok
+Ozon catalog rows: 548
+WB catalog rows: 431
+exact seller SKU matches: 98
+mapping rows needing owner review: 783
+```
+
 ```bash
 git init
 git status --short

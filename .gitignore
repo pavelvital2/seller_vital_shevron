@@ -17,6 +17,10 @@ data/catalog/**/raw/*
 data/catalog/**/processed/*
 !data/catalog/**/raw/README.md
 !data/catalog/**/processed/README.md
+data/catalog/mapping/*
+!data/catalog/mapping/README.md
+data/catalog/unified/*
+!data/catalog/unified/README.md
 data/runs/*
 data/pending/*
 data/approved/*
@@ -30,4 +34,3 @@ data/locks/
 .sessions/
 tmp/
 *.log
-

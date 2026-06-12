@@ -52,6 +52,13 @@ Ozon CDP port по умолчанию: `9544`.
 - `data/approved/` - approved packages, не коммитить.
 - `data/reports/` - экспортные отчеты, не коммитить без отдельного решения.
 
+Первый read-only catalog snapshot от 2026-06-12:
+
+- Ozon rows: `548`
+- WB rows: `431`
+- exact seller SKU matches: `98`
+- mapping rows requiring owner review: `783`
+
 ## Planning
 
 - `data/planning/recommendations_index.md`
