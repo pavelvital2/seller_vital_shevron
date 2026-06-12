@@ -1,0 +1,969 @@
+from __future__ import annotations
+
+import csv
+from collections import Counter
+from datetime import datetime
+import json
+from pathlib import Path
+import re
+import subprocess
+from typing import Any
+
+from takterra_agent.config import AppCredentials
+from takterra_agent.http import ApiError
+from takterra_agent.marketplaces.ozon.adapter import OzonSellerAdapter
+from takterra_agent.marketplaces.wb.communications_adapter import WbCommunicationsAdapter
+from takterra_agent.reports.writer import ensure_dir, write_json
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _now() -> datetime:
+    return datetime.now().astimezone()
+
+
+def _safe_error(exc: BaseException) -> str:
+    if isinstance(exc, ApiError):
+        if exc.status == 401:
+            return "HTTP 401: unauthorized"
+        if exc.status == 403:
+            message = exc.message.replace("\n", " ").replace("\r", " ")
+            if "not available with existing subscription" in message:
+                return "HTTP 403: not available with existing subscription"
+            return "HTTP 403: forbidden"
+        if exc.status == 429:
+            return "HTTP 429: rate limit / too many requests"
+        return f"HTTP {exc.status}: {exc.message[:500]}"
+    return str(exc).replace("\n", " ").replace("\r", " ")[:800]
+
+
+def _safe_read_json(path: Path) -> Any | None:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _write_csv(path: Path, rows: list[dict[str, Any]], fields: list[str]) -> None:
+    ensure_dir(path.parent)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({field: row.get(field, "") for field in fields})
+
+
+def _unwrap_wb_data(data: Any) -> dict[str, Any]:
+    if not isinstance(data, dict):
+        return {}
+    current = data
+    if isinstance(current.get("data"), dict) and any(key in current["data"] for key in ("feedbacks", "questions")):
+        return current["data"]
+    if isinstance(current.get("data"), dict) and isinstance(current["data"].get("data"), dict):
+        return current["data"]["data"]
+    return current
+
+
+def _product_details(item: dict[str, Any]) -> dict[str, Any]:
+    details = item.get("productDetails") or item.get("product_details") or {}
+    return details if isinstance(details, dict) else {}
+
+
+def _join_review_text(*parts: Any) -> str:
+    labels = ["", "Достоинства: ", "Недостатки: "]
+    values: list[str] = []
+    for label, part in zip(labels, parts):
+        text = str(part or "").strip()
+        if text:
+            values.append(f"{label}{text}" if label else text)
+    return " ".join(values).strip()
+
+
+def normalize_wb_feedback(item: dict[str, Any]) -> dict[str, Any]:
+    details = _product_details(item)
+    return {
+        "platform": "wb",
+        "source_type": "review",
+        "id": str(item.get("id") or ""),
+        "published_at": item.get("createdDate") or item.get("created_date") or "",
+        "rating": item.get("productValuation") or item.get("product_valuation") or "",
+        "offer_id": str(details.get("supplierArticle") or ""),
+        "sku": str(details.get("nmId") or ""),
+        "product_title": details.get("productName") or "",
+        "text": _join_review_text(item.get("text"), item.get("pros"), item.get("cons")),
+        "raw_text": item.get("text") or "",
+        "pros": item.get("pros") or "",
+        "cons": item.get("cons") or "",
+        "was_viewed": item.get("wasViewed"),
+        "answer_exists": bool(item.get("answer")),
+        "can_mark_viewed": False,
+        "needs_public_reply": not bool(item.get("answer")),
+    }
+
+
+def normalize_wb_question(item: dict[str, Any]) -> dict[str, Any]:
+    details = _product_details(item)
+    return {
+        "platform": "wb",
+        "source_type": "question",
+        "id": str(item.get("id") or ""),
+        "published_at": item.get("createdDate") or item.get("created_date") or "",
+        "rating": "",
+        "offer_id": str(details.get("supplierArticle") or ""),
+        "sku": str(details.get("nmId") or ""),
+        "product_title": details.get("productName") or "",
+        "text": str(item.get("text") or "").strip(),
+        "was_viewed": item.get("wasViewed"),
+        "answer_exists": bool(item.get("answer")),
+        "state": item.get("state") or "",
+        "is_answerable": item.get("answer") is None,
+    }
+
+
+def _normalize_ozon_item(item: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(item)
+    normalized.setdefault("id", item.get("uuid") or item.get("review_uuid") or "")
+    normalized.setdefault("platform", "ozon")
+    normalized.setdefault("rating", item.get("rating") or "")
+    normalized.setdefault("text", str(item.get("text") or "").strip())
+    normalized.setdefault("offer_id", item.get("offer_id") or "")
+    normalized.setdefault("sku", str(item.get("sku") or ""))
+    normalized.setdefault("product_title", item.get("product_title") or "")
+    return normalized
+
+
+def _rating_number(value: Any) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _has_problem_text(text: str) -> bool:
+    return bool(
+        re.search(
+            r"не подош|маленьк|слом|брак|плохо|ужас|вернул|не соответствует|нет в комплект|обман|разочар",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def classify_item(item: dict[str, Any]) -> str:
+    source_type = item.get("source_type")
+    text = str(item.get("text") or "").strip()
+
+    if source_type == "question":
+        if not text:
+            return "needs_manual_check"
+        if re.search(r"налич|сколько|количеств|остат|шт|штук|парт", text, re.IGNORECASE):
+            return "needs_stock_check"
+        if re.search(r"размер|цвет|материал|липуч|велкро|комплект|состав|подойд", text, re.IGNORECASE):
+            return "needs_product_context_check"
+        return "needs_owner_review_for_answer"
+
+    rating = _rating_number(item.get("rating"))
+    if text and (rating in {1, 2, 3} or _has_problem_text(text)):
+        return "priority_problem_review"
+    if item.get("platform") == "ozon" and item.get("can_mark_viewed"):
+        return "can_mark_viewed_after_owner_confirmation"
+    if item.get("needs_public_reply"):
+        return "needs_owner_review_for_public_reply"
+    return "needs_manual_check"
+
+
+def _product_phrase(title: str) -> tuple[str, str, str]:
+    lower = title.lower()
+    if "патронташ" in lower:
+        return "патронташ", "понравился", "подошел"
+    if "комплект" in lower:
+        return "комплект", "понравился", "подошел"
+    if "шеврон" in lower:
+        return "шеврон", "понравился", "подошел"
+    if "петлица" in lower:
+        return "петлица", "понравилась", "подошла"
+    if "нашив" in lower:
+        return "нашивка", "понравилась", "подошла"
+    return "товар", "понравился", "подошел"
+
+
+def draft_review_reply(item: dict[str, Any]) -> str:
+    title = str(item.get("product_title") or "")
+    text = str(item.get("text") or "").strip()
+    rating = _rating_number(item.get("rating"))
+    word, liked, matched = _product_phrase(title)
+
+    if rating in {1, 2, 3} or _has_problem_text(text):
+        return (
+            "Здравствуйте! Спасибо за обратную связь. Нам жаль, что товар не подошел. "
+            "Проверим карточку и партию по этой позиции. Если товар не подошел, "
+            "возврат можно оформить через маркетплейс."
+        )
+    if text:
+        return f"Спасибо за отзыв! Рады, что {word} вам {liked} и {matched} по качеству."
+    return f"Спасибо за высокую оценку! Рады, что {word} вам {liked}."
+
+
+def draft_question_reply(item: dict[str, Any]) -> str:
+    title = str(item.get("product_title") or "")
+    text = str(item.get("text") or "").strip()
+    all_text = f"{title}\n{text}".lower()
+
+    if re.search(r"налич|сколько|количеств|остат|шт|штук|парт", text, re.IGNORECASE):
+        return ""
+    if "липуч" in all_text or "велкро" in all_text:
+        return (
+            "Здравствуйте! Да, товар на липучке, если это указано в названии карточки. "
+            "Жесткая часть липучки находится на обратной стороне изделия."
+        )
+    return ""
+
+
+def build_actions(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    actions: list[dict[str, Any]] = []
+    for item in items:
+        status = classify_item(item)
+        base = {
+            "platform": item.get("platform", ""),
+            "source_type": item.get("source_type", ""),
+            "source_id": item.get("id", ""),
+            "offer_id": item.get("offer_id", ""),
+            "sku": item.get("sku", ""),
+            "rating": item.get("rating", ""),
+            "product_title": item.get("product_title", ""),
+            "source_text": item.get("text", ""),
+            "processing_status": status,
+        }
+        if status == "can_mark_viewed_after_owner_confirmation":
+            actions.append(
+                {
+                    **base,
+                    "action_type": "mark_review_viewed",
+                    "state": "pending_owner_confirmation",
+                    "risk": "low",
+                    "draft_text": "",
+                    "notes": "Ozon empty review/rating. Mark viewed only after owner confirmation.",
+                }
+            )
+            continue
+        if item.get("source_type") == "question":
+            draft = draft_question_reply(item)
+            actions.append(
+                {
+                    **base,
+                    "action_type": "question_answer" if draft else "manual_question_review",
+                    "state": "pending_owner_confirmation" if draft else "needs_owner_input",
+                    "risk": "normal",
+                    "draft_text": draft,
+                    "notes": "Question requires stock/product-context check before publication." if not draft else "",
+                }
+            )
+            continue
+        if status in {"needs_owner_review_for_public_reply", "priority_problem_review"}:
+            actions.append(
+                {
+                    **base,
+                    "action_type": "public_review_reply",
+                    "state": "pending_owner_confirmation",
+                    "risk": "high" if status == "priority_problem_review" else "normal",
+                    "draft_text": draft_review_reply(item),
+                    "notes": "Owner must approve before publication.",
+                }
+            )
+    return actions
+
+
+def _extract_ozon_reviews(response: dict[str, Any]) -> list[dict[str, Any]]:
+    result = response.get("result") if isinstance(response, dict) else None
+    candidates: Any
+    if isinstance(result, dict):
+        candidates = result.get("reviews") or result.get("items") or result.get("data") or []
+    else:
+        candidates = result if isinstance(result, list) else response.get("reviews") if isinstance(response, dict) else []
+    if not isinstance(candidates, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        rows.append(
+            {
+                "platform": "ozon",
+                "source_type": "review",
+                "id": item.get("id") or item.get("review_id") or "",
+                "published_at": item.get("published_at") or "",
+                "rating": item.get("rating") or "",
+                "offer_id": item.get("offer_id") or "",
+                "sku": str(item.get("sku") or ""),
+                "product_title": item.get("product_name") or item.get("product_title") or "",
+                "text": str(item.get("text") or "").strip(),
+                "needs_public_reply": True,
+                "can_mark_viewed": False,
+            }
+        )
+    return rows
+
+
+def _run_ozon_official_probe(
+    *,
+    credentials: AppCredentials,
+    run_dir: Path,
+    limit: int,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    raw_dir = ensure_dir(run_dir / "raw" / "ozon_api")
+    if not credentials.ozon_seller:
+        return [], {"status": "missing_credentials", "source": "Ozon Seller API"}
+
+    adapter = OzonSellerAdapter(credentials.ozon_seller)
+    result: dict[str, Any] = {"status": "unknown", "source": "Ozon Seller API", "methods": {}}
+    reviews: list[dict[str, Any]] = []
+
+    for name, path, payload in [
+        ("review_count", "/v1/review/count", {}),
+        ("review_list", "/v1/review/list", {"limit": min(max(limit, 20), 100), "sort_dir": "DESC", "status": "UNPROCESSED"}),
+    ]:
+        try:
+            data = adapter.post(path, payload)
+            write_json(raw_dir / f"{name}.json", data)
+            result["methods"][name] = {"status": "ok", "path": path}
+            if name == "review_list":
+                reviews = _extract_ozon_reviews(data)
+        except Exception as exc:  # noqa: BLE001
+            result["methods"][name] = {"status": "error", "path": path, "error": _safe_error(exc)}
+
+    result["status"] = "ok" if any(item.get("status") == "ok" for item in result["methods"].values()) else "error"
+    result["reviews_count"] = len(reviews)
+    return reviews, result
+
+
+def _run_ozon_lk_fallback(*, run_dir: Path, limit: int) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    script = PROJECT_ROOT / "scripts" / "reviews" / "ozon_reviews_questions_readonly_cdp.js"
+    completed = subprocess.run(
+        ["node", str(script), "--run-dir", str(run_dir), "--limit", str(limit)],
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=180,
+        check=False,
+    )
+    summary = _safe_read_json(run_dir / "raw" / "ozon_lk_summary.json")
+    if not isinstance(summary, dict):
+        summary = {
+            "source": "ozon_lk_cdp_internal_api",
+            "ok": False,
+            "blocker": (completed.stderr or completed.stdout or "").strip()[:1000],
+        }
+    summary["returncode"] = completed.returncode
+
+    reviews_raw = _safe_read_json(run_dir / "processed" / "ozon_reviews.json")
+    questions_raw = _safe_read_json(run_dir / "processed" / "ozon_questions.json")
+    reviews = [_normalize_ozon_item(item) for item in reviews_raw] if isinstance(reviews_raw, list) else []
+    questions = [_normalize_ozon_item(item) for item in questions_raw] if isinstance(questions_raw, list) else []
+    return reviews, questions, summary
+
+
+def _run_wb_api(
+    *,
+    credentials: AppCredentials,
+    run_dir: Path,
+    limit: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    raw_dir = ensure_dir(run_dir / "raw" / "wb_api")
+    if not credentials.wb:
+        return [], [], {
+            "status": "missing_credentials",
+            "source": "WB Feedbacks API",
+            "error": "WB API token is not available. Check WB_API_TOKEN or VITAL_SHEVRON_WB_TOKEN_FILE.",
+        }
+
+    adapter = WbCommunicationsAdapter(credentials.wb)
+    summary: dict[str, Any] = {"status": "ok", "source": "WB Feedbacks API", "methods": {}}
+    feedbacks: list[dict[str, Any]] = []
+    questions: list[dict[str, Any]] = []
+
+    calls = [
+        ("feedbacks_count", lambda: adapter.fetch_unanswered_feedbacks_count()),
+        ("questions_count", lambda: adapter.fetch_unanswered_questions_count()),
+        ("feedbacks_list", lambda: adapter.fetch_feedbacks(is_answered=False, take=limit, skip=0, order="dateDesc")),
+        ("questions_list", lambda: adapter.fetch_questions(is_answered=False, take=limit, skip=0, order="dateDesc")),
+    ]
+    for name, fn in calls:
+        try:
+            data = fn()
+            write_json(raw_dir / f"{name}.json", data)
+            summary["methods"][name] = {"status": "ok"}
+            unwrapped = _unwrap_wb_data(data)
+            if name == "feedbacks_list":
+                raw_feedbacks = unwrapped.get("feedbacks") if isinstance(unwrapped, dict) else []
+                feedbacks = [normalize_wb_feedback(item) for item in raw_feedbacks if isinstance(item, dict)]
+            elif name == "questions_list":
+                raw_questions = unwrapped.get("questions") if isinstance(unwrapped, dict) else []
+                questions = [normalize_wb_question(item) for item in raw_questions if isinstance(item, dict)]
+        except Exception as exc:  # noqa: BLE001
+            summary["status"] = "error"
+            summary["methods"][name] = {"status": "error", "error": _safe_error(exc)}
+
+    summary["feedbacks_count"] = len(feedbacks)
+    summary["questions_count"] = len(questions)
+    return feedbacks, questions, summary
+
+
+def _write_pending_package(
+    *,
+    data_dir: Path,
+    run_id: str,
+    started_at: datetime,
+    actions: list[dict[str, Any]],
+    report_text: str,
+) -> dict[str, str]:
+    pending_id = f"{run_id}_pending"
+    pending_dir = ensure_dir(data_dir / "pending" / pending_id)
+    fields = [
+        "platform",
+        "source_type",
+        "action_type",
+        "state",
+        "risk",
+        "source_id",
+        "offer_id",
+        "sku",
+        "rating",
+        "product_title",
+        "source_text",
+        "draft_text",
+        "processing_status",
+        "notes",
+    ]
+    manifest = {
+        "pending_id": pending_id,
+        "run_id": run_id,
+        "status": "pending_owner_review",
+        "created_at": started_at.isoformat(timespec="seconds"),
+        "actions_count": len(actions),
+        "write_operations": False,
+        "approval_required": True,
+    }
+    write_json(pending_dir / "manifest.json", manifest)
+    write_json(pending_dir / "draft_answers.json", {"run_id": run_id, "actions": actions})
+    _write_csv(pending_dir / "draft_answers.csv", actions, fields)
+    (pending_dir / "APPROVAL_REQUIRED.md").write_text(report_text, encoding="utf-8")
+    return {
+        "pending_dir": str(pending_dir),
+        "manifest": str(pending_dir / "manifest.json"),
+        "draft_answers_json": str(pending_dir / "draft_answers.json"),
+        "draft_answers_csv": str(pending_dir / "draft_answers.csv"),
+        "approval_report": str(pending_dir / "APPROVAL_REQUIRED.md"),
+    }
+
+
+def _build_report(
+    *,
+    run_id: str,
+    started_at: datetime,
+    items: list[dict[str, Any]],
+    actions: list[dict[str, Any]],
+    sources: dict[str, Any],
+    artifacts: dict[str, str],
+) -> str:
+    item_counts = Counter(f"{item.get('platform')}:{item.get('source_type')}" for item in items)
+    action_counts = Counter(str(action.get("action_type") or "") for action in actions)
+    status_counts = Counter(str(action.get("processing_status") or "") for action in actions)
+    blockers: list[str] = []
+    for name, source in sources.items():
+        if isinstance(source, dict):
+            if source.get("status") in {"error", "missing_credentials"}:
+                blockers.append(f"{name}: {source.get('error') or source.get('blocker') or source.get('status')}")
+            for method_name, method in (source.get("methods") or {}).items():
+                if isinstance(method, dict) and method.get("status") == "error":
+                    blockers.append(f"{name}/{method_name}: {method.get('error')}")
+            if source.get("ok") is False and source.get("blocker"):
+                blockers.append(f"{name}: {source.get('blocker')}")
+
+    lines = [
+        "# Отзывы и вопросы: read-only dry-run",
+        "",
+        f"Run ID: `{run_id}`",
+        f"Started at: `{started_at.isoformat(timespec='seconds')}`",
+        "",
+        "Операция read-only: ответы не опубликованы, вопросы не закрыты, отзывы не отмечены просмотренными.",
+        "",
+        "## Итог",
+        "",
+        f"- Найдено обращений: `{len(items)}`",
+        f"- Действий в pending для согласования: `{len(actions)}`",
+    ]
+    for key, count in sorted(item_counts.items()):
+        lines.append(f"- `{key}`: `{count}`")
+    lines.extend(["", "## Действия", ""])
+    if not action_counts:
+        lines.append("- нет действий")
+    for key, count in sorted(action_counts.items()):
+        lines.append(f"- `{key}`: `{count}`")
+    lines.extend(["", "## Статусы обработки", ""])
+    if not status_counts:
+        lines.append("- нет статусов")
+    for key, count in sorted(status_counts.items()):
+        lines.append(f"- `{key}`: `{count}`")
+
+    lines.extend(["", "## Черновики для согласования", ""])
+    draft_actions = [action for action in actions if action.get("draft_text")]
+    if not draft_actions:
+        lines.append("- черновиков нет")
+    for index, action in enumerate(draft_actions[:100], 1):
+        lines.extend(
+            [
+                f"### {index}. {action['platform']} / {action['source_type']} / {action['offer_id'] or action['sku'] or action['source_id']}",
+                "",
+                f"- Товар: {action['product_title']}",
+                f"- Оценка: `{action['rating'] or 'н/д'}`",
+                f"- Риск: `{action['risk']}`",
+                f"- Текст покупателя: {action['source_text'] or 'без текста'}",
+                "",
+                f"Черновик ответа: {action['draft_text']}",
+                "",
+            ]
+        )
+
+    lines.extend(["", "## Блокеры и ограничения", ""])
+    if not blockers:
+        lines.append("- явных блокеров нет")
+    else:
+        for blocker in blockers:
+            lines.append(f"- {blocker}")
+
+    lines.extend(
+        [
+            "",
+            "## Источники и проверка",
+            "",
+            "- WB: официальный раздел Customer Communication API, методы `/api/v1/feedbacks`, `/api/v1/questions`, `/api/v1/feedbacks/answer`, `PATCH /api/v1/questions`.",
+            "- Ozon: официальный Review API проверен read-only запросами `/v1/review/count` и `/v1/review/list`; текущий ключ вернул `HTTP 403: not available with existing subscription`, поэтому для Ozon использован fallback через ЛК/CDP.",
+            "- Apply запрещен до явного подтверждения владельца по pending-пакету.",
+            "",
+            "## Артефакты",
+            "",
+        ]
+    )
+    for key, value in sorted(artifacts.items()):
+        lines.append(f"- `{key}`: `{value}`")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def run_reviews_questions(
+    *,
+    credentials: AppCredentials,
+    data_dir: Path = Path("data"),
+    run_id: str | None = None,
+    marketplace: str = "all",
+    limit: int = 100,
+) -> dict[str, Any]:
+    started_at = _now()
+    run_id = run_id or f"reviews_questions_{started_at.strftime('%Y%m%dT%H%M%S')}"
+    run_day = started_at.date().isoformat()
+    run_dir = ensure_dir(data_dir / "runs" / run_day / run_id)
+    processed_dir = ensure_dir(run_dir / "processed")
+
+    sources: dict[str, Any] = {}
+    items: list[dict[str, Any]] = []
+
+    if marketplace in {"all", "ozon"}:
+        official_reviews, official_summary = _run_ozon_official_probe(
+            credentials=credentials,
+            run_dir=run_dir,
+            limit=limit,
+        )
+        sources["ozon_api"] = official_summary
+        ozon_reviews, ozon_questions, lk_summary = _run_ozon_lk_fallback(run_dir=run_dir, limit=limit)
+        sources["ozon_lk"] = lk_summary
+        review_list_ok = (official_summary.get("methods") or {}).get("review_list", {}).get("status") == "ok"
+        items.extend(official_reviews if review_list_ok else ozon_reviews)
+        items.extend(ozon_questions)
+
+    if marketplace in {"all", "wb"}:
+        wb_feedbacks, wb_questions, wb_summary = _run_wb_api(credentials=credentials, run_dir=run_dir, limit=limit)
+        sources["wb_api"] = wb_summary
+        items.extend(wb_feedbacks)
+        items.extend(wb_questions)
+
+    normalized_items = [{**item, "processing_status": classify_item(item)} for item in items]
+    actions = build_actions(normalized_items)
+
+    processed_items_path = processed_dir / "reviews_questions_items.json"
+    actions_path = processed_dir / "reviews_questions_actions.json"
+    write_json(processed_items_path, normalized_items)
+    write_json(actions_path, {"run_id": run_id, "actions": actions})
+
+    artifacts: dict[str, str] = {
+        "run_dir": str(run_dir),
+        "processed_items": str(processed_items_path),
+        "actions": str(actions_path),
+    }
+
+    report_text = _build_report(
+        run_id=run_id,
+        started_at=started_at,
+        items=normalized_items,
+        actions=actions,
+        sources=sources,
+        artifacts=artifacts,
+    )
+    report_path = run_dir / "reviews_questions_dry_run.md"
+    report_path.write_text(report_text, encoding="utf-8")
+    artifacts["report"] = str(report_path)
+    artifacts.update(
+        _write_pending_package(
+            data_dir=data_dir,
+            run_id=run_id,
+            started_at=started_at,
+            actions=actions,
+            report_text=report_text,
+        )
+    )
+
+    source_errors = []
+    for source in sources.values():
+        if isinstance(source, dict) and source.get("status") in {"error", "missing_credentials"}:
+            source_errors.append(source)
+    overall_status = "ok"
+    if source_errors and normalized_items:
+        overall_status = "warning"
+    elif source_errors and not normalized_items:
+        overall_status = "blocked"
+
+    summary = {
+        "run_id": run_id,
+        "started_at": started_at.isoformat(timespec="seconds"),
+        "overall_status": overall_status,
+        "mode": "read_only_dry_run",
+        "marketplace": marketplace,
+        "items_count": len(normalized_items),
+        "actions_count": len(actions),
+        "sources": sources,
+        "artifacts": artifacts,
+    }
+    summary_path = run_dir / "summary.json"
+    write_json(summary_path, summary)
+    summary["artifacts"]["summary"] = str(summary_path)
+    return summary
+
+
+def _approved_actions(approved_path: Path) -> list[dict[str, Any]]:
+    data = _safe_read_json(approved_path)
+    if not isinstance(data, dict):
+        raise RuntimeError(f"Approved plan is not valid JSON object: {approved_path}")
+    if data.get("status") != "approved":
+        raise RuntimeError(f"Approved plan status must be 'approved': {approved_path}")
+    actions = data.get("actions")
+    if not isinstance(actions, list):
+        raise RuntimeError(f"Approved plan has no actions list: {approved_path}")
+    return [action for action in actions if isinstance(action, dict)]
+
+
+def _build_apply_report(
+    *,
+    run_id: str,
+    started_at: datetime,
+    approved_path: Path,
+    wb_result: dict[str, Any],
+    ozon_result: dict[str, Any],
+    artifacts: dict[str, str],
+) -> str:
+    wb_sent = wb_result.get("sent") if isinstance(wb_result.get("sent"), list) else []
+    wb_questions = wb_result.get("questions_answered") if isinstance(wb_result.get("questions_answered"), list) else []
+    ozon_sent = ozon_result.get("sent") if isinstance(ozon_result.get("sent"), list) else []
+    ozon_marked = ozon_result.get("marked_viewed") if isinstance(ozon_result.get("marked_viewed"), list) else []
+    wb_ok = sum(1 for item in wb_sent if item.get("ok"))
+    wb_questions_ok = sum(1 for item in wb_questions if item.get("ok"))
+    ozon_ok = sum(1 for item in ozon_sent if item.get("ok"))
+    ozon_marked_ok = sum(1 for item in ozon_marked if item.get("ok"))
+    lines = [
+        "# Отзывы и вопросы: apply result",
+        "",
+        f"Run ID: `{run_id}`",
+        f"Started at: `{started_at.isoformat(timespec='seconds')}`",
+        f"Approved plan: `{approved_path}`",
+        "",
+        "## Итог",
+        "",
+        f"- WB отправлено: `{wb_ok}` из `{len(wb_sent)}`",
+        f"- WB вопросов закрыто ответом: `{wb_questions_ok}` из `{len(wb_questions)}`",
+        f"- Ozon отправлено: `{ozon_ok}` из `{len(ozon_sent)}`",
+        f"- Ozon отмечено просмотренными: `{ozon_marked_ok}` из `{len(ozon_marked)}`",
+        f"- WB status: `{wb_result.get('status') or ('ok' if wb_result.get('ok') else 'error')}`",
+        f"- Ozon status: `{ozon_result.get('status') or ('ok' if ozon_result.get('ok') else 'error')}`",
+        "",
+        "## WB",
+        "",
+    ]
+    if not wb_sent:
+        lines.append("- нет отправленных WB-ответов")
+    for item in wb_sent:
+        lines.append(
+            f"- `{item.get('offer_id')}` / `{item.get('source_id')}` / оценка `{item.get('rating')}`: "
+            f"{'ok' if item.get('ok') else 'error'}"
+        )
+    lines.extend(["", "### WB вопросы", ""])
+    if not wb_questions:
+        lines.append("- нет отправленных WB-ответов на вопросы")
+    for item in wb_questions:
+        lines.append(
+            f"- `{item.get('offer_id')}` / `{item.get('source_id')}`: "
+            f"{'ok' if item.get('ok') else 'error'}"
+        )
+    lines.extend(["", "## Ozon", ""])
+    if not ozon_sent:
+        lines.append("- нет отправленных Ozon-ответов")
+    for item in ozon_sent:
+        lines.append(
+            f"- `{item.get('offer_id')}` / `{item.get('source_id')}` / оценка `{item.get('rating')}`: "
+            f"{'ok' if item.get('ok') else 'error'}"
+        )
+    lines.extend(["", "### Отмечено просмотренными", ""])
+    if not ozon_marked:
+        lines.append("- нет Ozon-отзывов, отмеченных просмотренными")
+    for item in ozon_marked[:100]:
+        lines.append(
+            f"- `{item.get('offer_id')}` / `{item.get('source_id')}` / оценка `{item.get('rating')}`: "
+            f"{'ok' if item.get('ok') else 'error'}"
+        )
+    if len(ozon_marked) > 100:
+        lines.append(f"- ... еще `{len(ozon_marked) - 100}`")
+    lines.extend(["", "## Ограничения", ""])
+    if wb_result.get("blocker"):
+        lines.append(f"- WB blocker: {wb_result['blocker']}")
+    if ozon_result.get("blocker"):
+        lines.append(f"- Ozon blocker: {ozon_result['blocker']}")
+    if not wb_result.get("blocker") and not ozon_result.get("blocker"):
+        lines.append("- явных блокеров нет")
+    lines.extend(["", "## Артефакты", ""])
+    for key, value in sorted(artifacts.items()):
+        lines.append(f"- `{key}`: `{value}`")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _apply_wb_public_replies(
+    *,
+    credentials: AppCredentials,
+    actions: list[dict[str, Any]],
+    run_dir: Path,
+) -> dict[str, Any]:
+    raw_dir = ensure_dir(run_dir / "raw" / "wb_apply")
+    result: dict[str, Any] = {
+        "source": "WB Feedbacks API",
+        "ok": False,
+        "sent": [],
+        "questions_answered": [],
+        "blocker": "",
+    }
+    feedback_actions = [
+        action
+        for action in actions
+        if action.get("platform") == "wb"
+        and action.get("source_type") == "review"
+        and action.get("action_type") == "public_review_reply"
+        and action.get("approved") is True
+        and str(action.get("draft_text") or "").strip()
+    ]
+    question_actions = [
+        action
+        for action in actions
+        if action.get("platform") == "wb"
+        and action.get("source_type") == "question"
+        and action.get("action_type") == "question_answer"
+        and action.get("approved") is True
+        and str(action.get("draft_text") or "").strip()
+    ]
+    if not feedback_actions and not question_actions:
+        result["ok"] = True
+        write_json(raw_dir / "wb_apply_result.json", result)
+        return result
+    if not credentials.wb:
+        result["blocker"] = "WB API token is not available"
+        write_json(raw_dir / "wb_apply_result.json", result)
+        return result
+
+    adapter = WbCommunicationsAdapter(credentials.wb)
+    try:
+        before_count = adapter.fetch_unanswered_feedbacks_count()
+        write_json(raw_dir / "feedbacks_count_before.json", before_count)
+    except Exception as exc:  # noqa: BLE001
+        result["before_count_error"] = _safe_error(exc)
+    try:
+        before_questions_count = adapter.fetch_unanswered_questions_count()
+        write_json(raw_dir / "questions_count_before.json", before_questions_count)
+    except Exception as exc:  # noqa: BLE001
+        result["before_questions_count_error"] = _safe_error(exc)
+
+    for action in feedback_actions:
+        row = {
+            "source_id": action.get("source_id", ""),
+            "offer_id": action.get("offer_id", ""),
+            "sku": action.get("sku", ""),
+            "rating": action.get("rating", ""),
+            "ok": False,
+            "error": "",
+        }
+        try:
+            response = adapter.answer_feedback(
+                feedback_id=str(action.get("source_id") or ""),
+                text=str(action.get("draft_text") or ""),
+            )
+            row["ok"] = True
+            row["response"] = response
+        except Exception as exc:  # noqa: BLE001
+            row["error"] = _safe_error(exc)
+        result["sent"].append(row)
+        if not row["ok"]:
+            result["blocker"] = f"WB reply failed for {row['offer_id']}/{row['source_id']}: {row['error']}"
+            break
+
+    if not result["blocker"]:
+        for action in question_actions:
+            row = {
+                "source_id": action.get("source_id", ""),
+                "offer_id": action.get("offer_id", ""),
+                "sku": action.get("sku", ""),
+                "ok": False,
+                "error": "",
+            }
+            try:
+                response = adapter.answer_question(
+                    question_id=str(action.get("source_id") or ""),
+                    text=str(action.get("draft_text") or ""),
+                )
+                row["ok"] = True
+                row["response"] = response
+            except Exception as exc:  # noqa: BLE001
+                row["error"] = _safe_error(exc)
+            result["questions_answered"].append(row)
+            if not row["ok"]:
+                result["blocker"] = f"WB question answer failed for {row['offer_id']}/{row['source_id']}: {row['error']}"
+                break
+
+    try:
+        after_count = adapter.fetch_unanswered_feedbacks_count()
+        after_list = adapter.fetch_feedbacks(is_answered=False, take=100, skip=0, order="dateDesc")
+        write_json(raw_dir / "feedbacks_count_after.json", after_count)
+        write_json(raw_dir / "feedbacks_unanswered_after.json", after_list)
+    except Exception as exc:  # noqa: BLE001
+        result["after_verify_error"] = _safe_error(exc)
+    try:
+        after_questions_count = adapter.fetch_unanswered_questions_count()
+        after_questions_list = adapter.fetch_questions(is_answered=False, take=100, skip=0, order="dateDesc")
+        write_json(raw_dir / "questions_count_after.json", after_questions_count)
+        write_json(raw_dir / "questions_unanswered_after.json", after_questions_list)
+    except Exception as exc:  # noqa: BLE001
+        result["after_questions_verify_error"] = _safe_error(exc)
+
+    result["ok"] = (
+        (bool(result["sent"]) or bool(result["questions_answered"]))
+        and all(item.get("ok") for item in result["sent"])
+        and all(item.get("ok") for item in result["questions_answered"])
+        and not result["blocker"]
+    )
+    write_json(raw_dir / "wb_apply_result.json", result)
+    return result
+
+
+def _apply_ozon_public_replies(
+    *,
+    approved_path: Path,
+    run_dir: Path,
+) -> dict[str, Any]:
+    raw_dir = ensure_dir(run_dir / "raw" / "ozon_apply")
+    script = PROJECT_ROOT / "scripts" / "reviews" / "ozon_apply_reviews_questions_cdp.js"
+    completed = subprocess.run(
+        ["node", str(script), "--approved-path", str(approved_path), "--run-dir", str(run_dir)],
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=180,
+        check=False,
+    )
+    result = _safe_read_json(raw_dir / "ozon_apply_result.json")
+    if not isinstance(result, dict):
+        result = {
+            "source": "ozon_lk_cdp_internal_api",
+            "ok": False,
+            "blocker": (completed.stderr or completed.stdout or "").strip()[:1000],
+            "sent": [],
+        }
+        write_json(raw_dir / "ozon_apply_result.json", result)
+    result["returncode"] = completed.returncode
+    return result
+
+
+def run_reviews_questions_apply(
+    *,
+    credentials: AppCredentials,
+    approved_path: Path,
+    data_dir: Path = Path("data"),
+    run_id: str | None = None,
+    confirmed_by_user: bool = False,
+) -> dict[str, Any]:
+    started_at = _now()
+    run_id = run_id or f"reviews_questions_apply_{started_at.strftime('%Y%m%dT%H%M%S')}"
+    run_day = started_at.date().isoformat()
+    run_dir = ensure_dir(data_dir / "runs" / run_day / run_id)
+
+    artifacts: dict[str, str] = {"run_dir": str(run_dir), "approved_path": str(approved_path)}
+    if not confirmed_by_user:
+        summary = {
+            "run_id": run_id,
+            "started_at": started_at.isoformat(timespec="seconds"),
+            "overall_status": "blocked",
+            "mode": "apply",
+            "blocker": "Apply requires --confirmed-by-user",
+            "artifacts": artifacts,
+        }
+        write_json(run_dir / "summary.json", summary)
+        return summary
+
+    actions = _approved_actions(approved_path)
+    disallowed = [
+        action
+        for action in actions
+        if not (
+            (action.get("platform") in {"ozon", "wb"} and action.get("action_type") == "public_review_reply")
+            or (action.get("platform") == "wb" and action.get("action_type") == "question_answer")
+            or (action.get("platform") == "ozon" and action.get("action_type") == "mark_review_viewed")
+        )
+    ]
+    if disallowed:
+        raise RuntimeError("Approved plan contains unsupported action types for this apply")
+
+    wb_result = _apply_wb_public_replies(credentials=credentials, actions=actions, run_dir=run_dir)
+    ozon_result = _apply_ozon_public_replies(approved_path=approved_path, run_dir=run_dir)
+    artifacts["wb_result"] = str(run_dir / "raw" / "wb_apply" / "wb_apply_result.json")
+    artifacts["ozon_result"] = str(run_dir / "raw" / "ozon_apply" / "ozon_apply_result.json")
+
+    overall_status = "ok" if wb_result.get("ok") and ozon_result.get("ok") else "blocked"
+    report_text = _build_apply_report(
+        run_id=run_id,
+        started_at=started_at,
+        approved_path=approved_path,
+        wb_result=wb_result,
+        ozon_result=ozon_result,
+        artifacts=artifacts,
+    )
+    report_path = run_dir / "reviews_questions_apply_result.md"
+    report_path.write_text(report_text, encoding="utf-8")
+    artifacts["report"] = str(report_path)
+
+    summary = {
+        "run_id": run_id,
+        "started_at": started_at.isoformat(timespec="seconds"),
+        "overall_status": overall_status,
+        "mode": "apply",
+        "approved_path": str(approved_path),
+        "wb": wb_result,
+        "ozon": ozon_result,
+        "artifacts": artifacts,
+    }
+    summary_path = run_dir / "summary.json"
+    write_json(summary_path, summary)
+    summary["artifacts"]["summary"] = str(summary_path)
+    return summary

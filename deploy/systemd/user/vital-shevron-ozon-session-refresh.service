@@ -1,0 +1,14 @@
+[Unit]
+Description=Vital Shevron Ozon Seller session refresh
+After=network-online.target vital-shevron-ozon-keeper.service
+Wants=network-online.target vital-shevron-ozon-keeper.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/pavel/projects/seller_vital_shevron
+Environment=OZON_REMOTE_DEBUGGING_PORT=9544
+Environment=OZON_EXPECTED_STORE=Vital Shevron
+Environment=OZON_CDP_URL=http://127.0.0.1:9544
+ExecStartPre=/usr/bin/env bash -lc 'for i in $(seq 1 45); do ss -ltn 2>/dev/null | grep -Eq "127\\.0\\.0\\.1:9544\\b|0\\.0\\.0\\.0:9544\\b|\\*:9544\\b|\\[::\\]:9544\\b" && exit 0; sleep 1; done; exit 1'
+ExecStart=/usr/bin/env node /home/pavel/projects/seller_vital_shevron/scripts/sessions/ozon_session_keepalive_cdp.js
+

@@ -1,0 +1,11 @@
+[Unit]
+Description=Vital Shevron WB session refresh
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/pavel/projects/seller_vital_shevron
+Environment=WB_EXPECTED_SELLER=
+ExecStart=/usr/bin/env node /home/pavel/projects/seller_vital_shevron/scripts/sessions/wb_session_keepalive.js
+

@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Vital Shevron WB session refresh every 60 minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=60min
+Persistent=true
+Unit=vital-shevron-wb-session-refresh.service
+
+[Install]
+WantedBy=timers.target
+

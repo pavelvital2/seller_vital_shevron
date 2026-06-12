@@ -1,0 +1,18 @@
+[Unit]
+Description=Vital Shevron Ozon Seller CDP keeper
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/pavel/projects/seller_vital_shevron
+Environment=OZON_REMOTE_DEBUGGING_PORT=9544
+Environment=OZON_EXPECTED_STORE=Vital Shevron
+ExecStart=/usr/bin/env bash -lc 'mkdir -p /home/pavel/projects/seller_vital_shevron/.sessions/ozon && echo $$$$ > /home/pavel/projects/seller_vital_shevron/.sessions/ozon/ozon_keeper.pid && chmod 600 /home/pavel/projects/seller_vital_shevron/.sessions/ozon/ozon_keeper.pid && exec node /home/pavel/projects/seller_vital_shevron/scripts/sessions/ozon_keep_dashboard_open.js'
+ExecStopPost=/usr/bin/env rm -f /home/pavel/projects/seller_vital_shevron/.sessions/ozon/ozon_keeper.pid
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=default.target
+
