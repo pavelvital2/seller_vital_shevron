@@ -59,8 +59,10 @@ PYTHONPATH=src python3 -m takterra_agent.cli fetch-catalog
 ```text
 local git: created
 main commit: b79434a Initial Vital Shevron scaffold
-GitHub remote: not created
-blocker: gh CLI not found; GitHub account/org, repo name and visibility not confirmed
+GitHub remote: created
+remote: https://github.com/pavelvital2/seller_vital_shevron
+visibility: PRIVATE
+default branch: main
 ```
 
 ```bash
@@ -81,7 +83,7 @@ data/catalog/*/raw/*
 data/catalog/*/processed/*
 ```
 
-Remote GitHub создавать после согласования имени репозитория и доступа.
+Remote GitHub создан и подключен как `origin`.
 
 ## Ограничения
 

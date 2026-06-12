@@ -19,7 +19,8 @@
 - local git initialized: `yes`
 - branch: `main`
 - first commit: `b79434a Initial Vital Shevron scaffold`
-- GitHub remote: not configured yet
+- GitHub remote: `https://github.com/pavelvital2/seller_vital_shevron`
+- GitHub visibility: `PRIVATE`
 
 ## Code
 
