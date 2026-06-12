@@ -3,6 +3,12 @@
 Самостоятельный проект агента Vital Shevron для управления магазинами Ozon и
 Wildberries.
 
+GitHub repository:
+
+```text
+https://github.com/pavelvital2/seller_vital_shevron
+```
+
 Проект создан на базе рабочего каркаса `seller_takterra`, но без переноса
 секретов, сессий, `.env`, операционных запусков, pending/apply packages и
 рабочих каталогов TAKTERRA.
@@ -67,4 +73,3 @@ cp .env.example .env
 После проверки чистоты проекта создать локальный git и GitHub repository.
 Перед первым commit обязательно проверить `git status --short` и отсутствие
 секретов/сессий/операционных артефактов.
-
