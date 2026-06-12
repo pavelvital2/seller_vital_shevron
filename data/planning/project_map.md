@@ -14,6 +14,13 @@
 - `.gitignore` - защита от попадания секретов и runtime data в git.
 - `pyproject.toml` - настройки Python-проекта и pytest.
 
+## Git
+
+- local git initialized: `yes`
+- branch: `main`
+- first commit: `b79434a Initial Vital Shevron scaffold`
+- GitHub remote: not configured yet
+
 ## Code
 
 - `src/takterra_agent/` - рабочий Python package. Имя оставлено временно для
@@ -62,4 +69,3 @@ Ozon CDP port по умолчанию: `9544`.
 - `.sessions/wb/` - WB token file, browser profile, storage state, keepalive
   logs. Не коммитить.
 - `tmp/auth/` - временные auth/cookie файлы. Не коммитить.
-

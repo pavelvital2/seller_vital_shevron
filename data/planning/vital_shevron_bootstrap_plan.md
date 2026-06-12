@@ -54,6 +54,15 @@ PYTHONPATH=src python3 -m takterra_agent.cli fetch-catalog
 
 ## GitHub Stage
 
+Статус на 2026-06-12:
+
+```text
+local git: created
+main commit: b79434a Initial Vital Shevron scaffold
+GitHub remote: not created
+blocker: gh CLI not found; GitHub account/org, repo name and visibility not confirmed
+```
+
 ```bash
 git init
 git status --short
@@ -81,4 +90,3 @@ Remote GitHub создавать после согласования имени 
 - До подключения ЛК browser-based сценарии будут недоступны.
 - До подтвержденного mapping нельзя выполнять cross-marketplace write-операции
   по одному товару.
-
