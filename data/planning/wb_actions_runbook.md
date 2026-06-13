@@ -33,7 +33,9 @@ PYTHONPATH=src NODE_PATH=/home/Codex/agent-tools/node/node_modules \
 
 ## Формат отчета владельцу
 
-Сохранять короткий формат:
+Telegram-вывод строить по общему стандарту
+`data/planning/chat_report_templates.md`. Для WB акций сохранять короткий
+формат:
 
 ```text
 Краткий вывод: по схеме <scheme> <итог>. Dry-run, скидки не загружались.

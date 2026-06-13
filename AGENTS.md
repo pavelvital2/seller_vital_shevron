@@ -58,6 +58,8 @@
 - `data/planning/vital_shevron_bootstrap_plan.md` - план первичного запуска.
 - `data/planning/catalog_mapping_runbook.md` - работа с отдельными каталогами
   Ozon/WB, mapping и будущей унификацией артикулов.
+- `data/planning/seller_sku_rules.md` - правило формирования новых артикулов
+  продавца Vital Shevron.
 - `data/planning/lk_connection_runbook.md` - подключение ЛК Ozon/WB.
 - `data/planning/session_manager_runbook.md` - управление сессиями.
 - `data/planning/ozon_cabinet_map.md` - подробная карта ЛК Ozon: вкладки,
@@ -67,6 +69,8 @@
 - `data/planning/status_preflight_runbook.md` - единая проверка состояния.
 - `data/planning/daily_morning_report_runbook.md` - утренний отчет.
 - `data/planning/reviews_questions_runbook.md` - отзывы и вопросы.
+- `data/planning/chat_report_templates.md` - унифицированные шаблоны вывода
+  отчетов в Telegram-чат и правило прикрепления полного файла отчета.
 - `data/planning/ozon_elastic_runbook.md` - Ozon Elastic Boosting.
 - `data/planning/ozon_cpc_efficiency_runbook.md` - эффективность Ozon
   продвижения `Оплата за клик`.
@@ -74,10 +78,22 @@
 - `data/planning/wb_actions_runbook.md` - акции и скидки WB.
 - `data/planning/pricing_runbook.md` - цены, скидки, минимальные цены и
   себестоимость Ozon/WB.
+- `data/planning/ozon_parser_positions_runbook.md` - анализ позиций Ozon по
+  read-only данным парсера.
 - `data/planning/wb_parser_positions_runbook.md` - анализ позиций WB по
   read-only данным парсера.
 - `data/planning/search_queries_runbook.md` - read-only сбор поисковых
   запросов Ozon/WB из ЛК/API.
+- `data/planning/seo_audit_runbook.md` - read-only SEO-аудит карточек Ozon/WB
+  на основе спроса, parser-позиций и карточного контента.
+- `data/planning/analytics_skills_development_plan.md` - план развития
+  аналитических skills/plugins для Ozon/WB аналитики.
+- `data/planning/telegram_bot_management_transition_plan.md` - поэтапный план
+  перехода Vital Shevron к управлению Ozon/WB через Telegram-бота.
+- `data/reference/takterra_development_docs/README.md` - read-only копия
+  документов TAKTERRA по развитию проекта, архитектуре и боту.
+- `.agents/skills/marketplace-analytics/SKILL.md` - repo skill для read-only
+  аналитики Ozon/WB, SEO, parser-позиций, цен, рекламы и отчетов.
 
 ## Источники опыта
 
@@ -137,6 +153,22 @@
 Правила могут дополняться владельцем в процессе работы. Агент также может
 предлагать на согласование новые правила работы с кабинетами исходя из
 выполняемых задач.
+
+При использовании проектных skills агент обязан оценивать, можно ли улучшить
+сам skill: добавить источник, проверку, ограничение, recovery-сценарий,
+шаблон отчета или критерий качества. Если улучшение конкретное и полезное,
+агент должен сообщить об этом владельцу в итоговом отчете и предложить
+изменение. Skill не нужно раздувать случайными наблюдениями: вносить стоит
+только повторяемые правила, проверенные ограничения и улучшения, которые
+снижают риск ошибки или ускоряют следующие задачи.
+
+Отчеты владельцу в Telegram должны строиться по
+`data/planning/chat_report_templates.md`: сначала понятный chat-summary с
+ключевыми цифрами, находками, рисками, предложением и следующим шагом, затем
+прикрепленный или явно указанный файл полного отчета. Telegram-вывод должен
+быть достаточным для принятия решения без открытия файла, но не должен
+перегружаться длинными таблицами, raw JSON, лишними ссылками, размышлениями
+или второстепенными деталями.
 
 ## Каталоги и артикулы
 

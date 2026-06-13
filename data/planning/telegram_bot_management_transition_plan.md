@@ -1,0 +1,713 @@
+# План перехода Vital Shevron к управлению Ozon/WB через Telegram-бота
+
+Дата: 2026-06-13.
+
+## Краткий вывод
+
+Telegram-бот для Vital Shevron нужно строить не как набор быстрых кнопок, а как
+тонкий интерфейс поверх устойчивого task-runner:
+
+```text
+Telegram chat
+  -> bot dispatcher
+  -> task registry
+  -> safety guard
+  -> workflow runner
+  -> marketplace adapters / LK bridges
+  -> run manifest / reports
+  -> Telegram result
+```
+
+Сначала нужно стандартизировать запуски, approvals и lifecycle операций. Только
+после этого подключать кнопки бота. Иначе бот начнет дублировать CLI-логику и
+повысит риск write-операций в Ozon/WB.
+
+## Источники
+
+Актуальные документы Vital Shevron:
+
+- `AGENTS.md`;
+- `data/planning/project_map.md`;
+- `data/planning/recommendations_index.md`;
+- `data/planning/revision_2026-06-13.md`;
+- `data/planning/pricing_runbook.md`;
+- `data/planning/search_queries_runbook.md`;
+- `data/planning/wb_parser_positions_runbook.md`;
+- `data/planning/ozon_cabinet_map.md`;
+- `data/planning/wb_cabinet_map.md`.
+
+Перенесенные документы TAKTERRA:
+
+- `data/reference/takterra_development_docs/data/15_architecture_notes/questions_and_recommendations.md`;
+- `data/reference/takterra_development_docs/data/planning/recommendations_index.md`;
+- `data/reference/takterra_development_docs/data/planning/project_structure_optimization_review_2026-06-11.md`;
+- `data/reference/takterra_development_docs/data/planning/marketplace_control_bot_discussion.md`;
+- `data/reference/takterra_development_docs/data/planning/vital_shevron_migration_plan.md`;
+- `data/reference/takterra_development_docs/data/planning/vital_shevron_transfer_manifest.md`.
+
+## Базовые принципы
+
+1. Бот не содержит бизнес-логику. Бизнес-логика остается в task/workflow
+   модулях и marketplace adapters.
+2. Бот подключает только стабилизированные CLI/workflow-сценарии.
+3. Любая write-операция остается в цепочке:
+
+```text
+read-only -> dry-run -> review -> approved -> apply -> verify -> result
+```
+
+4. Для операций, которые можно выполнить через официальный API, приоритет у API.
+   ЛК используется как fallback или для задач, где API недостаточно.
+5. В Telegram нельзя выводить секреты, cookies, storage state, auth headers,
+   API-ключи, коды входа и закрытые attachment contents.
+6. До унификации артикулов Vital Shevron бот должен работать с Ozon/WB через
+   native marketplace IDs и учитывать mapping только там, где он действительно
+   нужен.
+7. Любая новая кнопка бота должна иметь runbook, task registry entry, тесты,
+   safety metadata и понятный отчет.
+8. Целевой проект должен быть store-agnostic: core-код, package name,
+   task-runner, bot dispatcher, общие runbook-и и архитектурные документы не
+   должны зависеть от названия конкретного магазина или старого проекта.
+   Store-specific значения должны жить в отдельном `StoreProfile`/конфиге,
+   `.env`, runtime state и профильных данных магазина.
+
+## Целевая архитектура
+
+```text
+src/takterra_agent/
+  core/
+    run_manifest.py
+    task_registry.py
+    workflow_runner.py
+    artifacts.py
+
+  safety/
+    approvals.py
+    guards.py
+    lifecycle.py
+    locks.py
+    idempotency.py
+
+  workflows/
+    status/
+    daily_report/
+    reviews_questions/
+    pricing/
+    search_queries/
+    wb_parser_positions/
+    ozon_cpc/
+    wb_promotion/
+    wb_actions/
+    catalog_mapping/
+
+  marketplaces/
+    ozon/
+    wb/
+
+  lk/
+    ozon/
+    wb/
+
+  bot/
+    dispatcher.py
+    commands.py
+    formatters.py
+    approvals.py
+```
+
+Данные:
+
+```text
+data/
+  runs/
+    index.jsonl
+    YYYY-MM-DD/<run_id>/
+  pending/
+  approved/
+  locks/
+  reports/
+  planning/
+  reference/
+```
+
+## Этап 0. Зафиксировать источники опыта
+
+Статус: выполнено частично этим документом.
+
+Что сделать:
+
+1. Хранить TAKTERRA-документы в
+   `data/reference/takterra_development_docs/`.
+2. Не считать их действующими правилами Vital Shevron без адаптации.
+3. В каждом новом архитектурном решении явно указывать, переносится ли оно из
+   TAKTERRA без изменений или адаптируется.
+
+Критерий готовности:
+
+- TAKTERRA-документы скопированы в reference-зону;
+- `project_map.md` ссылается на reference-зону;
+- этот план добавлен в постоянные документы Vital Shevron.
+
+## Этап 1. Единый `RunManifest`
+
+Цель: любой запуск task-runner должен иметь общий машинно-читаемый паспорт.
+
+Минимальная схема:
+
+```json
+{
+  "run_id": "",
+  "task": "",
+  "mode": "read_only|dry_run|apply|verify|maintenance",
+  "risk": "none|low|normal|high",
+  "marketplaces": ["ozon", "wb"],
+  "status": "ok|warning|blocked|error",
+  "started_at": "",
+  "finished_at": "",
+  "inputs": {},
+  "artifacts": {},
+  "source_run_ids": [],
+  "pending_id": "",
+  "approved_id": "",
+  "applied_by_run_id": "",
+  "closed": false
+}
+```
+
+Что сделать:
+
+1. Добавить `src/takterra_agent/core/run_manifest.py`.
+2. Добавить запись строк в `data/runs/index.jsonl`.
+3. Подключить manifest к новым запускам, затем постепенно к существующим.
+4. Добавить команды:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli runs list
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli runs latest --task status-preflight
+```
+
+Критерий готовности:
+
+- новые runs пишут `manifest.json`;
+- `data/runs/index.jsonl` пополняется;
+- можно найти последний успешный run нужной задачи без ручного поиска по
+  папкам.
+
+## Этап 2. Реальный `TaskRegistry`
+
+Цель: CLI и будущий бот должны брать список задач из одного источника.
+
+Task metadata:
+
+```text
+name
+title
+description
+mode
+risk
+marketplaces
+handler
+requires_credentials
+requires_lk
+requires_mapping
+requires_confirmation
+runbook_path
+telegram_enabled
+telegram_button_label
+```
+
+Что сделать:
+
+1. Расширить `src/takterra_agent/tasks/registry.py`.
+2. Зарегистрировать все текущие CLI-команды.
+3. Подключить CLI help к registry без изменения внешнего поведения.
+4. Сделать `bot/dispatcher.py` thin layer поверх registry.
+
+Критерий готовности:
+
+- все текущие команды видны в registry;
+- для каждой команды известен риск и режим;
+- будущий бот не дублирует список команд руками.
+
+## Этап 2A. Сопоставление Ozon/WB и общий каталог продукции
+
+Цель: создать подтвержденный внутренний слой продукции Vital Shevron, который
+связывает разные Ozon/WB артикулы без изменения артикулов продавца на
+маркетплейсах.
+
+Этот этап должен идти сразу после базовых `RunManifest` и `TaskRegistry`, но до
+массовой бизнес-автоматизации, `pricing-status`, рекламных циклов и write-
+кнопок Telegram-бота.
+
+Почему так:
+
+- для цен и маржинальности нужно понимать, где один и тот же шеврон или
+  комплект на Ozon и WB;
+- для рекламы и поисковых запросов нужен единый product-level взгляд;
+- cross-marketplace write-операции нельзя делать без подтвержденного mapping;
+- бот должен показывать владельцу понятный общий товар, но apply должен
+  продолжать использовать native marketplace IDs.
+
+Что сделать:
+
+1. Обновить раздельные каталоги:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli fetch-catalog
+```
+
+2. Сохранить/обновить marketplace-local каталоги:
+
+```text
+data/catalog/ozon/processed/ozon_catalog.csv
+data/catalog/wb/processed/wb_catalog.csv
+```
+
+3. Построить draft mapping:
+
+```text
+data/catalog/mapping/ozon_wb_product_mapping.csv
+data/catalog/mapping/ozon_wb_product_mapping_review.md
+```
+
+4. Для каждой строки mapping фиксировать:
+
+```text
+internal_product_id
+product_name
+pack_qty
+cost_per_unit
+ozon_offer_id
+ozon_product_id
+ozon_sku
+wb_vendor_code
+wb_nm_id
+barcode
+match_confidence
+match_basis
+needs_owner_review
+owner_decision
+```
+
+5. Провести owner review:
+
+```text
+confirmed
+rejected
+needs_more_data
+ozon_only
+wb_only
+duplicate_or_variant
+```
+
+6. После review сформировать общий каталог продукции:
+
+```text
+data/catalog/unified/products.csv
+data/catalog/unified/products.json
+```
+
+Минимальные поля общего каталога:
+
+```text
+internal_product_id
+product_name
+product_group
+pack_qty
+cost_total
+cost_per_unit
+ozon_offer_id
+ozon_product_id
+ozon_sku
+wb_vendor_code
+wb_nm_id
+mapping_status
+active_ozon
+active_wb
+notes
+```
+
+7. Подключить общий каталог как read-only слой для:
+
+- `pricing-status`;
+- `daily-morning-report --seller-v2`;
+- `search-queries`;
+- `wb-parser-positions`;
+- Ozon CPC и WB promotion отчетов;
+- будущей Telegram-команды `/catalog`.
+
+Важное ограничение:
+
+`products.csv/json` не означает унификацию артикулов продавца. Это внутренний
+общий каталог проекта. Изменение `offer_id` на Ozon или `vendorCode` на WB -
+отдельная опасная операция:
+
+```text
+approved mapping -> dry-run rename plan -> owner approval -> apply -> verify
+```
+
+Критерий готовности:
+
+- для каждого товара известно, есть ли связь Ozon/WB;
+- спорные строки явно помечены и не используются для cross-marketplace write;
+- `pricing-status` может считать маржу по общему товару и комплектности;
+- бот может показывать `/catalog` как общий product-level отчет без write-
+  операций.
+
+## Этап 3. Approval package и lifecycle
+
+Цель: закрыть безопасный цикл dangerous operations.
+
+Lifecycle:
+
+```text
+pending -> approved -> applied -> verified -> closed
+```
+
+Что сделать:
+
+1. Описать единый JSON-формат pending/approved package.
+2. Добавить checksum action rows.
+3. Добавить idempotency guard: старый approved нельзя применить повторно.
+4. После успешного apply обновлять status package.
+5. Начать с отзывов/вопросов, потому что там уже есть pending/approved
+   практика.
+
+Минимальные команды:
+
+```bash
+prepare-reviews-questions-approved --source-pending <id> --mode replies-only
+prepare-reviews-questions-approved --source-pending <id> --mode mark-viewed-only
+approvals status
+approvals close --approved-id <id>
+```
+
+Критерий готовности:
+
+- apply-команда проверяет, что approved-пакет еще не применялся;
+- после apply visible связь: source pending, approved package, apply run,
+  verify status;
+- ручная сборка approved JSON больше не нужна для типовых сценариев.
+
+## Этап 4. Централизованный safety guard
+
+Цель: убрать размазанную по apply-командам проверку риска.
+
+Safety guard должен проверять:
+
+- task risk;
+- marketplace;
+- mode;
+- наличие fresh preflight;
+- наличие approved package;
+- lock на ресурс;
+- whitelist action types;
+- mapping requirement;
+- expected store/seller marker;
+- idempotency.
+
+Что сделать:
+
+1. Добавить `src/takterra_agent/safety/guards.py`.
+2. Перенести общие проверки из apply-команд в safety layer.
+3. Оставить task-specific проверки внутри workflow.
+
+Критерий готовности:
+
+- новая write-команда не может обойти общий guard;
+- без approval write-команды завершаются ошибкой до внешнего API/LK вызова;
+- в отчете видна причина блокировки.
+
+## Этап 5. Нормализовать workflow-структуру
+
+Цель: крупные task-файлы постепенно разделить на слои.
+
+Приоритет:
+
+1. `reviews_questions`;
+2. `daily_morning_report`;
+3. `pricing`;
+4. `search_queries`;
+5. `promotion/ads`.
+
+Целевая структура workflow:
+
+```text
+collect.py
+plan.py
+approve.py
+apply.py
+verify.py
+report.py
+schemas.py
+```
+
+Критерий готовности:
+
+- CLI-поведение не ломается;
+- тесты продолжают проходить;
+- bot dispatcher может вызвать workflow без знания внутренних деталей.
+
+## Этап 6. Read-only bot MVP
+
+Цель: первый бот должен только показывать состояние и отчеты, без write.
+
+Команды MVP:
+
+```text
+/status
+/today
+/catalog
+/reviews
+/prices
+/ads
+/search
+/positions
+/approvals
+/help
+```
+
+Соответствие task-runner:
+
+| Команда бота | Task |
+| --- | --- |
+| `/status` | `status-preflight` |
+| `/today` | `daily-morning-report --seller-v2` |
+| `/catalog` | `fetch-catalog` summary/latest |
+| `/reviews` | `reviews-questions --marketplace all` |
+| `/prices` | будущий `pricing-status` |
+| `/ads` | Ozon CPC + WB promotion summaries |
+| `/search` | будущий `search-queries` |
+| `/positions` | будущий `wb-parser-positions` |
+| `/approvals` | approvals list/status |
+
+Критерий готовности:
+
+- бот не делает write-операции;
+- каждая команда пишет `RunManifest`;
+- бот отправляет краткий отчет и ссылки на артефакты;
+- ошибки показываются безопасно, без секретов.
+
+## Этап 7. Approval bot
+
+Цель: бот становится интерфейсом review/approval, но не обходит safety.
+
+Workflow:
+
+```text
+bot показывает dry-run summary
+  -> владелец нажимает approve/reject
+  -> создается approved package
+  -> apply остается отдельным подтверждаемым действием
+  -> verify result отправляется в чат
+```
+
+Кнопки:
+
+```text
+Approve
+Reject
+Show rows
+Show risks
+Create approved package
+Run apply after confirmation
+```
+
+Критерий готовности:
+
+- кнопка approve создает approved package с checksum;
+- apply требует явного подтверждения;
+- повторный apply заблокирован;
+- verify-результат отправляется в чат.
+
+## Этап 8. Бизнес-автоматизация поверх bot/task-runner
+
+Приоритетные сценарии Vital Shevron:
+
+1. `pricing-status`:
+   цены Ozon/WB, минимальные цены, себестоимость 85 ₽ за шеврон,
+   маржинальность, FBO/FBW.
+2. `search-queries`:
+   топ запросов Ozon/WB, сравнение площадок, SEO-рекомендации.
+3. `wb-parser-positions`:
+   позиции наших `nmID`, конкурентный срез, не использовать `VitalEmb` как
+   признак владения.
+4. `ads-monitoring`:
+   Ozon CPC + WB promotion, delayed monitoring 24/48 часов после apply.
+5. `stock/preflight filter`:
+   перед повышением рекламных ставок проверять наличие и доступность товара.
+6. `actions/discounts`:
+   WB акции по схеме Vital Shevron `70-55-55`, Ozon Elastic и будущие акции.
+7. `reviews/questions`:
+   сбор, draft answers, approved apply, verify.
+
+Критерий готовности:
+
+- каждый сценарий имеет read-only или dry-run режим;
+- write-сценарии подключены к approval lifecycle;
+- бот показывает не только результат, но и следующий практический шаг.
+
+## Этап 9. Регулярная автоматизация
+
+Цель: бот получает не только ручные команды, но и регулярные отчеты.
+
+Read-only timers:
+
+```text
+status-preflight
+daily-morning-report --seller-v2
+reviews-questions
+pricing-status
+ads-monitoring
+search-queries weekly
+wb-parser-positions weekly
+```
+
+Правила:
+
+- timers не выполняют write-операции;
+- write только по owner approval;
+- ошибки timers отправляются в чат кратко и безопасно;
+- каждый timer пишет `RunManifest`.
+
+Критерий готовности:
+
+- ежедневный отчет приходит в Telegram;
+- критические риски подсвечиваются;
+- weekly SEO/positions отчеты доступны по команде и по расписанию.
+
+## Этап 10. Расширение storage и памяти
+
+Стартовый слой:
+
+```text
+Git docs -> source of truth
+data/runs/index.jsonl -> operational index MVP
+Hermes memory -> auxiliary agent context
+```
+
+После стабилизации можно рассмотреть PostgreSQL:
+
+```text
+runs
+run_artifacts
+approvals
+workflow_events
+marketplace_snapshots_index
+```
+
+Zep/Graphiti или другой graph-memory слой рассматривать только после появления
+устойчивой операционной истории. Он не должен заменять Git-документы и
+approval records.
+
+Критерий готовности:
+
+- на вопрос "что запускали, что согласовано, что применено и где отчет" можно
+  ответить из `data/runs/index.jsonl` или будущей БД;
+- память агента не является единственным источником операционного факта.
+
+## Что не делать
+
+- Не строить Telegram-бота раньше `TaskRegistry` и `RunManifest`.
+- Не давать боту прямой доступ к write API без safety guard.
+- Не переносить TAKTERRA product-first модель без учета разных Ozon/WB
+  артикулов Vital Shevron.
+- Не переименовывать `takterra_agent` вместе с реализацией новой логики. Когда
+  rename будет согласован, делать отдельный rename-only этап в универсальное
+  имя `seller_agent`, подходящее под любой магазин.
+- Не оставлять названия конкретных магазинов и старых проектов в целевом
+  generic core. Все такие значения должны быть вынесены в store profile,
+  миграционные/reference-документы или удалены после переноса смысла в
+  нейтральные формулировки.
+- Не хранить secrets, cookies, storage state, auth headers и коды входа в
+  Telegram-сообщениях, документах или `data/runs`.
+- Не смешивать сессии Vital Shevron и TAKTERRA.
+
+## Этап 11. Store-agnostic sanitize
+
+Цель: привести проект к универсальной системе управления любым магазином на
+Ozon/WB.
+
+Что сделать:
+
+1. Переименовать package в универсальное имя:
+
+```text
+src/takterra_agent/ -> src/seller_agent/
+```
+
+2. Ввести `StoreProfile`:
+
+```text
+store_id
+store_display_name
+owner
+marketplaces
+expected_ozon_store
+expected_wb_seller
+seller_sku_rules_profile
+pricing_profile
+session_profile
+data_root
+```
+
+3. Перенести store-specific значения из core-документов и кода в профиль:
+
+```text
+data/stores/<store_id>/profile.json
+data/stores/<store_id>/rules/
+data/stores/<store_id>/planning/
+```
+
+4. Убрать из generic core:
+
+- названия конкретных магазинов;
+- названия старых проектов;
+- store-specific схемы скидок;
+- store-specific правила seller SKU;
+- store-specific себестоимость и маржинальные настройки.
+
+5. Оставить в generic core только шаблоны и contracts:
+
+```text
+seller_sku_rules template
+pricing_profile schema
+catalog_mapping schema
+approval package schema
+task registry schema
+bot command schema
+```
+
+6. Store-specific документы оставить только в профиле магазина или в
+исторической reference-зоне до завершения sanitize.
+
+Критерий готовности:
+
+- `rg` по generic core не находит названия конкретных магазинов и старых
+  проектов;
+- все store-specific значения доступны через `StoreProfile`;
+- один и тот же `seller_agent` можно подключить к другому магазину без
+  переименования package и переписывания core-документов;
+- текущий рабочий магазин продолжает работать через свой профиль.
+
+## Первый реализационный спринт
+
+Рекомендуемый состав:
+
+1. `RunManifest` MVP.
+2. `data/runs/index.jsonl`.
+3. Расширенный `TaskRegistry` для всех текущих CLI-команд.
+4. `approvals status` и lifecycle schema.
+5. `prepare-reviews-questions-approved` как первый approved package builder.
+6. Обновление README/CLI docs из registry или по registry.
+
+Критерий завершения спринта:
+
+```text
+pytest проходит
+CLI help проходит
+status-preflight пишет manifest
+reviews/questions pending -> approved -> apply -> verify видны как связанная цепочка
+fresh-агент понимает список задач из TaskRegistry
+бот можно подключать к read-only командам без дублирования CLI
+```

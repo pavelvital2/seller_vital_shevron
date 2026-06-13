@@ -14,6 +14,14 @@
 - `.gitignore` - защита от попадания секретов и runtime data в git.
 - `pyproject.toml` - настройки Python-проекта и pytest.
 
+## Agent Skills
+
+- `.agents/skills/marketplace-analytics/SKILL.md` - repo skill для read-only
+  аналитики Ozon/WB: SEO, parser-позиции, поисковые запросы, цены,
+  продвижение, отзывы/вопросы и повторяемые отчеты.
+- `.agents/skills/marketplace-analytics/agents/openai.yaml` - интерфейсные
+  метаданные skill.
+
 ## Git
 
 - local git initialized: `yes`
@@ -25,7 +33,8 @@
 ## Code
 
 - `src/takterra_agent/` - рабочий Python package. Имя оставлено временно для
-  снижения риска при переносе; отдельный rename stage вынесен в рекомендации.
+  снижения риска при переносе; будущий rename stage должен переименовать пакет
+  в универсальный `seller_agent`, подходящий под любой магазин.
 - `src/takterra_agent/tasks/ozon_elastic_apply.py` - применение согласованного
   Ozon Elastic dry-run с fresh preflight, drift-check и verify.
 - `src/takterra_agent/tasks/ozon_cpc_optimization_plan.py` - SKU-level dry-run
@@ -65,6 +74,10 @@ Ozon CDP port по умолчанию: `9544`.
 - `data/pending/` - pending packages перед approval, не коммитить.
 - `data/approved/` - approved packages, не коммитить.
 - `data/reports/` - экспортные отчеты, не коммитить без отдельного решения.
+- `data/reference/takterra_development_docs/` - read-only копия markdown-
+  документов TAKTERRA по развитию проекта, архитектуре, task-runner,
+  safety-контуры и Telegram-боту; использовать как справочный слой, не как
+  действующие правила Vital Shevron.
 
 Первый read-only catalog snapshot от 2026-06-12:
 
@@ -81,6 +94,7 @@ Ozon CDP port по умолчанию: `9544`.
 - `data/planning/recommendations_index.md`
 - `data/planning/vital_shevron_bootstrap_plan.md`
 - `data/planning/catalog_mapping_runbook.md`
+- `data/planning/seller_sku_rules.md`
 - `data/planning/lk_connection_runbook.md`
 - `data/planning/session_manager_runbook.md`
 - `data/planning/ozon_cabinet_map.md`
@@ -88,13 +102,21 @@ Ozon CDP port по умолчанию: `9544`.
 - `data/planning/status_preflight_runbook.md`
 - `data/planning/daily_morning_report_runbook.md`
 - `data/planning/reviews_questions_runbook.md`
+- `data/planning/chat_report_templates.md`
 - `data/planning/ozon_elastic_runbook.md`
 - `data/planning/ozon_cpc_efficiency_runbook.md`
 - `data/planning/wb_promotion_runbook.md`
 - `data/planning/wb_actions_runbook.md`
 - `data/planning/pricing_runbook.md`
+- `data/planning/ozon_parser_positions_runbook.md`
 - `data/planning/wb_parser_positions_runbook.md`
 - `data/planning/search_queries_runbook.md`
+- `data/planning/seo_audit_runbook.md`
+- `data/planning/analytics_skills_development_plan.md`
+- `data/planning/telegram_bot_management_transition_plan.md`
+- `data/reference/takterra_development_docs/README.md`
+- `data/reference/takterra_development_docs/data/15_architecture_notes/`
+- `data/reference/takterra_development_docs/data/planning/`
 
 ## Sessions
 

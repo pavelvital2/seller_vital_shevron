@@ -68,13 +68,24 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli i
 - `daily_morning_report_runbook.md` - утренний отчет.
 - `catalog_mapping_runbook.md` - Ozon/WB catalog mapping.
 - `reviews_questions_runbook.md` - отзывы и вопросы Ozon/WB.
+- `chat_report_templates.md` - унифицированные шаблоны Telegram-отчетов и
+  правило прикрепления полного файла отчета.
 - `ozon_elastic_runbook.md` - Ozon Elastic Boosting.
 - `ozon_cpc_efficiency_runbook.md` - Ozon CPC эффективность и ставки.
 - `wb_actions_runbook.md` - WB акции и скидки.
 - `wb_promotion_runbook.md` - WB promotion отчеты, dry-run и apply ставок.
 - `pricing_runbook.md` - цены, скидки, минимальные цены и себестоимость Ozon/WB.
 - `search_queries_runbook.md` - поисковые запросы Ozon/WB.
+- `ozon_parser_positions_runbook.md` - анализ позиций Ozon по данным парсера.
 - `wb_parser_positions_runbook.md` - анализ позиций WB по данным парсера.
+- `seo_audit_runbook.md` - read-only SEO-аудит карточек Ozon/WB.
+- `analytics_skills_development_plan.md` - развитие аналитического skill,
+  будущего plugin и связки с task-runner/ботом.
+
+Локальный repo skill для аналитики:
+
+- `.agents/skills/marketplace-analytics/SKILL.md` - правила read-only анализа
+  Ozon/WB, SEO, parser-позиций, цен, продвижения и отчетов.
 
 ## Секреты
 

@@ -19,3 +19,6 @@ PYTHONPATH=src python3 -m takterra_agent.cli daily-morning-report --seller-v2
 Отчет должен показывать Ozon и WB как отдельные контуры. Объединение по товару
 разрешено только там, где есть подтвержденный mapping.
 
+Telegram-вывод ежедневного отчета строить по общему стандарту
+`data/planning/chat_report_templates.md`: chat-summary должен быть достаточным
+для просмотра с телефона без открытия полного файла.

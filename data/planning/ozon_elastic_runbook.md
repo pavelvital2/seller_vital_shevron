@@ -20,7 +20,9 @@ data/runs/<date>/ozon_elastic_plan_<timestamp>/
 
 ## Формат предварительного отчета владельцу
 
-Сохранять короткий формат:
+Telegram-вывод строить по общему стандарту
+`data/planning/chat_report_templates.md`. Для Ozon Elastic сохранять короткий
+формат:
 
 ```text
 Краткий вывод: по Ozon Elastic <итог>. Dry-run, apply не выполнялся.

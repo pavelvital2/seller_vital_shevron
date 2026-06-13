@@ -1,0 +1,4 @@
+interface:
+  display_name: "Marketplace Analytics"
+  short_description: "SEO, parser, pricing and ads analytics"
+  default_prompt: "Use $marketplace-analytics to run a read-only marketplace analytics workflow for Ozon/WB."
