@@ -78,5 +78,5 @@ class WbCommunicationsAdapter:
         return data if isinstance(data, dict) else {"data": data}
 
     def answer_question(self, *, question_id: str, text: str, state: str = "wbRu") -> dict[str, Any]:
-        data = self.patch("/api/v1/questions", {"id": question_id, "text": text, "state": state})
+        data = self.patch("/api/v1/questions", {"id": question_id, "answer": {"text": text}, "state": state})
         return data if isinstance(data, dict) else {"data": data}

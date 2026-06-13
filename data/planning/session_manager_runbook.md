@@ -53,6 +53,42 @@ node scripts/sessions/ozon_session_keepalive_cdp.js
 PYTHONPATH=src python3 -m takterra_agent.cli sessions status --marketplace ozon
 ```
 
+## Восстановление Ozon-сессии
+
+Dry-run:
+
+```bash
+PYTHONPATH=src python3 -m takterra_agent.cli restore-ozon-session --dry-run
+```
+
+Фактическое восстановление:
+
+```bash
+PYTHONPATH=src python3 -m takterra_agent.cli restore-ozon-session
+```
+
+Сценарий интерактивно запрашивает email и коды входа. Коды не сохранять в
+файлы проекта, отчеты и сообщения.
+
+Если проект еще не переведен на `systemd --user` и команда завершилась
+`overall_status: warning` из-за отсутствующих unit-файлов
+`vital-shevron-ozon-*`, но сам интерактивный вход вернул `LOGIN_SUCCESS`, нужно
+поднять legacy keeper/watchdog вручную:
+
+```bash
+PYTHONPATH=src python3 -m takterra_agent.cli sessions start --marketplace ozon
+node scripts/sessions/ozon_session_keepalive_cdp.js
+PYTHONPATH=src python3 -m takterra_agent.cli sessions status --marketplace ozon
+```
+
+Критерий готовности после восстановления:
+
+- `expectedStoreFound: true`;
+- `stateExported: true`;
+- `sessions status --marketplace ozon` возвращает `overall_status: ok`;
+- `refresh.ok: true`;
+- `values_printed: false`.
+
 Текущий рабочий контур может держаться legacy watchdog-процессом
 `scripts/sessions/start_ozon_session_watchdog.sh` с интервалом `1800` секунд.
 Перевод на `systemd --user` timers остается отдельным техническим этапом после

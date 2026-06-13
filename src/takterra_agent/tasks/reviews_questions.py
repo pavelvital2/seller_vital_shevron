@@ -140,10 +140,16 @@ def _rating_number(value: Any) -> int:
         return 0
 
 
+def _rating_sort_key(value: str) -> tuple[int, str]:
+    if value == "н/д":
+        return (-1, value)
+    return (_rating_number(value), value)
+
+
 def _has_problem_text(text: str) -> bool:
     return bool(
         re.search(
-            r"не подош|маленьк|слом|брак|плохо|ужас|вернул|не соответствует|нет в комплект|обман|разочар",
+            r"не подош|маленьк|слом|брак|плохо|ужас|вернул|не соответствует|нет в комплект|обман|разочар|так себе|кривоват|криво",
             text,
             flags=re.IGNORECASE,
         )
@@ -211,6 +217,8 @@ def draft_question_reply(item: dict[str, Any]) -> str:
     all_text = f"{title}\n{text}".lower()
 
     if re.search(r"налич|сколько|количеств|остат|шт|штук|парт", text, re.IGNORECASE):
+        return ""
+    if re.search(r"позывн", text, re.IGNORECASE):
         return ""
     if "липуч" in all_text or "велкро" in all_text:
         return (
@@ -469,6 +477,7 @@ def _build_report(
     item_counts = Counter(f"{item.get('platform')}:{item.get('source_type')}" for item in items)
     action_counts = Counter(str(action.get("action_type") or "") for action in actions)
     status_counts = Counter(str(action.get("processing_status") or "") for action in actions)
+    rating_counts = Counter(str(action.get("rating") or "н/д") for action in actions)
     blockers: list[str] = []
     for name, source in sources.items():
         if isinstance(source, dict):
@@ -506,6 +515,12 @@ def _build_report(
     for key, count in sorted(status_counts.items()):
         lines.append(f"- `{key}`: `{count}`")
 
+    lines.extend(["", "## Оценки", ""])
+    if not rating_counts:
+        lines.append("- оценок нет")
+    for rating, count in sorted(rating_counts.items(), key=lambda item: _rating_sort_key(item[0]), reverse=True):
+        lines.append(f"- `{rating}`: `{count}`")
+
     lines.extend(["", "## Черновики для согласования", ""])
     draft_actions = [action for action in actions if action.get("draft_text")]
     if not draft_actions:
@@ -523,6 +538,16 @@ def _build_report(
                 f"Черновик ответа: {action['draft_text']}",
                 "",
             ]
+        )
+
+    viewed_actions = [action for action in actions if action.get("action_type") == "mark_review_viewed"]
+    lines.extend(["", "## Отзывы без текста к отметке просмотренными", ""])
+    if not viewed_actions:
+        lines.append("- нет")
+    for index, action in enumerate(viewed_actions[:100], 1):
+        lines.append(
+            f"{index}. `{action.get('platform')}` / `{action.get('offer_id') or action.get('sku') or action.get('source_id')}` "
+            f"/ оценка `{action.get('rating') or 'н/д'}` - {action.get('product_title') or 'без названия'}"
         )
 
     lines.extend(["", "## Блокеры и ограничения", ""])

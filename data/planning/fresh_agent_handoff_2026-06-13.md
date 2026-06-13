@@ -1,6 +1,7 @@
 # Fresh Agent Handoff - Vital Shevron
 
 Дата подготовки: 2026-06-13 00:30 MSK
+Последняя актуализация: 2026-06-13 15:56 MSK
 
 ## Итог
 
@@ -17,6 +18,7 @@ https://github.com/pavelvital2/seller_vital_shevron
 visibility: PRIVATE
 branch: main
 base commit before 2026-06-13 revision: a72047b Add fresh agent handoff
+latest pushed commit before current revision: a4b3eef Add marketplace operation safety contours
 ```
 
 ## Обязательный старт fresh-агента
@@ -49,6 +51,16 @@ git diff --check: ok
 CLI help: ok
 ```
 
+Последняя локальная проверка перед текущей ревизией:
+
+```text
+pytest: 52 passed
+compileall src/tests: ok
+git diff --check: ok
+CLI help: ok
+markdown links/backtick path audit: ok, только ожидаемые runtime/template paths
+```
+
 Runtime reports, raw snapshots, pending/approved packages и секреты не должны
 коммититься. В tracked runtime-директориях допустимы только README-заглушки.
 
@@ -63,6 +75,22 @@ Runtime reports, raw snapshots, pending/approved packages и секреты не
   `70-55-55`.
 - `wb-promotion-report` - WB promotion read-only report.
 - `plan-wb-promotion-bids` / `apply-wb-promotion-bids` - WB promotion ставки.
+
+## Новые постоянные карты и инструкции 2026-06-13
+
+- `data/planning/ozon_cabinet_map.md` - подробная карта ЛК Ozon для
+  fresh-агента: вкладки, ссылки, назначение, API-first маршруты и риски.
+- `data/planning/wb_cabinet_map.md` - подробная карта ЛК Wildberries для
+  fresh-агента.
+- `data/planning/pricing_runbook.md` - цены, скидки, минимальные цены,
+  себестоимость шевронов и правила маржинальности.
+- `data/planning/search_queries_runbook.md` - сбор и анализ поисковых запросов
+  Ozon/WB.
+- `data/planning/wb_parser_positions_runbook.md` - анализ позиций WB по данным
+  Parser Data API.
+
+Fresh-агенту при задачах по ЛК сначала читать соответствующую кабинетную карту,
+а затем профильный runbook операции.
 
 ## Последние marketplace write-операции
 

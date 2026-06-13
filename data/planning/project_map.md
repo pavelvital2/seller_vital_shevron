@@ -83,6 +83,8 @@ Ozon CDP port по умолчанию: `9544`.
 - `data/planning/catalog_mapping_runbook.md`
 - `data/planning/lk_connection_runbook.md`
 - `data/planning/session_manager_runbook.md`
+- `data/planning/ozon_cabinet_map.md`
+- `data/planning/wb_cabinet_map.md`
 - `data/planning/status_preflight_runbook.md`
 - `data/planning/daily_morning_report_runbook.md`
 - `data/planning/reviews_questions_runbook.md`
@@ -90,6 +92,9 @@ Ozon CDP port по умолчанию: `9544`.
 - `data/planning/ozon_cpc_efficiency_runbook.md`
 - `data/planning/wb_promotion_runbook.md`
 - `data/planning/wb_actions_runbook.md`
+- `data/planning/pricing_runbook.md`
+- `data/planning/wb_parser_positions_runbook.md`
+- `data/planning/search_queries_runbook.md`
 
 ## Sessions
 

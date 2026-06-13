@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+from datetime import datetime
 import json
 from pathlib import Path
 
-from takterra_agent.config import load_ozon_performance_credentials, load_ozon_seller_credentials, load_wb_credentials
+from takterra_agent.config import (
+    WbCredentials,
+    load_ozon_performance_credentials,
+    load_ozon_seller_credentials,
+    load_wb_credentials,
+)
+from takterra_agent.marketplaces.wb.communications_adapter import WbCommunicationsAdapter
 from takterra_agent.tasks.reviews_questions import (
+    _build_report,
     build_actions,
     classify_item,
     draft_review_reply,
@@ -110,6 +118,37 @@ def test_review_reply_uses_feminine_product_phrase() -> None:
     assert "петлица вам понравилась и подошла" in reply
 
 
+def test_review_reply_detects_problem_text_with_four_star_rating() -> None:
+    reply = draft_review_reply(
+        {
+            "product_title": "Шеврон тестовый",
+            "text": "Сшито кривовато",
+            "rating": 4,
+        }
+    )
+
+    assert "жаль" in reply.lower()
+    assert "проверим" in reply.lower()
+    assert "рады" not in reply.lower()
+
+
+def test_question_about_callsign_requires_manual_context() -> None:
+    item = normalize_wb_question(
+        {
+            "id": "question-callsign",
+            "text": "Здравствуйте есть с позывным ПУХ",
+            "answer": None,
+            "productDetails": {
+                "nmId": 123,
+                "supplierArticle": "pzkit2mh0007_pzmh0025",
+                "productName": "Шеврон на липучке позывной Лис комплект мох",
+            },
+        }
+    )
+
+    assert draft_question_reply(item) == ""
+
+
 def test_ozon_empty_review_builds_mark_viewed_action() -> None:
     item = {
         "platform": "ozon",
@@ -128,3 +167,57 @@ def test_ozon_empty_review_builds_mark_viewed_action() -> None:
     assert classify_item(item) == "can_mark_viewed_after_owner_confirmation"
     assert actions[0]["action_type"] == "mark_review_viewed"
     assert actions[0]["draft_text"] == ""
+
+
+def test_report_includes_rating_summary_and_viewed_review_ratings() -> None:
+    action = {
+        "platform": "ozon",
+        "source_type": "review",
+        "source_id": "review-1",
+        "offer_id": "chev_test0001",
+        "sku": "123",
+        "rating": 4,
+        "product_title": "Шеврон на липучке тестовый",
+        "source_text": "",
+        "processing_status": "can_mark_viewed_after_owner_confirmation",
+        "action_type": "mark_review_viewed",
+        "state": "pending_owner_confirmation",
+        "risk": "low",
+        "draft_text": "",
+        "notes": "",
+    }
+
+    report = _build_report(
+        run_id="reviews_questions_test",
+        started_at=datetime(2026, 6, 13, 12, 0, 0),
+        items=[],
+        actions=[action],
+        sources={},
+        artifacts={},
+    )
+
+    assert "## Оценки" in report
+    assert "- `4`: `1`" in report
+    assert "## Отзывы без текста к отметке просмотренными" in report
+    assert "/ оценка `4`" in report
+
+
+def test_wb_question_answer_uses_answer_object_payload(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_patch(self, path, payload):  # noqa: ANN001
+        captured["path"] = path
+        captured["payload"] = payload
+        return {"data": None, "error": False}
+
+    monkeypatch.setattr(WbCommunicationsAdapter, "patch", fake_patch)
+    adapter = WbCommunicationsAdapter(WbCredentials(token="test-token"))
+
+    adapter.answer_question(question_id="question-1", text="Ответ")
+
+    assert captured["path"] == "/api/v1/questions"
+    assert captured["payload"] == {
+        "id": "question-1",
+        "answer": {"text": "Ответ"},
+        "state": "wbRu",
+    }

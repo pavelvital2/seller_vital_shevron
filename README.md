@@ -61,12 +61,20 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli i
 Основные постоянные инструкции находятся в `data/planning/`:
 
 - `status_preflight_runbook.md` - единая проверка состояния.
+- `lk_connection_runbook.md` - подключение ЛК Ozon/WB.
+- `session_manager_runbook.md` - управление LK-сессиями и восстановление.
+- `ozon_cabinet_map.md` - подробная карта ЛК Ozon.
+- `wb_cabinet_map.md` - подробная карта ЛК Wildberries.
 - `daily_morning_report_runbook.md` - утренний отчет.
 - `catalog_mapping_runbook.md` - Ozon/WB catalog mapping.
+- `reviews_questions_runbook.md` - отзывы и вопросы Ozon/WB.
 - `ozon_elastic_runbook.md` - Ozon Elastic Boosting.
 - `ozon_cpc_efficiency_runbook.md` - Ozon CPC эффективность и ставки.
 - `wb_actions_runbook.md` - WB акции и скидки.
 - `wb_promotion_runbook.md` - WB promotion отчеты, dry-run и apply ставок.
+- `pricing_runbook.md` - цены, скидки, минимальные цены и себестоимость Ozon/WB.
+- `search_queries_runbook.md` - поисковые запросы Ozon/WB.
+- `wb_parser_positions_runbook.md` - анализ позиций WB по данным парсера.
 
 ## Секреты
 
