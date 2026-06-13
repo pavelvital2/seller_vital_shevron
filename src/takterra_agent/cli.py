@@ -16,6 +16,7 @@ from takterra_agent.tasks.ozon_cpc_optimization_plan import CpcOptimizationThres
 from takterra_agent.tasks.ozon_elastic_plan import run_ozon_elastic_plan
 from takterra_agent.tasks.reviews_questions import run_reviews_questions, run_reviews_questions_apply
 from takterra_agent.tasks.status_preflight import run_status_preflight
+from takterra_agent.tasks.wb_actions_discount_apply import run_wb_actions_discount_apply
 from takterra_agent.tasks.wb_actions_discount_plan import run_wb_actions_discount_plan
 from takterra_agent.tasks.wb_card_create_apply import run_wb_card_create_apply
 from takterra_agent.tasks.wb_card_create_plan import run_wb_card_create_plan
@@ -279,6 +280,31 @@ def build_parser() -> argparse.ArgumentParser:
         "--prices-json",
         default=None,
         help="Existing current prices JSON from WB LK snapshot.",
+    )
+
+    apply_wb_actions = subparsers.add_parser(
+        "apply-wb-actions-discounts",
+        help="Apply approved WB actions discount dry-run after fresh preflight, dry-run and drift-check.",
+    )
+    apply_wb_actions.add_argument(
+        "--data-dir",
+        default="data",
+        help="Project data directory.",
+    )
+    apply_wb_actions.add_argument(
+        "--plan-run-id",
+        default=None,
+        help="Approved WB actions discount plan run id. Defaults to the latest wb_actions_discount_plan_* run.",
+    )
+    apply_wb_actions.add_argument(
+        "--run-id",
+        default=None,
+        help="Optional stable run id.",
+    )
+    apply_wb_actions.add_argument(
+        "--confirmed-by-user",
+        action="store_true",
+        help="Required explicit confirmation for external WB write operations.",
     )
 
     wb_promotion = subparsers.add_parser(
@@ -663,6 +689,17 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
+
+    if args.command == "apply-wb-actions-discounts":
+        result = run_wb_actions_discount_apply(
+            credentials=load_credentials(),
+            data_dir=Path(args.data_dir),
+            plan_run_id=args.plan_run_id,
+            run_id=args.run_id,
+            confirmed_by_user=args.confirmed_by_user,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
 
     if args.command == "wb-promotion-report":
         result = run_wb_promotion_report(

@@ -86,6 +86,11 @@
   запросов Ozon/WB из ЛК/API.
 - `data/planning/seo_audit_runbook.md` - read-only SEO-аудит карточек Ozon/WB
   на основе спроса, parser-позиций и карточного контента.
+- `data/planning/card_grouping_runbook.md` - read-only аудит и будущий
+  безопасный dry-run группировки карточек Ozon/WB.
+- `data/planning/supply_planning_runbook.md` - read-only расчет поставок:
+  остатки, продажи за 90 дней, локализация спроса, кратность производства и
+  производственная мощность.
 - `data/planning/analytics_skills_development_plan.md` - план развития
   аналитических skills/plugins для Ozon/WB аналитики.
 - `data/planning/telegram_bot_management_transition_plan.md` - поэтапный план
@@ -272,6 +277,15 @@ API, API не дает нужного метода, либо API-метод не
 /home/Codex/agent-tools/python/bin/pytest
 /home/Codex/agent-tools/node/node_modules
 ```
+
+Для Excel-файлов использовать общий tools Python:
+
+```text
+/home/Codex/agent-tools/python/bin/python
+```
+
+В этом окружении доступен `openpyxl 3.1.5`. Не устанавливать `openpyxl` в
+проектные runtime-venv без отдельного согласования владельца.
 
 ## Git/GitHub
 

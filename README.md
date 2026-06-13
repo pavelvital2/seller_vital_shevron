@@ -79,6 +79,9 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli i
 - `ozon_parser_positions_runbook.md` - анализ позиций Ozon по данным парсера.
 - `wb_parser_positions_runbook.md` - анализ позиций WB по данным парсера.
 - `seo_audit_runbook.md` - read-only SEO-аудит карточек Ozon/WB.
+- `card_grouping_runbook.md` - read-only аудит и dry-run группировки карточек.
+- `supply_planning_runbook.md` - read-only расчет поставок, остатков,
+  продаж за 90 дней, локализации и производственного плана.
 - `analytics_skills_development_plan.md` - развитие аналитического skill,
   будущего plugin и связки с task-runner/ботом.
 

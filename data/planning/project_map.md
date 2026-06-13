@@ -112,6 +112,8 @@ Ozon CDP port по умолчанию: `9544`.
 - `data/planning/wb_parser_positions_runbook.md`
 - `data/planning/search_queries_runbook.md`
 - `data/planning/seo_audit_runbook.md`
+- `data/planning/card_grouping_runbook.md`
+- `data/planning/supply_planning_runbook.md`
 - `data/planning/analytics_skills_development_plan.md`
 - `data/planning/telegram_bot_management_transition_plan.md`
 - `data/reference/takterra_development_docs/README.md`

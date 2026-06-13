@@ -77,3 +77,25 @@ read-only -> dry-run -> review -> approved -> apply -> verify -> result
 
 Нельзя использовать старую схему `65-50-50` для Vital Shevron, если владелец не
 попросил ее явно.
+
+После согласования владельцем применять отдельной командой WB, а не legacy
+`apply-actions`, потому что `apply-actions` оставлен для старого combined
+сценария и пересчитывает WB по старой схеме.
+
+```bash
+PYTHONPATH=src NODE_PATH=/home/Codex/agent-tools/node/node_modules \
+  /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli apply-wb-actions-discounts \
+  --plan-run-id <approved_wb_actions_discount_plan_run_id> \
+  --confirmed-by-user
+```
+
+Apply выполняет:
+
+- свежий `status-preflight`;
+- свежий dry-run WB по схеме из утвержденного плана;
+- drift-check payload строк `nmID + price + discount`;
+- upload в официальный WB endpoint
+  `https://discounts-prices-api.wildberries.ru/api/v2/upload/task`;
+- проверку статуса upload через history/buffer endpoints;
+- сохранение `summary.json`, `wb_actions_discount_apply_result.md`,
+  `drift_check.json`, отправленного payload и WB upload response.
