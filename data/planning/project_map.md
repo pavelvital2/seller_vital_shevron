@@ -42,6 +42,15 @@
 - `src/takterra_agent/tasks/ozon_cpc_bids_apply.py` - применение согласованных
   ставок Ozon CPC через Performance API с API-only preflight, drift-check и
   verify.
+- `src/takterra_agent/tasks/daily_morning_report.py` - ежедневный read-only
+  отчет Ozon/WB v3; использует Ozon `/v1/analytics/data`,
+  `/v4/product/info/stocks`, `/v3/finance/transaction/list` для выкупов,
+  расходов и CPC-списаний, `/v2/posting/fbo/list` для операционных FBO-отмен,
+  Review/Question API с LK/CDP fallback, WB Statistics/Finance/Promotion/
+  Communications API и последние dry-run отчеты по акциям.
+- `src/takterra_agent/marketplaces/wb/finance_adapter.py` - read-only адаптер
+  WB Finance API для ежедневных финансовых отчетов реализации
+  `/api/finance/v1/sales-reports/list`.
 - `src/takterra_agent/tasks/wb_promotion_report.py` - read-only отчет по WB
   продвижению через Promotion API.
 - `src/takterra_agent/tasks/wb_promotion_bid_plan.py` - dry-run план изменений
@@ -50,6 +59,9 @@
   согласованных ставок WB promotion через Promotion API с fresh report,
   drift-check и verify.
 - `scripts/` - JS/Bash helpers для ЛК, сессий, отзывов/вопросов и операций.
+- `scripts/research/ozon_messenger_page_probe_cdp.js` - read-only probe
+  страницы Ozon Messenger через CDP: сохраняет только redacted HTTP/websocket
+  shape и UI summary без текстов сообщений, cookies и auth headers.
 - `tests/` - тесты переносимого каркаса.
 
 ## Deploy
@@ -78,6 +90,9 @@ Ozon CDP port по умолчанию: `9544`.
   документов TAKTERRA по развитию проекта, архитектуре, task-runner,
   safety-контуры и Telegram-боту; использовать как справочный слой, не как
   действующие правила Vital Shevron.
+- `data/reference/external_reviews/` - внешние review-документы по проекту,
+  сохраненные как справочные материалы; не являются источником истины, но
+  используются для сверки плана развития и рисков.
 
 Первый read-only catalog snapshot от 2026-06-12:
 
@@ -102,6 +117,9 @@ Ozon CDP port по умолчанию: `9544`.
 - `data/planning/status_preflight_runbook.md`
 - `data/planning/daily_morning_report_runbook.md`
 - `data/planning/reviews_questions_runbook.md`
+- `data/planning/ozon_messenger_runbook.md` - Ozon Messenger/уведомления:
+  ежедневный triage вопросов покупателей, важных сообщений площадки и шума,
+  API-first `/v3/chat/*` плюс LK websocket fallback.
 - `data/planning/chat_report_templates.md`
 - `data/planning/ozon_elastic_runbook.md`
 - `data/planning/ozon_cpc_efficiency_runbook.md`
@@ -112,6 +130,19 @@ Ozon CDP port по умолчанию: `9544`.
 - `data/planning/wb_parser_positions_runbook.md`
 - `data/planning/search_queries_runbook.md`
 - `data/planning/seo_audit_runbook.md`
+- `data/planning/product_card_work_runbook.md` - обязательная инструкция
+  покарточной работы: просмотр всех фото, описание изображения/цветов/фона,
+  правила липучки и пришивных нашивок, размеры/вес/упаковка,
+  материал/состав, структура описания и формат review.
+- `data/planning/ozon_product_card_content_runbook.md` - Ozon-инструкция по
+  наполнению карточек: title, аннотация, атрибуты, материал/состав,
+  цвет/название цвета, хештеги, фото, контент-рейтинг и API read-only/dry-run.
+- `data/planning/ozon_hashtag_frequency_table.md` - таблица частотности
+  Ozon-хештегов из редактора карточек; обновлять не реже одного раза в месяц
+  и использовать для добора релевантных хештегов до лимита 30.
+- `data/planning/product_card_designer_tasks.md` - постоянный backlog задач
+  дизайнеру по недостающим фото, вариантам ношения и сервисной инфографике
+  карточек.
 - `data/planning/card_grouping_runbook.md`
 - `data/planning/supply_planning_runbook.md`
 - `data/planning/analytics_skills_development_plan.md`
@@ -119,6 +150,10 @@ Ozon CDP port по умолчанию: `9544`.
 - `data/reference/takterra_development_docs/README.md`
 - `data/reference/takterra_development_docs/data/15_architecture_notes/`
 - `data/reference/takterra_development_docs/data/planning/`
+- `data/reference/external_reviews/2026-06-13_gpt_pro_repository_review.md` -
+  внешний review репозитория от 2026-06-13: оценка готовности к Telegram-боту,
+  риски TaskRegistry/RunManifest/SafetyGuard/approval/locks и рекомендуемый
+  порядок развития.
 
 ## Sessions
 

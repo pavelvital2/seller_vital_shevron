@@ -89,6 +89,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Build seller-focused v2 report with read-only business metrics.",
     )
+    daily_report.add_argument(
+        "--seller-v3",
+        action="store_true",
+        help="Build seller-focused v3 report: yesterday 00:00-23:59 MSK, Ozon/WB side-by-side.",
+    )
 
     sessions = subparsers.add_parser(
         "sessions",
@@ -592,6 +597,7 @@ def main(argv: list[str] | None = None) -> int:
             run_id=args.run_id,
             refresh_preflight=not args.skip_preflight_refresh,
             seller_v2=args.seller_v2,
+            seller_v3=args.seller_v3,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["overall_status"] in {"ok", "warning"} else 2

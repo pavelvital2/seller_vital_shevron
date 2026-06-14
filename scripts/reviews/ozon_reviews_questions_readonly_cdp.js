@@ -103,6 +103,8 @@ function pick(obj, camel, snake) {
 }
 
 function normalizeReview(review) {
+  const photosCount = Number(review.photos_count || review.photosCount || 0);
+  const videosCount = Number(review.videos_count || review.videosCount || 0);
   return {
     platform: 'ozon',
     source_type: 'review',
@@ -120,8 +122,11 @@ function normalizeReview(review) {
     text: review.text || '',
     pros: review.pros || '',
     cons: review.cons || '',
-    needs_public_reply: Boolean(review.text) && review.is_commentable_2 === true,
-    can_mark_viewed: !review.text && review.interaction_status === 'NOT_VIEWED',
+    photos_count: photosCount,
+    videos_count: videosCount,
+    has_media: photosCount > 0 || videosCount > 0,
+    needs_public_reply: (Boolean(review.text) || photosCount > 0 || videosCount > 0) && review.is_commentable_2 === true,
+    can_mark_viewed: !review.text && photosCount === 0 && videosCount === 0 && review.interaction_status === 'NOT_VIEWED',
   };
 }
 

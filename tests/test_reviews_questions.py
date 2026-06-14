@@ -132,6 +132,57 @@ def test_review_reply_detects_problem_text_with_four_star_rating() -> None:
     assert "рады" not in reply.lower()
 
 
+def test_positive_review_replies_are_not_identical_for_different_texts() -> None:
+    first = draft_review_reply(
+        {
+            "id": "review-good",
+            "offer_id": "pzol0014",
+            "product_title": "Шеврон Позывной Иваныч",
+            "text": "Сделано хорошо!",
+            "rating": 5,
+        }
+    )
+    second = draft_review_reply(
+        {
+            "id": "review-beautiful",
+            "offer_id": "text0001",
+            "product_title": "Шеврон на липучке Славянский корпус",
+            "text": "Красиво сделано",
+            "rating": 5,
+        }
+    )
+
+    assert first != second
+    assert "качество изготовления" in first
+    assert "внешний вид" in second
+
+
+def test_empty_review_with_media_requires_public_reply_not_mark_viewed() -> None:
+    item = {
+        "platform": "ozon",
+        "source_type": "review",
+        "id": "review-media",
+        "rating": 5,
+        "offer_id": "chev_test0001",
+        "sku": "123",
+        "product_title": "Шеврон на липучке тестовый",
+        "text": "",
+        "photos_count": 1,
+        "videos_count": 0,
+        "has_media": True,
+        "can_mark_viewed": True,
+    }
+
+    actions = build_actions([{**item, "processing_status": classify_item(item)}])
+
+    assert classify_item(item) == "needs_media_review_for_public_reply"
+    assert actions[0]["action_type"] == "public_review_reply"
+    assert actions[0]["draft_text"]
+    assert "фото" in actions[0]["draft_text"].lower()
+    assert actions[0]["photos_count"] == 1
+    assert "media" in actions[0]["notes"].lower()
+
+
 def test_question_about_callsign_requires_manual_context() -> None:
     item = normalize_wb_question(
         {
@@ -198,8 +249,43 @@ def test_report_includes_rating_summary_and_viewed_review_ratings() -> None:
 
     assert "## Оценки" in report
     assert "- `4`: `1`" in report
-    assert "## Отзывы без текста к отметке просмотренными" in report
+    assert "## Отзывы без текста и без медиа к отметке просмотренными" in report
     assert "/ оценка `4`" in report
+
+
+def test_report_includes_media_counts_for_reply_drafts() -> None:
+    action = {
+        "platform": "ozon",
+        "source_type": "review",
+        "source_id": "review-media",
+        "offer_id": "chev_test0001",
+        "sku": "123",
+        "rating": 5,
+        "product_title": "Шеврон на липучке тестовый",
+        "source_text": "",
+        "has_media": True,
+        "photos_count": 1,
+        "videos_count": 0,
+        "media_urls": [],
+        "processing_status": "needs_media_review_for_public_reply",
+        "action_type": "public_review_reply",
+        "state": "pending_owner_confirmation",
+        "risk": "normal",
+        "draft_text": "Спасибо за высокую оценку и прикрепленное фото!",
+        "notes": "Review attached media before approval.",
+    }
+
+    report = _build_report(
+        run_id="reviews_questions_test",
+        started_at=datetime(2026, 6, 13, 12, 0, 0),
+        items=[],
+        actions=[action],
+        sources={},
+        artifacts={},
+    )
+
+    assert "- Оценка: `5`" in report
+    assert "- Медиа: фото `1`, видео `0`" in report
 
 
 def test_wb_question_answer_uses_answer_object_payload(monkeypatch) -> None:

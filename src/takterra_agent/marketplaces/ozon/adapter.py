@@ -149,6 +149,129 @@ class OzonSellerAdapter:
 
         return items
 
+    def fetch_fbo_postings(
+        self,
+        *,
+        since: str,
+        to: str,
+        status: str = "",
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        page_limit = min(max(int(limit), 1), 100)
+        offset = 0
+
+        while True:
+            data = self.post(
+                "/v2/posting/fbo/list",
+                {
+                    "dir": "ASC",
+                    "filter": {
+                        "since": since,
+                        "status": status,
+                        "to": to,
+                    },
+                    "limit": page_limit,
+                    "offset": offset,
+                    "translit": True,
+                    "with": {
+                        "analytics_data": True,
+                        "financial_data": True,
+                    },
+                },
+            )
+            result = data.get("result") if isinstance(data, dict) else []
+            page_items = result.get("postings") if isinstance(result, dict) else result
+            if not isinstance(page_items, list):
+                page_items = []
+            items.extend(row for row in page_items if isinstance(row, dict))
+            if len(page_items) < page_limit:
+                break
+            offset += page_limit
+
+        return items
+
+    def fetch_finance_transactions(
+        self,
+        *,
+        date_from: str,
+        date_to: str,
+        transaction_type: str = "all",
+        operation_type: list[str] | None = None,
+        page_size: int = 1000,
+    ) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        page = 1
+        normalized_page_size = min(max(int(page_size), 1), 1000)
+
+        while True:
+            data = self.post(
+                "/v3/finance/transaction/list",
+                {
+                    "filter": {
+                        "date": {
+                            "from": date_from,
+                            "to": date_to,
+                        },
+                        "operation_type": operation_type or [],
+                        "posting_number": "",
+                        "transaction_type": transaction_type,
+                    },
+                    "page": page,
+                    "page_size": normalized_page_size,
+                },
+            )
+            result = data.get("result") if isinstance(data, dict) else {}
+            page_items = result.get("operations") if isinstance(result, dict) else []
+            if isinstance(page_items, list):
+                items.extend(row for row in page_items if isinstance(row, dict))
+            page_count = int(result.get("page_count") or 0) if isinstance(result, dict) else 0
+            if not page_items or not page_count or page >= page_count:
+                break
+            page += 1
+
+        return items
+
+    def fetch_review_count(self) -> dict[str, Any]:
+        return self.post("/v1/review/count", {})
+
+    def fetch_review_list(
+        self,
+        *,
+        status: str = "ALL",
+        limit: int = 100,
+        sort_dir: str = "DESC",
+    ) -> dict[str, Any]:
+        return self.post(
+            "/v1/review/list",
+            {
+                "limit": min(max(int(limit), 1), 100),
+                "sort_dir": sort_dir,
+                "status": status,
+            },
+        )
+
+    def fetch_question_count(self) -> dict[str, Any]:
+        return self.post("/v1/question/count", {})
+
+    def fetch_question_list(
+        self,
+        *,
+        status: str = "ALL",
+        limit: int = 100,
+        offset: int = 0,
+        sort_dir: str = "DESC",
+    ) -> dict[str, Any]:
+        return self.post(
+            "/v1/question/list",
+            {
+                "filter": {"status": status},
+                "limit": min(max(int(limit), 1), 100),
+                "offset": max(int(offset), 0),
+                "sort_dir": sort_dir,
+            },
+        )
+
     def fetch_analytics_data(
         self,
         *,

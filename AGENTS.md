@@ -69,6 +69,9 @@
 - `data/planning/status_preflight_runbook.md` - единая проверка состояния.
 - `data/planning/daily_morning_report_runbook.md` - утренний отчет.
 - `data/planning/reviews_questions_runbook.md` - отзывы и вопросы.
+- `data/planning/ozon_messenger_runbook.md` - Ozon Messenger/уведомления:
+  вопросы покупателей, важные сообщения площадки, ежедневный triage,
+  API-first маршрут, LK/CDP websocket fallback и safety-правила.
 - `data/planning/chat_report_templates.md` - унифицированные шаблоны вывода
   отчетов в Telegram-чат и правило прикрепления полного файла отчета.
 - `data/planning/ozon_elastic_runbook.md` - Ozon Elastic Boosting.
@@ -86,6 +89,18 @@
   запросов Ozon/WB из ЛК/API.
 - `data/planning/seo_audit_runbook.md` - read-only SEO-аудит карточек Ozon/WB
   на основе спроса, parser-позиций и карточного контента.
+- `data/planning/product_card_work_runbook.md` - обязательный порядок
+  покарточной работы: фото-аудит всех фото, липучка/нашивки, размеры, вес,
+  упаковка, материал/состав, описание и правила review перед изменениями
+  карточек.
+- `data/planning/ozon_product_card_content_runbook.md` - Ozon-инструкция по
+  наполнению карточек: title, аннотация, атрибуты, материал/состав,
+  цвет/название цвета, хештеги, фото, контент-рейтинг и API read-only/dry-run.
+- `data/planning/ozon_hashtag_frequency_table.md` - таблица частотности
+  Ozon-хештегов из редактора карточек, используется для добора релевантных
+  хештегов до лимита 30.
+- `data/planning/product_card_designer_tasks.md` - backlog задач дизайнеру по
+  недостающим фото, вариантам ношения и сервисной инфографике карточек.
 - `data/planning/card_grouping_runbook.md` - read-only аудит и будущий
   безопасный dry-run группировки карточек Ozon/WB.
 - `data/planning/supply_planning_runbook.md` - read-only расчет поставок:

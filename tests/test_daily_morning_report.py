@@ -181,6 +181,49 @@ def test_daily_morning_report_seller_v2_uses_business_adapters(tmp_path: Path, m
         def fetch_product_stocks(self, product_ids):
             return [{"product_id": "101", "offer_id": "sku-1", "stocks": [{"present": 2, "reserved": 1}]}]
 
+        def fetch_finance_transactions(
+            self,
+            *,
+            date_from: str,
+            date_to: str,
+            transaction_type: str = "all",
+            operation_type: list[str] | None = None,
+            page_size: int = 1000,
+        ):
+            return [
+                {
+                    "operation_date": "2026-06-13 00:00:00",
+                    "operation_type": "OperationAgentDeliveredToCustomer",
+                    "accruals_for_sale": 600,
+                    "amount": 250,
+                    "items": [{"sku": "101"}],
+                }
+            ]
+
+        def fetch_fbo_postings(self, *, since: str, to: str, status: str = "", limit: int = 100):
+            return [
+                {
+                    "status": "delivered",
+                    "products": [{"offer_id": "sku-1", "quantity": 2, "price": "300"}],
+                },
+                {
+                    "status": "cancelled",
+                    "products": [{"offer_id": "sku-1", "quantity": 1, "price": "300"}],
+                },
+            ]
+
+        def fetch_review_count(self):
+            return {"result": {"UNPROCESSED": 3}}
+
+        def fetch_review_list(self, *, status: str = "ALL", limit: int = 100, sort_dir: str = "DESC"):
+            return {"result": {"reviews": [{"published_at": "2026-06-13T09:00:00Z"}]}}
+
+        def fetch_question_count(self):
+            return {"result": {"NEW": 2}}
+
+        def fetch_question_list(self, *, status: str = "ALL", limit: int = 100, offset: int = 0, sort_dir: str = "DESC"):
+            return {"result": {"questions": [{"published_at": "2026-06-13T10:00:00Z"}]}}
+
     class FakeWbStatisticsAdapter:
         def __init__(self, credentials):
             self.credentials = credentials
@@ -234,3 +277,226 @@ def test_daily_morning_report_seller_v2_uses_business_adapters(tmp_path: Path, m
     report_path = Path(result["artifacts"]["report"])
     assert report_path.exists()
     assert "Что Важно Сегодня" in report_path.read_text(encoding="utf-8")
+
+
+def test_daily_morning_report_seller_v3_uses_new_template(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "takterra_agent.tasks.daily_morning_report.combined_session_status",
+        lambda: {"overall_status": "ok", "sessions": {}},
+    )
+    _write_json(
+        tmp_path / "runs" / "2026-06-11" / "status_preflight_test" / "summary.json",
+        {
+            "run_id": "status_preflight_test",
+            "overall_status": "ok",
+            "checks": {
+                "ozon_api": {"status": "ok"},
+                "ozon_performance_api": {"status": "ok"},
+                "wb_api": {"status": "ok"},
+                "master_catalog": {"status": "ok", "rows": 1, "matched_rows": 1},
+                "ozon_refresh_state": {"status": "ok"},
+                "wb_refresh_state": {"status": "ok"},
+            },
+        },
+    )
+    _write_json(
+        tmp_path / "catalog" / "processed" / "master_catalog.json",
+        [
+            {
+                "master_sku": "sku-1",
+                "title": "Test product",
+                "ozon_product_id": "101",
+                "wb_vendor_code": "sku-1",
+            }
+        ],
+    )
+    _write_json(
+        tmp_path / "runs" / "2026-06-11" / "ozon_elastic_plan_test" / "summary.json",
+        {
+            "run_id": "ozon_elastic_plan_test",
+            "mode": "dry-run",
+            "summary": {
+                "action_name": "Elastic",
+                "merged_unique_products": 10,
+                "active_rows": 8,
+                "skip_candidate": 2,
+            },
+        },
+    )
+    _write_json(
+        tmp_path / "runs" / "2026-06-11" / "wb_actions_discount_plan_test" / "summary.json",
+        {
+            "run_id": "wb_actions_discount_plan_test",
+            "mode": "dry-run",
+            "summary": {
+                "active_promos": 2,
+                "future_promos": 1,
+                "in_promos": 7,
+                "outside_promos": 3,
+            },
+        },
+    )
+
+    class FakeOzonAdapter:
+        def __init__(self, credentials):
+            self.credentials = credentials
+
+        def fetch_analytics_data(self, **kwargs):
+            return {"result": {"totals": [1200, 3], "data": [{"metrics": [1200, 3]}]}}
+
+        def fetch_product_stocks(self, product_ids):
+            return [{"product_id": "101", "offer_id": "sku-1", "stocks": [{"present": 2, "reserved": 1}]}]
+
+        def fetch_finance_transactions(
+            self,
+            *,
+            date_from: str,
+            date_to: str,
+            transaction_type: str = "all",
+            operation_type: list[str] | None = None,
+            page_size: int = 1000,
+        ):
+            return [
+                {
+                    "operation_date": "2026-06-13 00:00:00",
+                    "operation_type": "OperationAgentDeliveredToCustomer",
+                    "accruals_for_sale": 600,
+                    "amount": 250,
+                    "items": [{"sku": "101"}],
+                }
+            ]
+
+        def fetch_fbo_postings(self, *, since: str, to: str, status: str = "", limit: int = 100):
+            return [
+                {
+                    "status": "delivered",
+                    "products": [{"offer_id": "sku-1", "quantity": 2, "price": "300"}],
+                },
+                {
+                    "status": "cancelled",
+                    "products": [{"offer_id": "sku-1", "quantity": 1, "price": "300"}],
+                },
+            ]
+
+        def fetch_review_count(self):
+            return {"result": {"UNPROCESSED": 3}}
+
+        def fetch_review_list(self, *, status: str = "ALL", limit: int = 100, sort_dir: str = "DESC"):
+            return {"result": {"reviews": [{"published_at": "2026-06-13T09:00:00Z"}]}}
+
+        def fetch_question_count(self):
+            return {"result": {"NEW": 2}}
+
+        def fetch_question_list(self, *, status: str = "ALL", limit: int = 100, offset: int = 0, sort_dir: str = "DESC"):
+            return {"result": {"questions": [{"published_at": "2026-06-13T10:00:00Z"}]}}
+
+    class FakeWbStatisticsAdapter:
+        def __init__(self, credentials):
+            self.credentials = credentials
+
+        def fetch_orders(self, *, date_from: str, flag: int = 1):
+            return [
+                {"date": date_from, "supplierArticle": "sku-1", "finishedPrice": 500, "isCancel": False},
+                {"date": date_from, "supplierArticle": "sku-1", "finishedPrice": 500, "isCancel": True},
+            ]
+
+        def fetch_sales(self, *, date_from: str, flag: int = 1):
+            return [
+                {"date": date_from, "supplierArticle": "sku-1", "forPay": 450, "saleID": "S123"},
+                {"date": date_from, "supplierArticle": "sku-1", "forPay": 100, "saleID": "R123"},
+            ]
+
+        def fetch_stocks_legacy(self, *, date_from: str):
+            return [{"supplierArticle": "sku-1", "quantity": 2}]
+
+    class FakeWbCommunicationsAdapter:
+        def __init__(self, credentials):
+            self.credentials = credentials
+
+        def fetch_unanswered_feedbacks_count(self):
+            return {"data": {"count": 4}}
+
+        def fetch_unanswered_questions_count(self):
+            return {"data": {"count": 5}}
+
+        def fetch_feedbacks(self, *, is_answered: bool = False, take: int = 5000, skip: int = 0, order: str = "dateDesc"):
+            return {"data": {"feedbacks": [{"createdDate": "2026-06-13T10:00:00Z"}]}}
+
+        def fetch_questions(self, *, is_answered: bool = False, take: int = 10000, skip: int = 0, order: str = "dateDesc"):
+            return {"data": {"questions": [{"createdDate": "2026-06-13T11:00:00Z"}]}}
+
+    class FakeWbFinanceAdapter:
+        def __init__(self, credentials):
+            self.credentials = credentials
+
+        def fetch_sales_reports(self, *, date_from: str, date_to: str, period: str = "daily", limit: int = 1000):
+            return [
+                {
+                    "reportId": 1,
+                    "dateFrom": date_from,
+                    "dateTo": date_to,
+                    "createDate": "2026-06-14",
+                    "retailAmountSum": "600",
+                    "forPaySum": "450",
+                    "deliveryServiceSum": "50",
+                    "paidStorageSum": "10",
+                    "paidAcceptanceSum": "0",
+                    "deductionSum": "5",
+                    "penaltySum": "0",
+                    "additionalPaymentSum": "0",
+                    "cashbackAmountSum": "0",
+                    "cashbackDiscountSum": "0",
+                    "cashbackCommissionChangeSum": "0",
+                    "bankPaymentSum": "385",
+                }
+            ]
+
+    class FakeWbPromotionAdapter:
+        def __init__(self, credentials):
+            self.credentials = credentials
+
+        def fetch_campaign_count(self):
+            return {"adverts": [{"advert_list": [{"advertId": 10}]}]}
+
+        def fetch_fullstats(self, *, ids, date_from: str, date_to: str):
+            return [{"advertId": 10, "days": [{"date": date_from, "sum": 15}]}]
+
+    monkeypatch.setattr("takterra_agent.tasks.daily_morning_report.OzonSellerAdapter", FakeOzonAdapter)
+    monkeypatch.setattr("takterra_agent.tasks.daily_morning_report.WbStatisticsAdapter", FakeWbStatisticsAdapter)
+    monkeypatch.setattr("takterra_agent.tasks.daily_morning_report.WbCommunicationsAdapter", FakeWbCommunicationsAdapter)
+    monkeypatch.setattr("takterra_agent.tasks.daily_morning_report.WbFinanceAdapter", FakeWbFinanceAdapter)
+    monkeypatch.setattr("takterra_agent.tasks.daily_morning_report.WbPromotionAdapter", FakeWbPromotionAdapter)
+
+    result = run_daily_morning_report(
+        credentials=AppCredentials(
+            ozon_seller=OzonSellerCredentials(client_id="id", api_key="key"),
+            ozon_performance=None,
+            wb=WbCredentials(token="token"),
+        ),
+        data_dir=tmp_path,
+        run_id="daily_morning_report_v3_test",
+        refresh_preflight=False,
+        seller_v3=True,
+    )
+
+    assert result["report_version"] == "seller_v3"
+    assert result["actions_v3"]["ozon"]["products_not_in_actions"] == 2
+    assert result["business"]["ozon"]["finance_buyouts"]["buyout_units"] == 1
+    assert result["business"]["ozon"]["finance_expenses"]["total_expenses"] == 350.0
+    assert result["business"]["ozon"]["fbo_postings"]["cancelled_units"] == 1
+    assert result["business"]["wb"]["finance_expenses"]["total_expenses"] == 230.0
+    assert result["business"]["ozon"]["communications"]["unanswered_questions"] == 2
+    assert result["business"]["wb"]["communications"]["unanswered_questions"] == 5
+    report_text = Path(result["artifacts"]["report"]).read_text(encoding="utf-8")
+    assert "Период данных:" in report_text
+    assert "Заказы, Выкупы, Отмены За Период" in report_text
+    assert "Деньги И Расходы За Период" in report_text
+    assert "| Выкупы, шт. | 1 | 1 |" in report_text
+    assert "| Отмены, шт. | 1 | 1 |" in report_text
+    assert "| Расходы всего, ₽ | 350 ₽ | 230 ₽ |" in report_text
+    assert "| Отзывы за период 00:00-23:59 | 1 | 2 |" in report_text
+    assert "| Товаров участвует | 8 | 7 |" in report_text
+    assert "| Товаров участвует | 8 | 7 |" in report_text
+    assert "| WB-артикулы без строки в источнике остатков | - | 0 |" in report_text
+    assert "пакеты на согласование" in report_text
+    assert "| Есть текущие поставки | не подтверждено | не подтверждено |" in report_text

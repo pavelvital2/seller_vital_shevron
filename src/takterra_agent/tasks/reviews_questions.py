@@ -82,7 +82,7 @@ def _join_review_text(*parts: Any) -> str:
 
 def normalize_wb_feedback(item: dict[str, Any]) -> dict[str, Any]:
     details = _product_details(item)
-    return {
+    normalized = {
         "platform": "wb",
         "source_type": "review",
         "id": str(item.get("id") or ""),
@@ -100,6 +100,8 @@ def normalize_wb_feedback(item: dict[str, Any]) -> dict[str, Any]:
         "can_mark_viewed": False,
         "needs_public_reply": not bool(item.get("answer")),
     }
+    normalized.update(_review_media_fields(item))
+    return normalized
 
 
 def normalize_wb_question(item: dict[str, Any]) -> dict[str, Any]:
@@ -130,7 +132,56 @@ def _normalize_ozon_item(item: dict[str, Any]) -> dict[str, Any]:
     normalized.setdefault("offer_id", item.get("offer_id") or "")
     normalized.setdefault("sku", str(item.get("sku") or ""))
     normalized.setdefault("product_title", item.get("product_title") or "")
+    normalized.update(_review_media_fields(normalized))
     return normalized
+
+
+def _int_value(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _list_count(*values: Any) -> int:
+    for value in values:
+        if isinstance(value, list):
+            return len(value)
+    return 0
+
+
+def _review_media_fields(item: dict[str, Any]) -> dict[str, Any]:
+    photos_count = _int_value(
+        item.get("photos_count")
+        or item.get("photosCount")
+        or item.get("photo_count")
+        or item.get("photoCount")
+        or _list_count(item.get("photos"), item.get("photoLinks"), item.get("photo_links"), item.get("images"))
+    )
+    videos_count = _int_value(
+        item.get("videos_count")
+        or item.get("videosCount")
+        or item.get("video_count")
+        or item.get("videoCount")
+        or _list_count(item.get("videos"), item.get("videoLinks"), item.get("video_links"))
+    )
+    media_urls: list[str] = []
+    for key in ("photos", "photoLinks", "photo_links", "images", "videos", "videoLinks", "video_links"):
+        value = item.get(key)
+        if isinstance(value, list):
+            for row in value:
+                if isinstance(row, str) and row.startswith(("http://", "https://")):
+                    media_urls.append(row)
+                elif isinstance(row, dict):
+                    url = row.get("url") or row.get("src") or row.get("link")
+                    if isinstance(url, str) and url.startswith(("http://", "https://")):
+                        media_urls.append(url)
+    return {
+        "photos_count": photos_count,
+        "videos_count": videos_count,
+        "has_media": photos_count > 0 or videos_count > 0 or bool(media_urls),
+        "media_urls": media_urls,
+    }
 
 
 def _rating_number(value: Any) -> int:
@@ -159,6 +210,7 @@ def _has_problem_text(text: str) -> bool:
 def classify_item(item: dict[str, Any]) -> str:
     source_type = item.get("source_type")
     text = str(item.get("text") or "").strip()
+    has_media = bool(item.get("has_media"))
 
     if source_type == "question":
         if not text:
@@ -172,6 +224,8 @@ def classify_item(item: dict[str, Any]) -> str:
     rating = _rating_number(item.get("rating"))
     if text and (rating in {1, 2, 3} or _has_problem_text(text)):
         return "priority_problem_review"
+    if has_media:
+        return "needs_media_review_for_public_reply"
     if item.get("platform") == "ozon" and item.get("can_mark_viewed"):
         return "can_mark_viewed_after_owner_confirmation"
     if item.get("needs_public_reply"):
@@ -194,11 +248,19 @@ def _product_phrase(title: str) -> tuple[str, str, str]:
     return "товар", "понравился", "подошел"
 
 
+def _stable_variant(item: dict[str, Any], variants_count: int) -> int:
+    key = f"{item.get('source_id') or item.get('id') or ''}|{item.get('offer_id') or ''}|{item.get('product_title') or ''}"
+    return sum(ord(char) for char in key) % variants_count if variants_count else 0
+
+
 def draft_review_reply(item: dict[str, Any]) -> str:
     title = str(item.get("product_title") or "")
     text = str(item.get("text") or "").strip()
     rating = _rating_number(item.get("rating"))
     word, liked, matched = _product_phrase(title)
+    has_media = bool(item.get("has_media"))
+    photos_count = _int_value(item.get("photos_count"))
+    videos_count = _int_value(item.get("videos_count"))
 
     if rating in {1, 2, 3} or _has_problem_text(text):
         return (
@@ -206,9 +268,34 @@ def draft_review_reply(item: dict[str, Any]) -> str:
             "Проверим карточку и партию по этой позиции. Если товар не подошел, "
             "возврат можно оформить через маркетплейс."
         )
+    if has_media and not text:
+        media_word = "фото и видео" if photos_count and videos_count else "видео" if videos_count else "фото"
+        variants = [
+            f"Спасибо за высокую оценку и прикрепленное {media_word}! Рады, что {word} вам {liked}.",
+            f"Благодарим за оценку и {media_word}. Приятно видеть, что {word} {matched} вам.",
+            f"Спасибо, что поделились {media_word}. Рады, что {word} оставил хорошее впечатление.",
+        ]
+        return variants[_stable_variant(item, len(variants))]
     if text:
-        return f"Спасибо за отзыв! Рады, что {word} вам {liked} и {matched} по качеству."
-    return f"Спасибо за высокую оценку! Рады, что {word} вам {liked}."
+        lower = text.lower()
+        if "красив" in lower:
+            return "Спасибо за отзыв! Рады, что вам понравилось исполнение и внешний вид изделия."
+        if "хорош" in lower or "качеств" in lower:
+            return f"Спасибо за отзыв! Приятно, что вы отметили качество изготовления."
+        if "огонь" in lower:
+            return f"Спасибо! Рады, что {word} вам {liked}. Носите с удовольствием."
+        variants = [
+            f"Спасибо за отзыв! Рады, что {word} вам {liked} и {matched} по качеству.",
+            f"Благодарим за обратную связь. Рады, что {word} {matched} вам.",
+            f"Спасибо за оценку и отзыв! Приятно, что {word} вам {liked} и {matched}.",
+        ]
+        return variants[_stable_variant(item, len(variants))]
+    variants = [
+        f"Спасибо за высокую оценку! Рады, что {word} вам {liked}.",
+        f"Благодарим за оценку. Рады, что {word} {matched} вам.",
+        f"Спасибо за 5 звезд! Приятно, что {word} вам {liked} и {matched}.",
+    ]
+    return variants[_stable_variant(item, len(variants))]
 
 
 def draft_question_reply(item: dict[str, Any]) -> str:
@@ -241,6 +328,10 @@ def build_actions(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "rating": item.get("rating", ""),
             "product_title": item.get("product_title", ""),
             "source_text": item.get("text", ""),
+            "has_media": bool(item.get("has_media")),
+            "photos_count": item.get("photos_count", 0),
+            "videos_count": item.get("videos_count", 0),
+            "media_urls": item.get("media_urls", []),
             "processing_status": status,
         }
         if status == "can_mark_viewed_after_owner_confirmation":
@@ -268,7 +359,7 @@ def build_actions(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 }
             )
             continue
-        if status in {"needs_owner_review_for_public_reply", "priority_problem_review"}:
+        if status in {"needs_owner_review_for_public_reply", "priority_problem_review", "needs_media_review_for_public_reply"}:
             actions.append(
                 {
                     **base,
@@ -276,7 +367,7 @@ def build_actions(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "state": "pending_owner_confirmation",
                     "risk": "high" if status == "priority_problem_review" else "normal",
                     "draft_text": draft_review_reply(item),
-                    "notes": "Owner must approve before publication.",
+                    "notes": "Review attached media before approval." if status == "needs_media_review_for_public_reply" else "Owner must approve before publication.",
                 }
             )
     return actions
@@ -306,6 +397,7 @@ def _extract_ozon_reviews(response: dict[str, Any]) -> list[dict[str, Any]]:
                 "sku": str(item.get("sku") or ""),
                 "product_title": item.get("product_name") or item.get("product_title") or "",
                 "text": str(item.get("text") or "").strip(),
+                **_review_media_fields(item),
                 "needs_public_reply": True,
                 "can_mark_viewed": False,
             }
@@ -439,6 +531,10 @@ def _write_pending_package(
         "rating",
         "product_title",
         "source_text",
+        "has_media",
+        "photos_count",
+        "videos_count",
+        "media_urls",
         "draft_text",
         "processing_status",
         "notes",
@@ -534,6 +630,7 @@ def _build_report(
                 f"- Оценка: `{action['rating'] or 'н/д'}`",
                 f"- Риск: `{action['risk']}`",
                 f"- Текст покупателя: {action['source_text'] or 'без текста'}",
+                f"- Медиа: фото `{action.get('photos_count') or 0}`, видео `{action.get('videos_count') or 0}`",
                 "",
                 f"Черновик ответа: {action['draft_text']}",
                 "",
@@ -541,7 +638,7 @@ def _build_report(
         )
 
     viewed_actions = [action for action in actions if action.get("action_type") == "mark_review_viewed"]
-    lines.extend(["", "## Отзывы без текста к отметке просмотренными", ""])
+    lines.extend(["", "## Отзывы без текста и без медиа к отметке просмотренными", ""])
     if not viewed_actions:
         lines.append("- нет")
     for index, action in enumerate(viewed_actions[:100], 1):
@@ -648,10 +745,16 @@ def run_reviews_questions(
     )
 
     source_errors = []
-    for source in sources.values():
-        if isinstance(source, dict) and source.get("status") in {"error", "missing_credentials"}:
-            source_errors.append(source)
+    ozon_lk_ok = isinstance(sources.get("ozon_lk"), dict) and sources["ozon_lk"].get("ok") is True
+    for source_name, source in sources.items():
+        if not isinstance(source, dict) or source.get("status") not in {"error", "missing_credentials"}:
+            continue
+        if source_name == "ozon_api" and ozon_lk_ok:
+            continue
+        source_errors.append(source)
     overall_status = "ok"
+    if ozon_lk_ok and isinstance(sources.get("ozon_api"), dict) and sources["ozon_api"].get("status") == "error":
+        overall_status = "warning"
     if source_errors and normalized_items:
         overall_status = "warning"
     elif source_errors and not normalized_items:

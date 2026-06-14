@@ -25,6 +25,11 @@ description: "Run read-only marketplace analytics workflows for Ozon/Wildberries
   parser slice before analysis: file `mtime`, parser `run_id`, unique query
   count and `collected_at_utc` range. Do not reuse an older parser report just
   because it is already present under `data/runs/`.
+- For Ozon parser SEO/price analysis, treat parser SERP `price` as
+  buyer-visible public search price. Keep it separate from Ozon Seller API/LK
+  seller `price`, `old_price`, `min_price`, action price and finance accruals.
+  Do not interpret the gap as loss/profit until Ozon compensation, points,
+  discounts and financial transactions are reconciled.
 - Do not estimate sales from search-query counts alone. Query counts can support
   demand/opportunity ranking only when conversion assumptions are explicitly
   labeled as assumptions.
@@ -47,6 +52,8 @@ Before analysis, read the runbooks that match the task:
 
 - `data/planning/search_queries_runbook.md` for Ozon/WB search demand;
 - `data/planning/seo_audit_runbook.md` for card SEO audits;
+- `data/planning/product_card_work_runbook.md` before any product-card
+  recommendations or dry-run card edits;
 - `data/planning/card_grouping_runbook.md` for Ozon/WB card grouping,
   Ozon `model_info`, WB `imtID`, and future grouping dry-runs;
 - `data/planning/ozon_parser_positions_runbook.md` for Ozon parser positions;
@@ -57,6 +64,9 @@ Before analysis, read the runbooks that match the task:
 - `data/planning/supply_planning_runbook.md` for stocks, 90-day sales,
   localization and supply planning;
 - `data/planning/reviews_questions_runbook.md` for reviews and questions;
+- `data/planning/ozon_messenger_runbook.md` for Ozon customer chats,
+  notification triage, important marketplace messages and Messenger page/API
+  checks;
 - `data/planning/catalog_mapping_runbook.md` when cross-marketplace matching
   or unified product reporting is involved.
 
@@ -116,6 +126,35 @@ Also check:
 ## SEO-Specific Rules
 
 - Use search clusters from the card title for target query matching.
+- Before recommending product-card changes, inspect all available card photos
+  and describe photo count, image content, colors/background, patch shape and
+  size. Do not propose title, description, attribute or photo changes before
+  this photo audit.
+- For product-card reports, send the owner a single collage image containing
+  all current card photos together with the written report. If an Ozon card has
+  fewer than 5 useful photos or misses wearing/use-case, reverse-side,
+  комплект/Velcro, or service-infographic images, add or update a designer task
+  in `data/planning/product_card_designer_tasks.md`.
+- For Ozon card audits, include current hashtags, color, and color name in the
+  report. Do not use `БПЛА` as an Ozon hashtag for Vital Shevron; the owner
+  reported that Ozon rejects it. Attribute IDs must be verified through the
+  category attributes API before dry-run/apply.
+- For Ozon hashtag recommendations, prioritize relevant search queries where
+  the card is already visible, normalize query phrases into both joined and
+  underscore hashtag variants when Ozon accepts both, exclude blocked tags, and
+  fill up to 30 hashtags by confirmed frequency from
+  `data/planning/ozon_hashtag_frequency_table.md`. If frequency was not
+  collected from the Ozon card editor dropdown, label it as unconfirmed.
+- Product-card Telegram reports must include the full decision view in chat,
+  not only as an attached file. Before apply, show `сейчас -> рекомендую` for
+  each important parameter without technical sources. After apply/verify,
+  rebuild and resend the full report and chat summary with `было -> стало`,
+  accepted recommendations, rejected recommendations, and owner-modified
+  decisions.
+- Product-card Telegram reports must keep an `SEO-видимость` block with the
+  key queries where the card is already visible in parser/Ozon/WB, plus compact
+  visibility metrics when available. Do not omit this block when shortening the
+  chat summary, because title and hashtag decisions depend on it.
 - Description text is diagnostic only; do not treat description-only matches as
   full SEO coverage.
 - For WB SEO audits, keep rating sources separate: parser SERP rating,
@@ -126,6 +165,9 @@ Also check:
 - Compare demand, parser position, own-card coverage, card quality and
   competitor visibility together. Do not recommend title edits from query count
   alone.
+- For Ozon SEO decisions, compare buyer-visible parser price with top-10/top-30
+  competitor prices and with seller API price before recommending title,
+  advertising or price actions.
 - Wait for parser runs to finish when the user asks for a complete comparison.
   If only partial parser data is available, label the report as partial.
 - Keep Ozon and WB results separate until mapping quality is confirmed.
@@ -136,6 +178,23 @@ For Telegram-facing analytics reports, follow
 `data/planning/chat_report_templates.md` first. The chat message is the owner's
 primary report screen; the full report file must still be saved and attached or
 listed at the bottom of the message.
+
+For reviews/questions reports, use `data/planning/reviews_questions_runbook.md`.
+Do not propose identical boilerplate replies for every review. A review with
+attached photo/video but no text must not be treated as "view only"; it needs a
+reply or explicit media review. Show buyer rating on every proposed reply row
+and inspect attached media when links/previews are available; if media content
+cannot be inspected, state that limitation.
+
+For Ozon customer chats and notifications, use
+`data/planning/ozon_messenger_runbook.md`. Prefer official Seller API
+`/v3/chat/list` and `/v3/chat/history` for read-only chat reports. Treat LK
+websocket `sc_chat/getChats` as fallback or UI-state research only. The
+`customers_v2` page is a daily notification source: separate buyer questions
+that need replies, important Ozon marketplace changes that should be sent to
+Telegram, and noise/promotional banners. Never save raw chat text, buyer
+personal data, cookies, storage state or auth headers into committed docs;
+answer sending is a write operation and needs the full approval chain.
 
 For analytics reports without a more specific template, use this order:
 

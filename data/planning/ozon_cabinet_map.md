@@ -1,6 +1,6 @@
 # Ozon Cabinet Map
 
-Дата актуализации: 2026-06-13.
+Дата актуализации: 2026-06-14.
 
 ## Назначение
 
@@ -31,6 +31,7 @@
 - `data/planning/search_queries_runbook.md`;
 - `data/planning/ozon_elastic_runbook.md`;
 - `data/planning/ozon_cpc_efficiency_runbook.md`;
+- `data/planning/ozon_messenger_runbook.md`;
 - read-only опыт TAKTERRA:
   `/home/pavel/projects/seller_takterra/data/planning/ozon_cabinet_map.md`.
 
@@ -94,6 +95,7 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 | --- | --- | --- | --- |
 | Проверить вход, магазин, общую сводку | `Главная` | `https://seller.ozon.ru/app/dashboard/main` | Нет, это LK health-check |
 | Список товаров, карточки, статусы карточек | `Товары` | `https://seller.ozon.ru/app/products` | Seller API products |
+| Создание/редактирование карточки и карточный контент | `Товары -> Список товаров -> карточка товара` | `https://seller.ozon.ru/app/products` | `product/info/attributes`, `product/info/description`, `product/pictures/info`, `description-category/attribute`; инструкция: `ozon_product_card_content_runbook.md` |
 | Цены, скидочные цены, минимальные цены | `Цены и акции -> Цены на товары` | `https://seller.ozon.ru/app/prices/control` | Seller API prices |
 | Акции Ozon / участие товаров в акциях | `Цены и акции -> Акции` | `https://seller.ozon.ru/app/highlights/list` | Проверить доступные Seller API методы |
 | Заявки на скидку | `Цены и акции -> Заявки на скидку` | `https://seller.ozon.ru/app/prices/discount-requests` | Проверить API, если задача массовая |
@@ -107,7 +109,7 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 | Позиция в категории | `Аналитика -> Что продавать -> Конкурентная позиция` | `https://seller.ozon.ru/app/analytics/what-to-sell/competitive-position` | Обычно LK |
 | Отзывы | `Отзывы` | `https://seller.ozon.ru/app/reviews` | Review API; при `403` использовать LK/CDP fallback |
 | Вопросы покупателей | `Отзывы -> Вопросы` | `https://seller.ozon.ru/app/reviews/questions` | Review/Questions API, если доступен |
-| Сообщения покупателей | `Сообщения` | `https://seller.ozon.ru/app/messenger?group=customers_v2` | API не считать подтвержденным без проверки |
+| Уведомления и сообщения Ozon | `Сообщения` | `https://seller.ozon.ru/app/messenger?group=customers_v2` | Ozon Seller API `/v3/chat/list`, `/v3/chat/history`; детали: `ozon_messenger_runbook.md`; LK websocket fallback |
 | Поддержка Ozon | `Сообщения -> Поддержка` | `https://seller.ozon.ru/app/messenger?group=support_v2` | LK |
 | Продвижение общий вход | `Продвижение` | `https://seller.ozon.ru/app/promotion-info` | Performance API |
 | CPC `Оплата за клик` | `Продвижение -> Трафареты / Товарная реклама` | `https://seller.ozon.ru/app/advertisement/product/cpc` | Performance API campaigns/products |
@@ -182,6 +184,11 @@ API-first:
 - `POST /v3/product/list`;
 - `POST /v3/product/info/list`;
 - `POST /v4/product/info/attributes`.
+- `POST /v1/product/info/description`;
+- `POST /v2/product/pictures/info`;
+- `POST /v1/product/rating-by-sku`;
+- `POST /v1/description-category/attribute`;
+- `POST /v1/description-category/attribute/values`.
 
 Риски:
 
@@ -455,7 +462,7 @@ https://seller.ozon.ru/app/reviews/questions
 - форма ответа;
 - статусы обработанности.
 
-### Сообщения покупателей
+### Уведомления и сообщения Ozon
 
 ```text
 https://seller.ozon.ru/app/messenger?group=customers_v2
@@ -463,9 +470,54 @@ https://seller.ozon.ru/app/messenger?group=customers_v2
 
 Что лежит:
 
-- покупательские чаты;
-- обращения;
-- сообщения по заказам.
+- покупательские вопросы/чаты, на которые может требоваться ответ;
+- обращения и сообщения по заказам;
+- площадочные уведомления Ozon;
+- важная информация об изменениях работы площадки;
+- информационный шум: баннеры, промо, повторяющиеся подсказки.
+
+Ежедневная задача:
+
+- просматривать страницу в read-only режиме;
+- отделять вопросы покупателей от уведомлений площадки;
+- отсеивать мусор/шум;
+- важные сообщения об изменениях работы Ozon передавать владельцу в Telegram;
+- вопросы покупателей выносить в отдельный review с черновиком ответа и
+  approval.
+
+API-first:
+
+- `POST /v3/chat/list` - список чатов, `cursor`, `has_next`,
+  `total_unread_count`;
+- `POST /v3/chat/history` - история по реальному `chat_id`;
+- `/v2/chat/read`, `/v1/chat/send/message`, `/v1/chat/send/file`,
+  `/v1/chat/start` - потенциальные write-операции, использовать только после
+  approved-пакета.
+
+Проверка 2026-06-14 на Vital Shevron:
+
+- официальный Seller API `/v3/chat/list` доступен на текущем ключе;
+- `/v3/chat/history` доступен по реальному `chat_id`;
+- страница ЛК дополнительно использует websocket
+  `wss://ws.seller.ozon.ru/chat-notification/ws/v3/web/seller`;
+- namespace websocket: `sc_chat`;
+- основные UI-команды: `initializeChat`, `getChats`;
+- фильтры UI: `unread_only`, `with_products`, `with_orders`,
+  `without_my_response`.
+- `Создать рассылку` на странице считать рекламным/CRM-баннером, а не
+  обязательной операцией ежедневного просмотра.
+
+Детали, команды и ограничения: `data/planning/ozon_messenger_runbook.md`.
+
+Риски:
+
+- тексты чатов могут содержать персональные данные, не сохранять raw без
+  отдельного решения;
+- LK websocket является внутренним интерфейсом Ozon и должен быть fallback, а
+  не основным контрактом;
+- отправка ответов покупателям является write-риском;
+- задача по рассылкам/CRM, если появится, должна идти отдельным
+  read-only/dry-run/approval контуром.
 
 ### Общие сообщения
 
