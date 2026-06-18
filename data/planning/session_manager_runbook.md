@@ -89,6 +89,21 @@ PYTHONPATH=src python3 -m takterra_agent.cli sessions status --marketplace ozon
 - `refresh.ok: true`;
 - `values_printed: false`.
 
+### Проверенное восстановление 2026-06-18
+
+- Restore run: `restore_ozon_session_20260618T0647`.
+- Результат интерактивного входа: `LOGIN_SUCCESS`, `expectedStoreFound: true`,
+  `stateExported: true`.
+- Restore завершился `warning`, потому что `systemd --user` units
+  `vital-shevron-ozon-*` не установлены. Это штатно для текущего legacy-контура.
+- После restore нужно было вручную выполнить legacy-подъем:
+  `sessions start --marketplace ozon`, затем
+  `node scripts/sessions/ozon_session_keepalive_cdp.js`.
+- Итоговая проверка: `sessions_status_20260618T064847` вернул
+  `overall_status: ok`; `status_preflight_20260618T0649` вернул
+  `overall_status: ok`.
+- Секреты, cookies, storage state и код входа в документы не записывались.
+
 Текущий рабочий контур может держаться legacy watchdog-процессом
 `scripts/sessions/start_ozon_session_watchdog.sh` с интервалом `1800` секунд.
 Перевод на `systemd --user` timers остается отдельным техническим этапом после

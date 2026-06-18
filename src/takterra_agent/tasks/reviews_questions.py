@@ -1050,6 +1050,9 @@ def run_reviews_questions_apply(
         write_json(run_dir / "summary.json", summary)
         return summary
 
+    approved_plan = _safe_read_json(approved_path)
+    pending_id = str(approved_plan.get("pending_id") or "") if isinstance(approved_plan, dict) else ""
+    source_run_id = str(approved_plan.get("source_run_id") or "") if isinstance(approved_plan, dict) else ""
     actions = _approved_actions(approved_path)
     disallowed = [
         action
@@ -1086,7 +1089,15 @@ def run_reviews_questions_apply(
         "started_at": started_at.isoformat(timespec="seconds"),
         "overall_status": overall_status,
         "mode": "apply",
+        "pending_id": pending_id,
+        "source_run_id": source_run_id,
         "approved_path": str(approved_path),
+        "applied_counts": {
+            "wb_public_review_replies": len(wb_result.get("sent") or []),
+            "wb_question_answers": len(wb_result.get("questions_answered") or []),
+            "ozon_public_review_replies": len(ozon_result.get("sent") or []),
+            "ozon_marked_viewed": len(ozon_result.get("marked_viewed") or []),
+        },
         "wb": wb_result,
         "ozon": ozon_result,
         "artifacts": artifacts,

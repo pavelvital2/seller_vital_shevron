@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 import json
 from pathlib import Path
 
@@ -284,6 +285,7 @@ def test_daily_morning_report_seller_v3_uses_new_template(tmp_path: Path, monkey
         "takterra_agent.tasks.daily_morning_report.combined_session_status",
         lambda: {"overall_status": "ok", "sessions": {}},
     )
+    monkeypatch.setattr("takterra_agent.tasks.daily_morning_report._moscow_today", lambda: date(2026, 6, 14))
     _write_json(
         tmp_path / "runs" / "2026-06-11" / "status_preflight_test" / "summary.json",
         {

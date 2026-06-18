@@ -30,6 +30,12 @@ description: "Run read-only marketplace analytics workflows for Ozon/Wildberries
   seller `price`, `old_price`, `min_price`, action price and finance accruals.
   Do not interpret the gap as loss/profit until Ozon compensation, points,
   discounts and financial transactions are reconciled.
+- For WB actions discount reports, read
+  `wb-discount-calculation-active-actions-<scheme>.csv` with semicolon
+  delimiter `;`. If it is read with the default comma delimiter, columns such
+  as `Причина`, `Действие`, `Акций`, discounts and vendor codes are parsed
+  incorrectly. Prefer `summary.json` for machine summaries and XLSX for manual
+  review when possible.
 - Do not estimate sales from search-query counts alone. Query counts can support
   demand/opportunity ranking only when conversion assumptions are explicitly
   labeled as assumptions.
@@ -182,9 +188,12 @@ listed at the bottom of the message.
 For reviews/questions reports, use `data/planning/reviews_questions_runbook.md`.
 Do not propose identical boilerplate replies for every review. A review with
 attached photo/video but no text must not be treated as "view only"; it needs a
-reply or explicit media review. Show buyer rating on every proposed reply row
-and inspect attached media when links/previews are available; if media content
-cannot be inspected, state that limitation.
+public reply, and only a technical inability to reply can be escalated as a
+blocker. Show buyer rating on every proposed reply row and inspect attached
+media when links/previews are available; if media content cannot be inspected,
+state that limitation. Send all review photos that relate to proposed replies
+to the owner in Telegram for approval; if a photo cannot be attached, say which
+photo is missing and why.
 
 For Ozon customer chats and notifications, use
 `data/planning/ozon_messenger_runbook.md`. Prefer official Seller API
