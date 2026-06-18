@@ -50,12 +50,15 @@ def handle_telegram_command(
     *,
     data_dir: Path = Path("data"),
     live_today: bool = False,
+    live_status: bool = False,
     credentials: AppCredentials | None = None,
 ) -> TelegramCommandResult:
     command = _normalize_command(message)
     if command == "/help":
         return _help()
     if command == "/status":
+        if live_status:
+            return _fresh_status_preflight(data_dir=data_dir, credentials=credentials)
         return _latest_run_command(
             command=command,
             title="Статус проекта",
@@ -126,12 +129,52 @@ def _help() -> TelegramCommandResult:
         [
             "",
             "Ограничения:",
+            "- `/status` собирает свежий read-only preflight, если включен live status mode.",
             "- `/today` собирает свежий read-only отчет, если включен live mode.",
             "- Остальные команды показывают последние runtime-данные и статусы.",
             "- Изменения в Ozon/WB через Telegram не выполняются.",
         ]
     )
     return TelegramCommandResult(command="/help", ok=True, text="\n".join(lines))
+
+
+def _fresh_status_preflight(
+    *,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+) -> TelegramCommandResult:
+    result = WorkflowRunner(data_dir=data_dir, credentials=credentials).run_read_only("status-preflight")
+    if result.blocked_reason == "workflow_busy":
+        return TelegramCommandResult(
+            command="/status",
+            ok=False,
+            blocked_reason="status_preflight_busy",
+            text=(
+                "Статус проекта\n\n"
+                "Итог: свежая проверка состояния уже выполняется другим процессом.\n\n"
+                f"Причина: `{result.error}`\n\n"
+                "Изменений в Ozon/WB не выполнял."
+            ),
+        )
+    if not result.ok:
+        return TelegramCommandResult(
+            command="/status",
+            ok=False,
+            blocked_reason=result.blocked_reason or "status_preflight_failed",
+            text=(
+                "Статус проекта\n\n"
+                "Итог: свежую read-only проверку состояния не удалось выполнить.\n\n"
+                f"Причина: `{result.error or result.status}`\n\n"
+                "Изменений в Ozon/WB не выполнял."
+            ),
+        )
+
+    return TelegramCommandResult(
+        command="/status",
+        ok=True,
+        text=_status_preflight_chat_text(result.summary),
+        artifacts=result.artifacts,
+    )
 
 
 def _fresh_daily_report(
@@ -223,6 +266,59 @@ def _daily_report_chat_text(result: dict[str, Any]) -> str:
     ]
     for item in result.get("executive_summary") or []:
         lines.append(f"- {item}")
+
+    artifacts = _safe_artifacts(result)
+    if artifacts:
+        lines.extend(["", "Файлы:"])
+        if artifacts.get("report"):
+            lines.append(f"- отчет: `{artifacts['report']}`")
+        if artifacts.get("summary"):
+            lines.append(f"- summary: `{artifacts['summary']}`")
+    lines.extend(["", "Изменений в Ozon/WB не выполнял."])
+    return "\n".join(lines)
+
+
+def _status_preflight_chat_text(result: dict[str, Any]) -> str:
+    checks = result.get("checks") if isinstance(result.get("checks"), dict) else {}
+    status_counts = _check_status_counts(checks)
+    lines = [
+        "Статус проекта",
+        "",
+        f"Итог: свежая read-only проверка выполнена, статус `{result.get('overall_status') or 'н/д'}`.",
+        f"Run ID: `{result.get('run_id') or 'н/д'}`",
+        "",
+        "Ключевые проверки:",
+    ]
+    for key in (
+        "ozon_api",
+        "ozon_performance_api",
+        "wb_api",
+        "master_catalog",
+        "ozon_cdp",
+        "ozon_session_keeper",
+        "wb_session",
+    ):
+        if key in checks:
+            lines.append(f"- {_check_label(key)}: `{_check_status(checks.get(key))}`")
+
+    lines.extend(
+        [
+            "",
+            "Сводка:",
+            f"- ok: `{status_counts.get('ok', 0)}`",
+            f"- warning/skipped: `{status_counts.get('warning', 0) + status_counts.get('skipped', 0)}`",
+            f"- error: `{status_counts.get('error', 0)}`",
+        ]
+    )
+
+    issues = _check_issues(checks)
+    if issues:
+        lines.extend(["", "Требует внимания:"])
+        lines.extend(f"- {issue}" for issue in issues[:6])
+        if len(issues) > 6:
+            lines.append(f"- ... еще `{len(issues) - 6}`")
+    else:
+        lines.extend(["", "Требует внимания:", "- критических замечаний по проверкам нет"])
 
     artifacts = _safe_artifacts(result)
     if artifacts:
@@ -401,6 +497,46 @@ def _money(value: Any) -> str:
         return f"{float(value):,.0f}".replace(",", " ") + " ₽"
     except (TypeError, ValueError):
         return str(value)
+
+
+def _check_label(key: str) -> str:
+    labels = {
+        "master_catalog": "Master catalog",
+        "ozon_api": "Ozon Seller API",
+        "ozon_cdp": "Ozon LK/CDP",
+        "ozon_performance_api": "Ozon Performance API",
+        "ozon_session_keeper": "Ozon session keeper",
+        "wb_api": "WB API",
+        "wb_session": "WB LK session",
+    }
+    return labels.get(key, key.replace("_", " "))
+
+
+def _check_status(value: Any) -> str:
+    if isinstance(value, dict):
+        return str(value.get("status") or "н/д")
+    return "н/д"
+
+
+def _check_status_counts(checks: dict[str, Any]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for value in checks.values():
+        status = _check_status(value)
+        counts[status] = counts.get(status, 0) + 1
+    return counts
+
+
+def _check_issues(checks: dict[str, Any]) -> list[str]:
+    issues: list[str] = []
+    for key, value in sorted(checks.items()):
+        if not isinstance(value, dict):
+            continue
+        status = str(value.get("status") or "")
+        if status not in {"error", "warning"}:
+            continue
+        reason = value.get("error") or value.get("message") or status
+        issues.append(f"{_check_label(key)}: `{reason}`")
+    return issues
 
 
 def _normalize_command(message: str) -> str:

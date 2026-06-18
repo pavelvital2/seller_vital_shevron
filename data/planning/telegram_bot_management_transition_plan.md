@@ -525,10 +525,10 @@ Telegram, одноразовый `getUpdates` polling и controlled `poll-loop` 
 allowlist и lock. Production service включается только после подтверждения
 token-file, личного chat id и runtime allowlist.
 
-В следующем слое `/today` получает live read-only режим через
-`WorkflowRunner`: бот строит свежий `daily-morning-report --seller-v3`,
-отправляет краткий Telegram-summary и сохраняет полный runtime-отчет. Это
-единственная live task-runner команда MVP; write-операций нет.
+В следующем слое `/today` и `/status` получают live read-only режим через
+`WorkflowRunner`: бот строит свежий `daily-morning-report --seller-v3` или
+`status-preflight`, отправляет краткий Telegram-summary и сохраняет полный
+runtime-отчет. Write-операций нет.
 
 Цель: первый бот должен только показывать состояние и отчеты, без write.
 
@@ -561,17 +561,19 @@ token-file, личного chat id и runtime allowlist.
 - бот не делает write-операции;
 - Telegram bot token не хранится в проекте, документах, memory или git;
 - постоянный polling работает только с allowlist chat_id и lock-file;
-- production runner пишет `RunManifest` при live read-only `/today`; остальные
-  MVP-команды пока читают текущий runtime;
+- production runner пишет `RunManifest` при live read-only `/today` и
+  `/status`; остальные MVP-команды пока читают текущий runtime;
 - бот отправляет краткий отчет, безопасно прикрепляет файл `artifacts.report`
   и оставляет ссылки на артефакты;
 - ошибки показываются безопасно, без секретов.
 
-Ограничение первого прохода: команды показывают последние runtime-данные и
-статусы; они не запускают live API-задачи. Adapter может отправить готовый
-read-only ответ в Telegram. После attachment policy и `WorkflowRunner` MVP
-следующий слой - live `/status` через `WorkflowRunner`, затем аккуратное
-расширение на следующие read-only задачи.
+Ограничение текущего прохода: live API-задачи разрешены только для read-only
+`/today` и `/status`; остальные команды показывают последние runtime-данные и
+статусы. Adapter может отправить готовый read-only ответ в Telegram. После
+attachment policy, `WorkflowRunner` MVP и live `/status` следующий отдельный
+слой - rename-only
+`takterra_agent -> seller_agent`, затем аккуратное расширение на следующие
+read-only задачи.
 Команды `/prices`, `/ads`, `/search`, `/positions` подключать после появления
 соответствующих read-only task-runner команд и стандартных отчетов.
 

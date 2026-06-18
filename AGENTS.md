@@ -82,8 +82,8 @@
   через `TaskRegistry`, locks и безопасный результат для Telegram/timers.
 - `data/planning/telegram_bot_mvp_runbook.md` - read-only Telegram MVP:
   command layer, preview CLI, safe Telegram adapter, controlled polling,
-  live read-only `/today`, безопасное прикрепление файла отчета из `artifacts`,
-  внешний token-file/env, ограничения и запрет write-операций.
+  live read-only `/today` и `/status`, безопасное прикрепление файла отчета
+  из `artifacts`, внешний token-file/env, ограничения и запрет write-операций.
 - `data/planning/daily_morning_report_runbook.md` - утренний отчет.
 - `data/planning/reviews_questions_runbook.md` - отзывы и вопросы.
 - `data/planning/ozon_messenger_runbook.md` - Ozon Messenger/уведомления:

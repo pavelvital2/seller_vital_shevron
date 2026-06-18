@@ -59,6 +59,67 @@ def test_bot_status_reports_missing_runtime_data(tmp_path: Path) -> None:
     assert "я не могу это подтвердить" in result.text
 
 
+def test_bot_status_live_mode_builds_fresh_preflight(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from takterra_agent.bot import commands
+    from takterra_agent.core.workflow_runner import WorkflowRunResult
+
+    workflow_calls: list[dict] = []
+    summary = {
+        "run_id": "status_preflight_test",
+        "overall_status": "warning",
+        "checks": {
+            "ozon_api": {"status": "ok"},
+            "ozon_performance_api": {"status": "ok"},
+            "wb_api": {"status": "ok"},
+            "master_catalog": {"status": "warning", "error": "catalog is stale"},
+            "ozon_cdp": {"status": "error", "error": "CDP port is not listening"},
+        },
+        "artifacts": {
+            "report": str(tmp_path / "runs" / "status_preflight_report.md"),
+            "summary": str(tmp_path / "runs" / "summary.json"),
+        },
+    }
+
+    class FakeWorkflowRunner:
+        def __init__(self, **kwargs: object) -> None:
+            workflow_calls.append({"init": kwargs})
+
+        def run_read_only(self, task_name: str, *, inputs: dict | None = None) -> WorkflowRunResult:
+            workflow_calls.append({"task_name": task_name, "inputs": inputs})
+            return WorkflowRunResult(
+                task="status-preflight",
+                command="status-preflight",
+                title="Status preflight",
+                ok=True,
+                status="warning",
+                mode="read_only",
+                risk="none",
+                summary=summary,
+                artifacts=summary["artifacts"],
+            )
+
+    monkeypatch.setattr(commands, "WorkflowRunner", FakeWorkflowRunner)
+
+    latest_result = dispatch_message("/status", data_dir=tmp_path)
+    assert latest_result.ok is False
+    assert latest_result.blocked_reason == "no_runtime_data"
+
+    live_result = dispatch_message("/status", data_dir=tmp_path, live_status=True)
+
+    assert live_result.ok is True
+    assert "свежая read-only проверка выполнена" in live_result.text
+    assert "status_preflight_test" in live_result.text
+    assert "Ozon Seller API: `ok`" in live_result.text
+    assert "Master catalog: `warning`" in live_result.text
+    assert "CDP port is not listening" in live_result.text
+    assert live_result.artifacts["report"].endswith("status_preflight_report.md")
+    assert workflow_calls[0]["init"]["data_dir"] == tmp_path
+    assert workflow_calls[1] == {"task_name": "status-preflight", "inputs": None}
+
+
 def test_bot_today_live_mode_builds_fresh_report(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -289,6 +350,44 @@ def test_send_preview_command_attaches_safe_report_artifact(
     ]
     assert result["sent_documents"][0]["message_id"] == 11
     assert "secret-token" not in json.dumps(result, ensure_ascii=False)
+
+
+def test_send_preview_command_forwards_live_status(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from takterra_agent.bot import telegram_runner
+    from takterra_agent.bot.commands import TelegramCommandResult
+
+    calls: list[dict] = []
+
+    def fake_dispatch(message: str, **kwargs: object) -> TelegramCommandResult:
+        calls.append({"message": message, **kwargs})
+        return TelegramCommandResult(command="/status", ok=True, text="Статус проекта")
+
+    def fake_api(token: str, method: str, payload: dict) -> dict:
+        return {"ok": True, "result": {"message_id": 10}}
+
+    monkeypatch.setattr(telegram_runner, "dispatch_message", fake_dispatch)
+
+    result = send_preview_command(
+        token="secret-token",
+        chat_id=123,
+        message="/status",
+        data_dir=tmp_path,
+        live_status=True,
+        api_request=fake_api,
+    )
+
+    assert result["ok"] is True
+    assert calls == [
+        {
+            "message": "/status",
+            "data_dir": tmp_path,
+            "live_today": False,
+            "live_status": True,
+        }
+    ]
 
 
 def test_poll_once_dispatches_allowed_chat_and_writes_offset(tmp_path: Path) -> None:

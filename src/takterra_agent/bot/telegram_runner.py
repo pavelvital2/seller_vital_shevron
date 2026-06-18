@@ -198,10 +198,16 @@ def send_preview_command(
     data_dir: Path = Path("data"),
     thread_id: int | None = None,
     live_today: bool = False,
+    live_status: bool = False,
     api_request: ApiRequest = telegram_api_request,
     document_api_request: DocumentApiRequest = telegram_api_document_request,
 ) -> dict[str, Any]:
-    command_result = dispatch_message(message, data_dir=data_dir, live_today=live_today)
+    command_result = dispatch_message(
+        message,
+        data_dir=data_dir,
+        live_today=live_today,
+        live_status=live_status,
+    )
     send_results = send_telegram_text(
         token=token,
         chat_id=chat_id,
@@ -236,6 +242,7 @@ def poll_once(
     state_file: Path = DEFAULT_STATE_FILE,
     allowed_chat_ids: set[int] | None = None,
     live_today: bool = False,
+    live_status: bool = False,
     timeout_seconds: int = 0,
     limit: int = 20,
     api_request: ApiRequest = telegram_api_request,
@@ -288,7 +295,12 @@ def poll_once(
             continue
 
         thread_id = _maybe_int(message_obj.get("message_thread_id"))
-        command_result = dispatch_message(text, data_dir=data_dir, live_today=live_today)
+        command_result = dispatch_message(
+            text,
+            data_dir=data_dir,
+            live_today=live_today,
+            live_status=live_status,
+        )
         send_results = send_telegram_text(
             token=token,
             chat_id=chat_id,
@@ -337,6 +349,7 @@ def poll_loop(
     lock_file: Path = DEFAULT_LOCK_FILE,
     allowed_chat_ids: set[int],
     live_today: bool = False,
+    live_status: bool = False,
     timeout_seconds: int = 20,
     limit: int = 20,
     poll_interval_seconds: float = 1.0,
@@ -364,6 +377,7 @@ def poll_loop(
                     state_file=state_file,
                     allowed_chat_ids=allowed_chat_ids,
                     live_today=live_today,
+                    live_status=live_status,
                     timeout_seconds=timeout_seconds,
                     limit=limit,
                     api_request=api_request,

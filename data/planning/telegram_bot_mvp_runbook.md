@@ -12,8 +12,8 @@ Read-only Telegram MVP - это первый безопасный слой бу�
 того же command layer. Adapter умеет отправить preview-ответ, один раз
 обработать входящие updates через Telegram Bot API, работать в controlled
 polling loop и прикреплять безопасный файл отчета из `artifacts`. Live
-read-only `/today` запускается через `WorkflowRunner`. Marketplace
-write-операции не запускаются.
+read-only `/today` и `/status` запускаются через `WorkflowRunner`.
+Marketplace write-операции не запускаются.
 
 Токен бота не хранится в проекте. Если токен был отправлен в чат или попал в
 логи, считать его засвеченным и перевыпустить через BotFather перед
@@ -96,6 +96,7 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   -m takterra_agent.cli bot send-preview \
   --message /status \
+  --live-status \
   --chat-id 123456789 \
   --thread-id 987 \
   --token-file /home/pavel/.secrets/vital_shevron_telegram_bot_token
@@ -137,6 +138,8 @@ VITAL_SHEVRON_TELEGRAM_ALLOWED_CHAT_IDS=123456789
 ```bash
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   -m takterra_agent.cli bot poll-loop \
+  --live-today \
+  --live-status \
   --allowed-chat-id 123456789 \
   --max-iterations 1 \
   --token-file /home/pavel/.secrets/vital_shevron_telegram_bot_token
@@ -158,7 +161,9 @@ Service должен включаться только после:
 ## Поддерживаемые команды
 
 - `/help` - список доступных read-only экранов.
-- `/status` - последний `status-preflight` из `data/runs/index.jsonl`.
+- `/status` - при `--live-status` строит свежий read-only `status-preflight`;
+  без `--live-status` показывает последний `status-preflight` из
+  `data/runs/index.jsonl`.
 - `/today` - при `--live-today` строит свежий read-only
   `daily-morning-report --seller-v3`; без `--live-today` показывает последний
   `daily-morning-report` из `data/runs/index.jsonl`.
@@ -192,13 +197,15 @@ cookies, storage state и файлы вне разрешенных директ�
 - MVP не создает approved package.
 - MVP не отправляет ответы покупателям.
 - MVP не меняет цены, акции, ставки, карточки, фото, остатки или поставки.
-- MVP запускает из Telegram только live read-only `/today`, если явно включен
-  `--live-today`. Остальные команды показывают уже сохраненные runtime-данные.
+- MVP запускает из Telegram только live read-only `/today` и `/status`, если
+  явно включены `--live-today` и `--live-status`. Остальные команды показывают
+  уже сохраненные runtime-данные.
 - Постоянный polling требует allowlist и lock-file; второй экземпляр polling
   должен завершаться с ошибкой lock.
 - Live read-only задачи используют per-task lock
   `.sessions/workflows/<task>.lock`; для `/today` это
-  `.sessions/workflows/daily-morning-report.lock`.
+  `.sessions/workflows/daily-morning-report.lock`, для `/status` -
+  `.sessions/workflows/status-preflight.lock`.
 - Прикрепление файлов ограничено безопасным `report`-артефактом и не должно
   отправлять секреты, raw snapshots или закрытые runtime-файлы.
 - Неподдерживаемые команды возвращают `unsupported_command`.
@@ -216,8 +223,10 @@ cookies, storage state и файлы вне разрешенных директ�
 
 ## Следующий шаг
 
-1. Перевести live `/status` на `WorkflowRunner.run_read_only("status-preflight")`.
-   Следующий кандидат после этого - `/reviews` в безопасном dry-run/read-only
+1. Проверить стабильность live `/today` и `/status` в постоянном polling.
+2. Следующим отдельным этапом выполнить rename-only
+   `takterra_agent -> seller_agent`, не смешивая с новой логикой.
+3. После rename следующий кандидат - `/reviews` в безопасном dry-run/read-only
    режиме, но только после отдельного review.
-2. Write-кнопки проектировать только после `WorkflowRunner`, `SafetyGuard`,
+4. Write-кнопки проектировать только после `WorkflowRunner`, `SafetyGuard`,
    approved package builder для всех write-контуров и отдельного owner review.

@@ -22,7 +22,7 @@ src/takterra_agent/core/workflow_runner.py
 tests/test_workflow_runner.py
 ```
 
-Telegram `/today` использует runner через:
+Telegram `/today` и `/status` используют runner через:
 
 ```text
 src/takterra_agent/bot/commands.py
@@ -104,11 +104,12 @@ Handler добавляется только для задачи, которая 
 
 - `/today` при `--live-today` запускает `daily-morning-report` через
   `WorkflowRunner`;
+- `/status` при `--live-status` запускает `status-preflight` через
+  `WorkflowRunner`;
 - текстовый Telegram-summary формируется в bot command layer;
 - файл полного отчета прикрепляется adapter-ом только из безопасного
   `artifacts.report`;
-- `/status`, `/catalog`, `/reviews` пока читают последний runtime из
-  `data/runs/index.jsonl`.
+- `/catalog`, `/reviews` пока читают последний runtime из `data/runs/index.jsonl`.
 
 ## Проверка
 
@@ -125,8 +126,10 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/pytest -q
 
 ## Следующий шаг
 
-1. Перевести live `/status` на `WorkflowRunner.run_read_only("status-preflight")`.
-2. После стабилизации `/status` подключать следующие read-only задачи через
-   тот же runner, а не через прямые вызовы из bot layer.
-3. Write-операции проектировать отдельно через `SafetyGuard` и approval
+1. Проверить стабильность `/today` и `/status` в live polling.
+2. Следующим отдельным этапом выполнить rename-only
+   `takterra_agent -> seller_agent` без новой бизнес-логики.
+3. После rename подключать следующие read-only задачи через тот же runner, а
+   не через прямые вызовы из bot layer.
+4. Write-операции проектировать отдельно через `SafetyGuard` и approval
    lifecycle; не расширять `run_read_only()` для apply.

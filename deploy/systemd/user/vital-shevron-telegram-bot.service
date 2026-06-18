@@ -9,7 +9,7 @@ WorkingDirectory=/home/pavel/projects/seller_vital_shevron
 Environment=PYTHONPATH=/home/pavel/projects/seller_vital_shevron/src
 Environment=VITAL_SHEVRON_TELEGRAM_BOT_TOKEN_FILE=/home/pavel/.secrets/vital_shevron_telegram_bot_token
 EnvironmentFile=-/home/pavel/projects/seller_vital_shevron/.sessions/telegram/vital_shevron_telegram_bot.env
-ExecStart=/home/Codex/agent-tools/python/bin/python -m takterra_agent.cli bot poll-loop --live-today --timeout 20 --poll-interval 1 --state-file .sessions/telegram/vital_shevron_bot_state.json --lock-file .sessions/telegram/vital_shevron_bot_polling.lock
+ExecStart=/home/Codex/agent-tools/python/bin/python -m takterra_agent.cli bot poll-loop --live-today --live-status --timeout 20 --poll-interval 1 --state-file .sessions/telegram/vital_shevron_bot_state.json --lock-file .sessions/telegram/vital_shevron_bot_polling.lock
 Restart=always
 RestartSec=10
 

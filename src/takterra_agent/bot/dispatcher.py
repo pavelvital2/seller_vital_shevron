@@ -19,5 +19,11 @@ def dispatch_message(
     *,
     data_dir: Path = Path("data"),
     live_today: bool = False,
+    live_status: bool = False,
 ) -> TelegramCommandResult:
-    return handle_telegram_command(message, data_dir=data_dir, live_today=live_today)
+    return handle_telegram_command(
+        message,
+        data_dir=data_dir,
+        live_today=live_today,
+        live_status=live_status,
+    )

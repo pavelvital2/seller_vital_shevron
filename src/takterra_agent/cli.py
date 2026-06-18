@@ -209,6 +209,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Allow /today to build a fresh read-only seller-v3 daily report.",
     )
+    bot.add_argument(
+        "--live-status",
+        action="store_true",
+        help="Allow /status to build a fresh read-only status preflight.",
+    )
     approvals = subparsers.add_parser(
         "approvals",
         help="List or close pending/approved approval packages.",
@@ -887,7 +892,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "bot":
         data_dir = Path(args.data_dir)
         if args.action == "preview":
-            result = dispatch_message(args.message, data_dir=data_dir)
+            result = dispatch_message(
+                args.message,
+                data_dir=data_dir,
+                live_today=args.live_today,
+                live_status=args.live_status,
+            )
             if args.json:
                 print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
             else:
@@ -916,6 +926,7 @@ def main(argv: list[str] | None = None) -> int:
                 message=args.message,
                 data_dir=data_dir,
                 live_today=args.live_today,
+                live_status=args.live_status,
             )
         else:
             try:
@@ -941,6 +952,7 @@ def main(argv: list[str] | None = None) -> int:
                 lock_file=Path(args.lock_file),
                 allowed_chat_ids=allowed_chat_ids or set(),
                 live_today=args.live_today,
+                live_status=args.live_status,
                 timeout_seconds=args.timeout,
                 limit=args.limit,
                 poll_interval_seconds=args.poll_interval,
@@ -953,6 +965,7 @@ def main(argv: list[str] | None = None) -> int:
                 state_file=Path(args.state_file),
                 allowed_chat_ids=allowed_chat_ids,
                 live_today=args.live_today,
+                live_status=args.live_status,
                 timeout_seconds=args.timeout,
                 limit=args.limit,
             )
