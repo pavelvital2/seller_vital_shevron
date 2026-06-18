@@ -71,6 +71,8 @@
   task-runner и runtime-индекс `data/runs/index.jsonl`.
 - `data/planning/task_registry_runbook.md` - единый реестр задач для CLI,
   fresh-агентов и будущего Telegram-бота.
+- `data/planning/telegram_bot_mvp_runbook.md` - read-only Telegram MVP:
+  command layer, preview CLI, ограничения и запрет write-операций.
 - `data/planning/daily_morning_report_runbook.md` - утренний отчет.
 - `data/planning/reviews_questions_runbook.md` - отзывы и вопросы.
 - `data/planning/ozon_messenger_runbook.md` - Ozon Messenger/уведомления:

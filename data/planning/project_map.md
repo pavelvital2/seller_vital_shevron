@@ -46,6 +46,11 @@
 - `tasks list|show` - CLI-команды просмотра `TaskRegistry`.
 - `src/takterra_agent/bot/dispatcher.py` - thin layer над `TaskRegistry` для
   будущего Telegram-бота.
+- `src/takterra_agent/bot/commands.py` - read-only Telegram MVP command layer:
+  `/help`, `/status`, `/today`, `/reviews`, `/approvals`, `/catalog`, `/runs`;
+  возвращает текст Telegram-summary без write-операций.
+- `bot preview` - CLI-команда локальной проверки Telegram MVP без подключения
+  Telegram token и без отправки сообщений.
 - `src/takterra_agent/safety/approvals.py` - approval/idempotency helpers:
   stable checksum, marker `data/approved/applied/*.applied.json`, проверка
   повторного apply по marker и `RunManifest` index, checksum action rows,
@@ -148,6 +153,7 @@ Ozon CDP port по умолчанию: `9544`.
 - `data/planning/status_preflight_runbook.md`
 - `data/planning/run_manifest_runbook.md`
 - `data/planning/task_registry_runbook.md`
+- `data/planning/telegram_bot_mvp_runbook.md`
 - `data/planning/daily_morning_report_runbook.md`
 - `data/planning/reviews_questions_runbook.md`
 - `data/planning/ozon_messenger_runbook.md` - Ozon Messenger/уведомления:

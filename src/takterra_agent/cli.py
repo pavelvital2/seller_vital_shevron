@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import sys
 
+from takterra_agent.bot.dispatcher import dispatch_message
 from takterra_agent.config import load_credentials
 from takterra_agent.core.run_manifest import find_run, latest_run, list_runs
 from takterra_agent.tasks.approvals import run_approvals_close, run_approvals_status
@@ -110,6 +111,31 @@ def build_parser() -> argparse.ArgumentParser:
         "--telegram-only",
         action="store_true",
         help="Show only tasks enabled for future Telegram bot.",
+    )
+
+    bot = subparsers.add_parser(
+        "bot",
+        help="Preview read-only Telegram MVP command responses without sending messages.",
+    )
+    bot.add_argument(
+        "action",
+        choices=("preview",),
+        help="Bot action.",
+    )
+    bot.add_argument(
+        "--message",
+        default="/help",
+        help="Telegram command text, for example /status.",
+    )
+    bot.add_argument(
+        "--data-dir",
+        default="data",
+        help="Project data directory.",
+    )
+    bot.add_argument(
+        "--json",
+        action="store_true",
+        help="Print full JSON result instead of Telegram text.",
     )
 
     approvals = subparsers.add_parser(
@@ -775,6 +801,14 @@ def main(argv: list[str] | None = None) -> int:
             result = {"task": get_task_definition(args.task)}
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
+
+    if args.command == "bot":
+        result = dispatch_message(args.message, data_dir=Path(args.data_dir))
+        if args.json:
+            print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+        else:
+            print(result.text)
+        return 0 if result.ok else 2
 
     if args.command == "approvals":
         data_dir = Path(args.data_dir)

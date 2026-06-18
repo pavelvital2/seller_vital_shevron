@@ -161,6 +161,15 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         telegram_button_label="/help",
     ),
     RegisteredTask(
+        name="bot-preview",
+        command="bot",
+        title="Telegram read-only preview",
+        description="Preview read-only Telegram MVP responses without connecting a bot token.",
+        mode="read_only",
+        risk="none",
+        runbook_path="data/planning/telegram_bot_mvp_runbook.md",
+    ),
+    RegisteredTask(
         name="catalog-fetch",
         command="fetch-catalog",
         title="Catalog fetch",

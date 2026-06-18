@@ -42,6 +42,7 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli s
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli runs list
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli runs latest --task status-preflight
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli tasks list
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli bot preview --message /help
 ```
 
 После получения API credentials:
@@ -68,6 +69,8 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli i
   индекс `data/runs/index.jsonl`.
 - `task_registry_runbook.md` - единый реестр задач для CLI, fresh-агентов и
   будущего Telegram-бота.
+- `telegram_bot_mvp_runbook.md` - read-only Telegram MVP, preview CLI и
+  запрет write-операций через бот.
 - `lk_connection_runbook.md` - подключение ЛК Ozon/WB.
 - `session_manager_runbook.md` - управление LK-сессиями и восстановление.
 - `ozon_cabinet_map.md` - подробная карта ЛК Ozon.

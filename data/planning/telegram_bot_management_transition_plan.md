@@ -510,6 +510,13 @@ schemas.py
 
 ## Этап 6. Read-only bot MVP
 
+Статус: `in_progress`.
+
+Ветка `feature/read-only-telegram-mvp` добавляет первый command layer:
+`src/takterra_agent/bot/commands.py`, dispatcher `dispatch_message()` и CLI
+preview `bot preview --message /status`. Реальный Telegram token/service пока
+не подключается.
+
 Цель: первый бот должен только показывать состояние и отчеты, без write.
 
 Команды MVP:
@@ -519,11 +526,8 @@ schemas.py
 /today
 /catalog
 /reviews
-/prices
-/ads
-/search
-/positions
 /approvals
+/runs
 /help
 ```
 
@@ -535,18 +539,22 @@ schemas.py
 | `/today` | `daily-morning-report --seller-v2` |
 | `/catalog` | `fetch-catalog` summary/latest |
 | `/reviews` | `reviews-questions --marketplace all` |
-| `/prices` | будущий `pricing-status` |
-| `/ads` | Ozon CPC + WB promotion summaries |
-| `/search` | будущий `search-queries` |
-| `/positions` | будущий `wb-parser-positions` |
 | `/approvals` | `approvals status` |
+| `/runs` | latest RunManifest по Telegram-задачам |
+| `/help` | `TaskRegistry` Telegram tasks |
 
 Критерий готовности:
 
 - бот не делает write-операции;
-- каждая команда пишет `RunManifest`;
+- production runner пишет `RunManifest` при live read-only запуске задачи;
+  preview-слой только читает текущий runtime;
 - бот отправляет краткий отчет и ссылки на артефакты;
 - ошибки показываются безопасно, без секретов.
+
+Ограничение первого прохода: команды показывают последние runtime-данные и
+статусы; они не запускают live API-задачи и не отправляют сообщения в Telegram.
+Команды `/prices`, `/ads`, `/search`, `/positions` подключать после появления
+соответствующих read-only task-runner команд и стандартных отчетов.
 
 ## Этап 7. Approval bot
 
@@ -761,6 +769,7 @@ bot command schema
 5. Расширенный `TaskRegistry` для всех текущих CLI-команд.
 6. Обновление README/CLI docs из registry или по registry.
 7. Read-only Telegram MVP на registry без write-кнопок.
+8. Реальный Telegram runner и attachment policy.
 
 Критерий завершения спринта:
 
