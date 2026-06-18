@@ -512,10 +512,15 @@ schemas.py
 
 Статус: `in_progress`.
 
-Ветка `feature/read-only-telegram-mvp` добавляет первый command layer:
+Ветка `feature/read-only-telegram-mvp` добавила первый command layer:
 `src/takterra_agent/bot/commands.py`, dispatcher `dispatch_message()` и CLI
-preview `bot preview --message /status`. Реальный Telegram token/service пока
-не подключается.
+preview `bot preview --message /status`.
+
+Ветка `feature/telegram-runner-adapter` добавляет real Telegram adapter
+`src/takterra_agent/bot/telegram_runner.py`: отправка read-only preview в
+Telegram и одноразовый `getUpdates` polling. Production service пока не
+включается; token-file, chat id/topic id и режим polling нужно подтвердить
+отдельно.
 
 Цель: первый бот должен только показывать состояние и отчеты, без write.
 
@@ -546,13 +551,16 @@ preview `bot preview --message /status`. Реальный Telegram token/service
 Критерий готовности:
 
 - бот не делает write-операции;
+- Telegram bot token не хранится в проекте, документах, memory или git;
 - production runner пишет `RunManifest` при live read-only запуске задачи;
   preview-слой только читает текущий runtime;
 - бот отправляет краткий отчет и ссылки на артефакты;
 - ошибки показываются безопасно, без секретов.
 
 Ограничение первого прохода: команды показывают последние runtime-данные и
-статусы; они не запускают live API-задачи и не отправляют сообщения в Telegram.
+статусы; они не запускают live API-задачи. Adapter может отправить готовый
+read-only ответ в Telegram, но не поднимается как постоянный service до
+отдельного подтверждения token-file/chat/topic.
 Команды `/prices`, `/ads`, `/search`, `/positions` подключать после появления
 соответствующих read-only task-runner команд и стандартных отчетов.
 

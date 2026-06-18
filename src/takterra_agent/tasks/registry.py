@@ -163,8 +163,8 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
     RegisteredTask(
         name="bot-preview",
         command="bot",
-        title="Telegram read-only preview",
-        description="Preview read-only Telegram MVP responses without connecting a bot token.",
+        title="Telegram read-only adapter",
+        description="Preview or send read-only Telegram MVP responses without write actions.",
         mode="read_only",
         risk="none",
         runbook_path="data/planning/telegram_bot_mvp_runbook.md",

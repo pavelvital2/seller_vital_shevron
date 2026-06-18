@@ -49,8 +49,16 @@
 - `src/takterra_agent/bot/commands.py` - read-only Telegram MVP command layer:
   `/help`, `/status`, `/today`, `/reviews`, `/approvals`, `/catalog`, `/runs`;
   возвращает текст Telegram-summary без write-операций.
+- `src/takterra_agent/bot/telegram_runner.py` - read-only Telegram Bot API
+  adapter: загрузка токена из внешнего файла/env, `sendMessage`,
+  одноразовый `getUpdates` polling, state offset под `.sessions/telegram/`;
+  не запускает marketplace write-операции.
 - `bot preview` - CLI-команда локальной проверки Telegram MVP без подключения
   Telegram token и без отправки сообщений.
+- `bot send-preview` - CLI-команда отправки read-only preview-ответа в
+  Telegram chat/topic через внешний token-file.
+- `bot poll-once` - CLI-команда одноразовой обработки входящих Telegram
+  updates с allowlist `--allowed-chat-id`.
 - `src/takterra_agent/safety/approvals.py` - approval/idempotency helpers:
   stable checksum, marker `data/approved/applied/*.applied.json`, проверка
   повторного apply по marker и `RunManifest` index, checksum action rows,
@@ -200,4 +208,7 @@ Ozon CDP port по умолчанию: `9544`.
   keepalive logs. Не коммитить.
 - `.sessions/wb/` - WB token file, browser profile, storage state, keepalive
   logs. Не коммитить.
+- `.sessions/telegram/` - runtime state Telegram bot polling, включая offset.
+  Не коммитить. Токен предпочтительно хранить во внешнем secret-файле вне
+  проекта, например `/home/pavel/.secrets/vital_shevron_telegram_bot_token`.
 - `tmp/auth/` - временные auth/cookie файлы. Не коммитить.

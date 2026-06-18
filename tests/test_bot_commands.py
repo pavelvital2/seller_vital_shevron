@@ -6,6 +6,11 @@ from pathlib import Path
 import pytest
 
 from takterra_agent.bot.dispatcher import dispatch_message
+from takterra_agent.bot.telegram_runner import (
+    load_telegram_bot_token,
+    poll_once,
+    send_preview_command,
+)
 from takterra_agent.cli import main
 from takterra_agent.core.run_manifest import manifest_from_summary, write_run_manifest
 
@@ -99,6 +104,88 @@ def test_cli_bot_preview_text_and_json(tmp_path: Path, capsys: pytest.CaptureFix
     assert main(["bot", "preview", "--message", "/status", "--data-dir", str(tmp_path), "--json"]) == 2
     output = json.loads(capsys.readouterr().out)
     assert output["blocked_reason"] == "no_runtime_data"
+
+
+def test_telegram_token_loads_from_external_file(tmp_path: Path) -> None:
+    token_file = tmp_path / "telegram-token.txt"
+    token_file.write_text("secret-token\n", encoding="utf-8")
+
+    assert load_telegram_bot_token(token_file=token_file) == "secret-token"
+
+
+def test_send_preview_command_uses_mock_api_without_exposing_token(tmp_path: Path) -> None:
+    calls: list[tuple[str, str, dict]] = []
+
+    def fake_api(token: str, method: str, payload: dict) -> dict:
+        calls.append((token, method, payload))
+        return {"ok": True, "result": {"message_id": 10}}
+
+    result = send_preview_command(
+        token="secret-token",
+        chat_id=123,
+        message="/help",
+        data_dir=tmp_path,
+        api_request=fake_api,
+    )
+
+    assert result["ok"] is True
+    assert calls[0][0] == "secret-token"
+    assert calls[0][1] == "sendMessage"
+    assert "Telegram MVP" in calls[0][2]["text"]
+    assert "secret-token" not in json.dumps(result, ensure_ascii=False)
+
+
+def test_poll_once_dispatches_allowed_chat_and_writes_offset(tmp_path: Path) -> None:
+    calls: list[tuple[str, str, dict]] = []
+
+    def fake_api(token: str, method: str, payload: dict) -> dict:
+        calls.append((token, method, payload))
+        if method == "getUpdates":
+            return {
+                "ok": True,
+                "result": [
+                    {
+                        "update_id": 101,
+                        "message": {
+                            "chat": {"id": 123},
+                            "text": "/help",
+                            "message_thread_id": 55,
+                        },
+                    },
+                    {
+                        "update_id": 102,
+                        "message": {
+                            "chat": {"id": 999},
+                            "text": "/help",
+                        },
+                    },
+                ],
+            }
+        return {"ok": True, "result": {"message_id": 11}}
+
+    state_file = tmp_path / ".sessions" / "telegram" / "state.json"
+    result = poll_once(
+        token="secret-token",
+        data_dir=tmp_path,
+        state_file=state_file,
+        allowed_chat_ids={123},
+        api_request=fake_api,
+    )
+
+    assert result["ok"] is True
+    assert result["processed_updates"] == 1
+    assert result["sent_messages"] == 1
+    assert result["skipped_updates"] == 1
+    assert json.loads(state_file.read_text(encoding="utf-8"))["offset"] == 103
+    send_call = [call for call in calls if call[1] == "sendMessage"][0]
+    assert send_call[2]["message_thread_id"] == 55
+
+
+def test_cli_bot_send_preview_requires_token(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["bot", "send-preview", "--message", "/help", "--chat-id", "123", "--data-dir", str(tmp_path)]) == 2
+    output = json.loads(capsys.readouterr().out)
+    assert output["ok"] is False
+    assert "missing Telegram bot token" in output["error"]
 
 
 def _write_json(path: Path, data: dict) -> None:

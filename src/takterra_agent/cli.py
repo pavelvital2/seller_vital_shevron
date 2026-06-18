@@ -7,6 +7,12 @@ from pathlib import Path
 import sys
 
 from takterra_agent.bot.dispatcher import dispatch_message
+from takterra_agent.bot.telegram_runner import (
+    DEFAULT_STATE_FILE,
+    load_telegram_bot_token,
+    poll_once,
+    send_preview_command,
+)
 from takterra_agent.config import load_credentials
 from takterra_agent.core.run_manifest import find_run, latest_run, list_runs
 from takterra_agent.tasks.approvals import run_approvals_close, run_approvals_status
@@ -115,11 +121,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     bot = subparsers.add_parser(
         "bot",
-        help="Preview read-only Telegram MVP command responses without sending messages.",
+        help="Preview and run read-only Telegram MVP command responses.",
     )
     bot.add_argument(
         "action",
-        choices=("preview",),
+        choices=("preview", "send-preview", "poll-once"),
         help="Bot action.",
     )
     bot.add_argument(
@@ -136,6 +142,47 @@ def build_parser() -> argparse.ArgumentParser:
         "--json",
         action="store_true",
         help="Print full JSON result instead of Telegram text.",
+    )
+    bot.add_argument(
+        "--token-file",
+        default=None,
+        help="External Telegram bot token file. Do not store it in the repository.",
+    )
+    bot.add_argument(
+        "--chat-id",
+        type=int,
+        default=None,
+        help="Telegram chat id for bot send-preview.",
+    )
+    bot.add_argument(
+        "--thread-id",
+        type=int,
+        default=None,
+        help="Telegram topic/thread id for bot send-preview.",
+    )
+    bot.add_argument(
+        "--allowed-chat-id",
+        type=int,
+        action="append",
+        default=None,
+        help="Allowed chat id for bot poll-once. Can be repeated.",
+    )
+    bot.add_argument(
+        "--state-file",
+        default=str(DEFAULT_STATE_FILE),
+        help="Runtime polling state file under ignored .sessions/ by default.",
+    )
+    bot.add_argument(
+        "--timeout",
+        type=int,
+        default=0,
+        help="Telegram getUpdates timeout seconds for bot poll-once.",
+    )
+    bot.add_argument(
+        "--limit",
+        type=int,
+        default=20,
+        help="Telegram getUpdates limit for bot poll-once.",
     )
 
     approvals = subparsers.add_parser(
@@ -803,12 +850,49 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "bot":
-        result = dispatch_message(args.message, data_dir=Path(args.data_dir))
-        if args.json:
-            print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+        data_dir = Path(args.data_dir)
+        if args.action == "preview":
+            result = dispatch_message(args.message, data_dir=data_dir)
+            if args.json:
+                print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+            else:
+                print(result.text)
+            return 0 if result.ok else 2
+
+        token = load_telegram_bot_token(token_file=args.token_file)
+        if not token:
+            result = {
+                "ok": False,
+                "error": (
+                    "missing Telegram bot token; set "
+                    "VITAL_SHEVRON_TELEGRAM_BOT_TOKEN_FILE or pass --token-file"
+                ),
+            }
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 2
+
+        if args.action == "send-preview":
+            if args.chat_id is None:
+                parser.error("bot send-preview requires --chat-id")
+            result = send_preview_command(
+                token=token,
+                chat_id=args.chat_id,
+                thread_id=args.thread_id,
+                message=args.message,
+                data_dir=data_dir,
+            )
         else:
-            print(result.text)
-        return 0 if result.ok else 2
+            allowed_chat_ids = set(args.allowed_chat_id) if args.allowed_chat_id else None
+            result = poll_once(
+                token=token,
+                data_dir=data_dir,
+                state_file=Path(args.state_file),
+                allowed_chat_ids=allowed_chat_ids,
+                timeout_seconds=args.timeout,
+                limit=args.limit,
+            )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result.get("ok") else 2
 
     if args.command == "approvals":
         data_dir = Path(args.data_dir)
