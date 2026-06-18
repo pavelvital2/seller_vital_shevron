@@ -1,4 +1,4 @@
-from takterra_agent.tasks.wb_card_create_plan import _plain_text
+from seller_agent.tasks.wb_card_create_plan import _plain_text
 
 
 def test_plain_text_keeps_line_breaks_between_html_blocks() -> None:

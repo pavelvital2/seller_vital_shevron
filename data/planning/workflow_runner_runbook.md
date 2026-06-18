@@ -18,14 +18,14 @@ Write-операции через `WorkflowRunner` не включены.
 ## Где находится
 
 ```text
-src/takterra_agent/core/workflow_runner.py
+src/seller_agent/core/workflow_runner.py
 tests/test_workflow_runner.py
 ```
 
 Telegram `/today` и `/status` используют runner через:
 
 ```text
-src/takterra_agent/bot/commands.py
+src/seller_agent/bot/commands.py
 ```
 
 ## Контур запуска
@@ -127,9 +127,8 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/pytest -q
 ## Следующий шаг
 
 1. Проверить стабильность `/today` и `/status` в live polling.
-2. Следующим отдельным этапом выполнить rename-only
-   `takterra_agent -> seller_agent` без новой бизнес-логики.
-3. После rename подключать следующие read-only задачи через тот же runner, а
-   не через прямые вызовы из bot layer.
+2. Rename-only package `seller_agent` выполнен 2026-06-18 без новой логики.
+3. Следующие read-only задачи подключать через тот же runner, а не через
+   прямые вызовы из bot layer.
 4. Write-операции проектировать отдельно через `SafetyGuard` и approval
    lifecycle; не расширять `run_read_only()` для apply.

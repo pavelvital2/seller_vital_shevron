@@ -3,7 +3,7 @@ from __future__ import annotations
 import fcntl
 from pathlib import Path
 
-from takterra_agent.core.workflow_runner import WorkflowRunner
+from seller_agent.core.workflow_runner import WorkflowRunner
 
 
 def test_workflow_runner_runs_read_only_handler(tmp_path: Path) -> None:

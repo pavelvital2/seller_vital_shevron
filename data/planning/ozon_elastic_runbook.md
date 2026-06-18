@@ -9,7 +9,7 @@ Ozon Elastic Boosting относится к опасным операциям, �
 ## Dry-run
 
 ```bash
-PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli plan-ozon-elastic
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli plan-ozon-elastic
 ```
 
 Команда только читает Ozon API и сохраняет расчет:
@@ -62,7 +62,7 @@ blocked: <n>
 После согласования конкретного dry-run:
 
 ```bash
-PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli apply-ozon-elastic \
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli apply-ozon-elastic \
   --plan-run-id <ozon_elastic_plan_run_id> \
   --confirmed-by-user
 ```

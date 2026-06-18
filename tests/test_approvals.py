@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from takterra_agent.core.run_manifest import manifest_from_summary, write_run_manifest
-from takterra_agent.safety.approvals import (
+from seller_agent.core.run_manifest import manifest_from_summary, write_run_manifest
+from seller_agent.safety.approvals import (
     action_rows_checksum,
     apply_marker_for,
     assert_apply_not_repeated,

@@ -22,10 +22,10 @@ production-запуском.
 ## Где находится
 
 ```text
-src/takterra_agent/bot/commands.py
-src/takterra_agent/bot/dispatcher.py
-src/takterra_agent/bot/telegram_runner.py
-src/takterra_agent/core/workflow_runner.py
+src/seller_agent/bot/commands.py
+src/seller_agent/bot/dispatcher.py
+src/seller_agent/bot/telegram_runner.py
+src/seller_agent/core/workflow_runner.py
 ```
 
 ## CLI Preview
@@ -34,7 +34,7 @@ src/takterra_agent/core/workflow_runner.py
 
 ```bash
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
-  -m takterra_agent.cli bot preview \
+  -m seller_agent.cli bot preview \
   --message /status
 ```
 
@@ -42,7 +42,7 @@ JSON-режим для тестов/интеграции:
 
 ```bash
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
-  -m takterra_agent.cli bot preview \
+  -m seller_agent.cli bot preview \
   --message /approvals \
   --json
 ```
@@ -84,7 +84,7 @@ export VITAL_SHEVRON_TELEGRAM_BOT_TOKEN_FILE=/home/pavel/.secrets/vital_shevron_
 
 ```bash
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
-  -m takterra_agent.cli bot send-preview \
+  -m seller_agent.cli bot send-preview \
   --message /help \
   --chat-id 123456789 \
   --token-file /home/pavel/.secrets/vital_shevron_telegram_bot_token
@@ -94,7 +94,7 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 
 ```bash
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
-  -m takterra_agent.cli bot send-preview \
+  -m seller_agent.cli bot send-preview \
   --message /status \
   --live-status \
   --chat-id 123456789 \
@@ -106,7 +106,7 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 
 ```bash
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
-  -m takterra_agent.cli bot poll-once \
+  -m seller_agent.cli bot poll-once \
   --allowed-chat-id 123456789 \
   --state-file .sessions/telegram/vital_shevron_bot_state.json \
   --token-file /home/pavel/.secrets/vital_shevron_telegram_bot_token
@@ -137,7 +137,7 @@ VITAL_SHEVRON_TELEGRAM_ALLOWED_CHAT_IDS=123456789
 
 ```bash
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
-  -m takterra_agent.cli bot poll-loop \
+  -m seller_agent.cli bot poll-loop \
   --live-today \
   --live-status \
   --allowed-chat-id 123456789 \
@@ -224,9 +224,8 @@ cookies, storage state и файлы вне разрешенных директ�
 ## Следующий шаг
 
 1. Проверить стабильность live `/today` и `/status` в постоянном polling.
-2. Следующим отдельным этапом выполнить rename-only
-   `takterra_agent -> seller_agent`, не смешивая с новой логикой.
-3. После rename следующий кандидат - `/reviews` в безопасном dry-run/read-only
-   режиме, но только после отдельного review.
+2. Rename-only package `seller_agent` выполнен 2026-06-18 без новой логики.
+3. Следующий кандидат - каталог/mapping и `/reviews` в безопасном
+   dry-run/read-only режиме, но только после отдельного review.
 4. Write-кнопки проектировать только после `WorkflowRunner`, `SafetyGuard`,
    approved package builder для всех write-контуров и отдельного owner review.

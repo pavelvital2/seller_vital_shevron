@@ -26,7 +26,7 @@ data/catalog/unified/future_seller_sku_plan.csv
 ## Получение каталогов
 
 ```bash
-PYTHONPATH=src python3 -m takterra_agent.cli fetch-catalog
+PYTHONPATH=src python3 -m seller_agent.cli fetch-catalog
 ```
 
 Команда сохраняет:

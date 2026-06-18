@@ -5,16 +5,16 @@ from pathlib import Path
 
 import pytest
 
-from takterra_agent.bot.dispatcher import dispatch_message
-from takterra_agent.bot.telegram_runner import (
+from seller_agent.bot.dispatcher import dispatch_message
+from seller_agent.bot.telegram_runner import (
     load_telegram_bot_token,
     poll_loop,
     poll_once,
     safe_report_attachment_paths,
     send_preview_command,
 )
-from takterra_agent.cli import main
-from takterra_agent.core.run_manifest import manifest_from_summary, write_run_manifest
+from seller_agent.cli import main
+from seller_agent.core.run_manifest import manifest_from_summary, write_run_manifest
 
 
 def test_bot_help_lists_read_only_mvp_commands() -> None:
@@ -63,8 +63,8 @@ def test_bot_status_live_mode_builds_fresh_preflight(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    from takterra_agent.bot import commands
-    from takterra_agent.core.workflow_runner import WorkflowRunResult
+    from seller_agent.bot import commands
+    from seller_agent.core.workflow_runner import WorkflowRunResult
 
     workflow_calls: list[dict] = []
     summary = {
@@ -124,8 +124,8 @@ def test_bot_today_live_mode_builds_fresh_report(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    from takterra_agent.bot import commands
-    from takterra_agent.core.workflow_runner import WorkflowRunResult
+    from seller_agent.bot import commands
+    from seller_agent.core.workflow_runner import WorkflowRunResult
 
     workflow_calls: list[dict] = []
     summary = {
@@ -305,8 +305,8 @@ def test_send_preview_command_attaches_safe_report_artifact(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    from takterra_agent.bot import telegram_runner
-    from takterra_agent.bot.commands import TelegramCommandResult
+    from seller_agent.bot import telegram_runner
+    from seller_agent.bot.commands import TelegramCommandResult
 
     report = tmp_path / "runs" / "2026-06-18" / "daily_report" / "daily_morning_report_v3.md"
     report.parent.mkdir(parents=True)
@@ -356,8 +356,8 @@ def test_send_preview_command_forwards_live_status(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    from takterra_agent.bot import telegram_runner
-    from takterra_agent.bot.commands import TelegramCommandResult
+    from seller_agent.bot import telegram_runner
+    from seller_agent.bot.commands import TelegramCommandResult
 
     calls: list[dict] = []
 

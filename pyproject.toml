@@ -1,7 +1,7 @@
 [project]
-name = "seller-takterra"
+name = "seller-agent"
 version = "0.1.0"
-description = "TAKTERRA marketplace agent and task runner"
+description = "Generic marketplace seller agent and task runner"
 requires-python = ">=3.11"
 dependencies = ["openpyxl>=3.1"]
 

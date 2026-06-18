@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from takterra_agent.config import AppCredentials
-from takterra_agent.core.run_manifest import (
+from seller_agent.config import AppCredentials
+from seller_agent.core.run_manifest import (
     find_run,
     latest_run,
     list_runs,
@@ -13,7 +13,7 @@ from takterra_agent.core.run_manifest import (
     write_summary_run_manifest,
     write_run_manifest,
 )
-from takterra_agent.tasks.status_preflight import run_status_preflight
+from seller_agent.tasks.status_preflight import run_status_preflight
 
 
 def test_manifest_write_upserts_index_and_redacts_inputs(tmp_path: Path) -> None:
@@ -162,23 +162,23 @@ def test_write_summary_run_manifest_writes_manifest_and_index(tmp_path: Path) ->
 
 def test_status_preflight_writes_run_manifest(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(
-        "takterra_agent.tasks.status_preflight._check_ozon_api",
+        "seller_agent.tasks.status_preflight._check_ozon_api",
         lambda credentials: {"status": "ok"},
     )
     monkeypatch.setattr(
-        "takterra_agent.tasks.status_preflight._check_ozon_performance_api",
+        "seller_agent.tasks.status_preflight._check_ozon_performance_api",
         lambda credentials: {"status": "ok"},
     )
     monkeypatch.setattr(
-        "takterra_agent.tasks.status_preflight._check_wb_api",
+        "seller_agent.tasks.status_preflight._check_wb_api",
         lambda credentials: {"status": "ok"},
     )
     monkeypatch.setattr(
-        "takterra_agent.tasks.status_preflight._summarize_master_catalog",
+        "seller_agent.tasks.status_preflight._summarize_master_catalog",
         lambda data_dir: {"status": "ok", "rows": 1},
     )
     monkeypatch.setattr(
-        "takterra_agent.tasks.status_preflight._check_lk_sessions",
+        "seller_agent.tasks.status_preflight._check_lk_sessions",
         lambda include_lk: {"ozon_cdp": {"status": "skipped"}},
     )
 

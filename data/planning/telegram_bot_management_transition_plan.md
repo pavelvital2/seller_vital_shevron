@@ -77,7 +77,7 @@ read-only -> dry-run -> review -> approved -> apply -> verify -> result
 ## Целевая архитектура
 
 ```text
-src/takterra_agent/
+src/seller_agent/
   core/
     run_manifest.py
     task_registry.py
@@ -156,7 +156,7 @@ data/
 Статус: `in_progress`.
 
 MVP начат 2026-06-18 в ветке `feature/run-manifest-stage-1`: добавлен
-`src/takterra_agent/core/run_manifest.py`, runtime-индекс
+`src/seller_agent/core/run_manifest.py`, runtime-индекс
 `data/runs/index.jsonl`, CLI `runs list/latest/show` и подключение к
 `status-preflight`, `daily-morning-report`, `reviews-questions`.
 
@@ -192,16 +192,16 @@ read-only/dry-run/apply задачам Ozon/WB.
 
 Что сделать:
 
-1. Добавить `src/takterra_agent/core/run_manifest.py`.
+1. Добавить `src/seller_agent/core/run_manifest.py`.
 2. Добавить запись строк в `data/runs/index.jsonl`.
 3. Подключить manifest к новым запускам, затем постепенно к существующим.
 4. Добавить lifecycle-связи `pending_id -> approved_id -> applied_by_run_id`.
 5. Добавить команды:
 
 ```bash
-PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli runs list
-PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli runs latest --task status-preflight
-PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli runs show --run-id <run_id>
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli runs list
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli runs latest --task status-preflight
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli runs show --run-id <run_id>
 ```
 
 Критерий готовности:
@@ -219,7 +219,7 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli r
 Статус: `in_progress`.
 
 Ветка `feature/task-registry` добавляет первый рабочий слой:
-`src/takterra_agent/tasks/registry.py`, CLI `tasks list/show` и
+`src/seller_agent/tasks/registry.py`, CLI `tasks list/show` и
 `bot/dispatcher.py` как thin layer поверх registry.
 
 Цель: CLI, fresh-агенты и будущий бот должны брать список задач из одного
@@ -246,7 +246,7 @@ telegram_button_label
 
 Что сделать:
 
-1. Расширить `src/takterra_agent/tasks/registry.py` - выполнено первым
+1. Расширить `src/seller_agent/tasks/registry.py` - выполнено первым
    проходом.
 2. Зарегистрировать все текущие CLI-команды - выполнено первым проходом.
 3. Добавить CLI `tasks list/show` - выполнено первым проходом.
@@ -286,7 +286,7 @@ telegram_button_label
 1. Обновить раздельные каталоги:
 
 ```bash
-PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli fetch-catalog
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli fetch-catalog
 ```
 
 2. Сохранить/обновить marketplace-local каталоги:
@@ -422,7 +422,7 @@ pending -> approved -> applied -> verified -> closed
 2. Добавить checksum action rows.
    Для `reviews-questions` checksum считается и проверяется перед apply.
 3. Добавить idempotency guard: старый approved нельзя применить повторно.
-   Первый общий guard уже добавлен в `src/takterra_agent/safety/approvals.py`.
+   Первый общий guard уже добавлен в `src/seller_agent/safety/approvals.py`.
 4. После успешного apply обновлять status package.
    Первый runtime marker уже пишется в `data/approved/applied/`.
 5. Добавить обзор и закрытие lifecycle.
@@ -471,7 +471,7 @@ Safety guard должен проверять:
 
 Что сделать:
 
-1. Добавить `src/takterra_agent/safety/guards.py`.
+1. Добавить `src/seller_agent/safety/guards.py`.
 2. Перенести общие проверки из apply-команд в safety layer.
 3. Оставить task-specific проверки внутри workflow.
 
@@ -516,11 +516,11 @@ schemas.py
 Статус: `in_progress`.
 
 Ветка `feature/read-only-telegram-mvp` добавила первый command layer:
-`src/takterra_agent/bot/commands.py`, dispatcher `dispatch_message()` и CLI
+`src/seller_agent/bot/commands.py`, dispatcher `dispatch_message()` и CLI
 preview `bot preview --message /status`.
 
 Ветка `feature/telegram-runner-adapter` добавляет real Telegram adapter
-`src/takterra_agent/bot/telegram_runner.py`: отправка read-only preview в
+`src/seller_agent/bot/telegram_runner.py`: отправка read-only preview в
 Telegram, одноразовый `getUpdates` polling и controlled `poll-loop` с
 allowlist и lock. Production service включается только после подтверждения
 token-file, личного chat id и runtime allowlist.
@@ -570,10 +570,9 @@ runtime-отчет. Write-операций нет.
 Ограничение текущего прохода: live API-задачи разрешены только для read-only
 `/today` и `/status`; остальные команды показывают последние runtime-данные и
 статусы. Adapter может отправить готовый read-only ответ в Telegram. После
-attachment policy, `WorkflowRunner` MVP и live `/status` следующий отдельный
-слой - rename-only
-`takterra_agent -> seller_agent`, затем аккуратное расширение на следующие
-read-only задачи.
+attachment policy, `WorkflowRunner` MVP, live `/status` и rename-only
+`seller_agent` следующий отдельный слой - каталог/mapping и аккуратное
+расширение на следующие read-only задачи.
 Команды `/prices`, `/ads`, `/search`, `/positions` подключать после появления
 соответствующих read-only task-runner команд и стандартных отчетов.
 
@@ -701,9 +700,9 @@ approval records.
 - Не давать боту прямой доступ к write API без safety guard.
 - Не переносить TAKTERRA product-first модель без учета разных Ozon/WB
   артикулов Vital Shevron.
-- Не переименовывать `takterra_agent` вместе с реализацией новой логики. Когда
-  rename будет согласован, делать отдельный rename-only этап в универсальное
-  имя `seller_agent`, подходящее под любой магазин.
+- Не смешивать package rename с реализацией новой логики. Rename-only этап
+  выполнен 2026-06-18: рабочий package `src/seller_agent/`, CLI
+  `seller-agent`, systemd entrypoint `python -m seller_agent.cli`.
 - Не оставлять названия конкретных магазинов и старых проектов в целевом
   generic core. Все такие значения должны быть вынесены в store profile,
   миграционные/reference-документы или удалены после переноса смысла в
@@ -719,10 +718,10 @@ Ozon/WB.
 
 Что сделать:
 
-1. Переименовать package в универсальное имя:
+1. Переименовать package в универсальное имя - выполнено 2026-06-18:
 
 ```text
-src/takterra_agent/ -> src/seller_agent/
+src/seller_agent/
 ```
 
 2. Ввести `StoreProfile`:

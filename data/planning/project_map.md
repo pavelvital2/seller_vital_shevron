@@ -32,30 +32,30 @@
 
 ## Code
 
-- `src/takterra_agent/` - рабочий Python package. Имя оставлено временно для
-  снижения риска при переносе; будущий rename stage должен переименовать пакет
-  в универсальный `seller_agent`, подходящий под любой магазин.
-- `src/takterra_agent/core/run_manifest.py` - единый паспорт запусков:
+- `src/seller_agent/` - рабочий универсальный Python package для task-runner,
+  Telegram-бота и marketplace adapters. Переименование из старого package
+  выполнено 2026-06-18 отдельным rename-only этапом без новой бизнес-логики.
+- `src/seller_agent/core/run_manifest.py` - единый паспорт запусков:
   запись `manifest.json`, runtime-индекс `data/runs/index.jsonl`, lifecycle
   `pending_review/applied/verified/closed`, связи
   `pending_id/approved_id/applied_by_run_id`, команды `runs list/latest/show`.
-- `src/takterra_agent/core/workflow_runner.py` - read-only `WorkflowRunner`:
+- `src/seller_agent/core/workflow_runner.py` - read-only `WorkflowRunner`:
   запуск задач через `TaskRegistry`, блокировка не-read-only задач,
   per-task locks под `.sessions/workflows/`, safe error и handler-и для
   `daily-morning-report` и `status-preflight`.
-- `src/takterra_agent/tasks/registry.py` - единый `TaskRegistry`: метаданные
+- `src/seller_agent/tasks/registry.py` - единый `TaskRegistry`: метаданные
   текущих CLI-команд, режимы `read_only/dry_run/apply/maintenance`, риск,
   marketplace, runbook, требования к credentials/LK/mapping/confirmation и
   Telegram-label для будущего бота.
 - `tasks list|show` - CLI-команды просмотра `TaskRegistry`.
-- `src/takterra_agent/bot/dispatcher.py` - thin layer над `TaskRegistry` для
+- `src/seller_agent/bot/dispatcher.py` - thin layer над `TaskRegistry` для
   будущего Telegram-бота.
-- `src/takterra_agent/bot/commands.py` - read-only Telegram MVP command layer:
+- `src/seller_agent/bot/commands.py` - read-only Telegram MVP command layer:
   `/help`, `/status`, `/today`, `/reviews`, `/approvals`, `/catalog`, `/runs`;
   возвращает текст Telegram-summary без write-операций; `/today` и `/status`
   могут запускать свежие read-only задачи через `WorkflowRunner`, если
   включены `--live-today`/`--live-status`.
-- `src/takterra_agent/bot/telegram_runner.py` - read-only Telegram Bot API
+- `src/seller_agent/bot/telegram_runner.py` - read-only Telegram Bot API
   adapter: загрузка токена из внешнего файла/env, `sendMessage`,
   безопасный `sendDocument` для `artifacts.report`, одноразовый `getUpdates`
   polling, controlled `poll-loop`, allowlist, lock-file, state offset под
@@ -72,11 +72,11 @@
 - `bot poll-loop --live-today --live-status` - включает свежие read-only
   `/today` и `/status`; остальные команды остаются в режиме просмотра
   сохраненных runtime-данных.
-- `src/takterra_agent/safety/approvals.py` - approval/idempotency helpers:
+- `src/seller_agent/safety/approvals.py` - approval/idempotency helpers:
   stable checksum, marker `data/approved/applied/*.applied.json`, проверка
   повторного apply по marker и `RunManifest` index, checksum action rows,
   close-marker `data/approved/closed/*.closed.json`.
-- `src/takterra_agent/tasks/approvals.py` - read-only/maintenance слой
+- `src/seller_agent/tasks/approvals.py` - read-only/maintenance слой
   approval lifecycle: `approvals status` собирает pending/approved/applied/
   closed статусы, `approvals close` закрывает runtime-пакеты без write-
   операций в маркетплейсах.
@@ -85,27 +85,27 @@
   `actions_checksum`.
 - `approvals status|close` - CLI-команды просмотра и закрытия pending/approved
   lifecycle для будущего Telegram `/approvals`.
-- `src/takterra_agent/tasks/ozon_elastic_apply.py` - применение согласованного
+- `src/seller_agent/tasks/ozon_elastic_apply.py` - применение согласованного
   Ozon Elastic dry-run с fresh preflight, drift-check и verify.
-- `src/takterra_agent/tasks/ozon_cpc_optimization_plan.py` - SKU-level dry-run
+- `src/seller_agent/tasks/ozon_cpc_optimization_plan.py` - SKU-level dry-run
   план рекомендаций для Ozon CPC.
-- `src/takterra_agent/tasks/ozon_cpc_bids_apply.py` - применение согласованных
+- `src/seller_agent/tasks/ozon_cpc_bids_apply.py` - применение согласованных
   ставок Ozon CPC через Performance API с API-only preflight, drift-check и
   verify.
-- `src/takterra_agent/tasks/daily_morning_report.py` - ежедневный read-only
+- `src/seller_agent/tasks/daily_morning_report.py` - ежедневный read-only
   отчет Ozon/WB v3; использует Ozon `/v1/analytics/data`,
   `/v4/product/info/stocks`, `/v3/finance/transaction/list` для выкупов,
   расходов и CPC-списаний, `/v2/posting/fbo/list` для операционных FBO-отмен,
   Review/Question API с LK/CDP fallback, WB Statistics/Finance/Promotion/
   Communications API и последние dry-run отчеты по акциям.
-- `src/takterra_agent/marketplaces/wb/finance_adapter.py` - read-only адаптер
+- `src/seller_agent/marketplaces/wb/finance_adapter.py` - read-only адаптер
   WB Finance API для ежедневных финансовых отчетов реализации
   `/api/finance/v1/sales-reports/list`.
-- `src/takterra_agent/tasks/wb_promotion_report.py` - read-only отчет по WB
+- `src/seller_agent/tasks/wb_promotion_report.py` - read-only отчет по WB
   продвижению через Promotion API.
-- `src/takterra_agent/tasks/wb_promotion_bid_plan.py` - dry-run план изменений
+- `src/seller_agent/tasks/wb_promotion_bid_plan.py` - dry-run план изменений
   ставок WB продвижения по активным CPC-кампаниям.
-- `src/takterra_agent/tasks/wb_promotion_bids_apply.py` - применение
+- `src/seller_agent/tasks/wb_promotion_bids_apply.py` - применение
   согласованных ставок WB promotion через Promotion API с fresh report,
   drift-check и verify.
 - `scripts/` - JS/Bash helpers для ЛК, сессий, отзывов/вопросов и операций.

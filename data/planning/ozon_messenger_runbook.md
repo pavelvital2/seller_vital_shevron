@@ -163,8 +163,8 @@ Query keys:
 
 ```bash
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python - <<'PY'
-from takterra_agent.config import load_credentials
-from takterra_agent.marketplaces.ozon.adapter import OzonSellerAdapter
+from seller_agent.config import load_credentials
+from seller_agent.marketplaces.ozon.adapter import OzonSellerAdapter
 
 creds = load_credentials().ozon_seller
 adapter = OzonSellerAdapter(creds)

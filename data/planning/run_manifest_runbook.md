@@ -109,7 +109,7 @@ Marker является runtime-файлом и не коммитится. Он 
 
 ```bash
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
-  -m takterra_agent.cli prepare-reviews-questions-approved \
+  -m seller_agent.cli prepare-reviews-questions-approved \
   --source-pending <pending_id> \
   --mode all|replies-only|mark-viewed-only
 ```
@@ -127,7 +127,7 @@ approval lifecycle и maintenance-закрытие runtime-пакетов:
 
 ```bash
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
-  -m takterra_agent.cli approvals status
+  -m seller_agent.cli approvals status
 ```
 
 Фильтры:
@@ -162,7 +162,7 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 
 ```bash
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
-  -m takterra_agent.cli approvals close \
+  -m seller_agent.cli approvals close \
   --id <pending_id|approved_id> \
   --kind pending|approved \
   --closed-by owner \
@@ -185,19 +185,19 @@ data/approved/closed/<sha256-kind-id>.closed.json
 Список последних запусков:
 
 ```bash
-PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli runs list
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli runs list
 ```
 
 Последний запуск конкретной задачи:
 
 ```bash
-PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli runs latest --task status-preflight
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli runs latest --task status-preflight
 ```
 
 Показать конкретный запуск:
 
 ```bash
-PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli runs show --run-id <run_id>
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli runs show --run-id <run_id>
 ```
 
 Фильтры:
@@ -220,7 +220,7 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli r
 - коды входа;
 - raw payload с чувствительными данными.
 
-Модуль `src/takterra_agent/core/run_manifest.py` редактирует значения в
+Модуль `src/seller_agent/core/run_manifest.py` редактирует значения в
 `inputs` по секретоподобным ключам и не переносит artifact-ключи с
 секретоподобными именами. Это не заменяет ручную дисциплину: новые задачи
 должны передавать в manifest только безопасные summary-level данные.

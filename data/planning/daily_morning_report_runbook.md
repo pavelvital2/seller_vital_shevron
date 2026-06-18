@@ -5,19 +5,19 @@
 Технический отчет:
 
 ```bash
-PYTHONPATH=src python3 -m takterra_agent.cli daily-morning-report
+PYTHONPATH=src python3 -m seller_agent.cli daily-morning-report
 ```
 
 Селлерский v2:
 
 ```bash
-PYTHONPATH=src python3 -m takterra_agent.cli daily-morning-report --seller-v2
+PYTHONPATH=src python3 -m seller_agent.cli daily-morning-report --seller-v2
 ```
 
 Селлерский v3 по утвержденному Telegram-шаблону:
 
 ```bash
-PYTHONPATH=src python3 -m takterra_agent.cli daily-morning-report --seller-v3
+PYTHONPATH=src python3 -m seller_agent.cli daily-morning-report --seller-v3
 ```
 
 ## Правило до унификации SKU

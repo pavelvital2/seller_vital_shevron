@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from takterra_agent.tasks.ozon_cpc_optimization_plan import build_cpc_optimization_rows
+from seller_agent.tasks.ozon_cpc_optimization_plan import build_cpc_optimization_rows
 
 
 def test_cpc_optimization_classifies_zero_order_spend_with_cart_for_review() -> None:

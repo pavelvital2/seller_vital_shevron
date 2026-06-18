@@ -1,4 +1,4 @@
-from takterra_agent.tasks.actions_apply import _ozon_apply_rows, build_wb_guarded_payload
+from seller_agent.tasks.actions_apply import _ozon_apply_rows, build_wb_guarded_payload
 
 
 def test_wb_guarded_payload_excludes_rows_not_in_master_catalog() -> None:

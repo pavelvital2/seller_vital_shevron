@@ -26,7 +26,7 @@ read-only -> dry-run -> review -> approved -> apply -> verify -> result
 
 ```bash
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
-  -m takterra_agent.cli wb-promotion-report \
+  -m seller_agent.cli wb-promotion-report \
   --date-from <YYYY-MM-DD> \
   --date-to <YYYY-MM-DD>
 ```
@@ -37,7 +37,7 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 
 ```bash
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
-  -m takterra_agent.cli wb-promotion-report \
+  -m seller_agent.cli wb-promotion-report \
   --payment-type cpc
 ```
 
@@ -51,7 +51,7 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 
 ```bash
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
-  -m takterra_agent.cli wb-promotion-report \
+  -m seller_agent.cli wb-promotion-report \
   --payment-type cpc
 ```
 
@@ -59,7 +59,7 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 
 ```bash
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
-  -m takterra_agent.cli plan-wb-promotion-bids \
+  -m seller_agent.cli plan-wb-promotion-bids \
   --source-run-id <wb_promotion_report_run_id>
 ```
 
@@ -136,7 +136,7 @@ apply_allowed
 
 ```bash
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
-  -m takterra_agent.cli apply-wb-promotion-bids \
+  -m seller_agent.cli apply-wb-promotion-bids \
   --plan-run-id <wb_promotion_bid_plan_run_id> \
   --actions scale_candidate \
   --confirmed-by-user

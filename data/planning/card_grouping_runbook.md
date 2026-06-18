@@ -37,7 +37,7 @@ WB:
 2. Выполнить свежий catalog fetch:
 
 ```bash
-PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli fetch-catalog
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli fetch-catalog
 ```
 
 3. Для Ozon дополнительно получить attributes через Seller API

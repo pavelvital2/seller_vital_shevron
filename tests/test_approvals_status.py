@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from takterra_agent.safety.approvals import approval_identity_from_path, mark_approved_applied
-from takterra_agent.tasks.approvals import run_approvals_close, run_approvals_status
+from seller_agent.safety.approvals import approval_identity_from_path, mark_approved_applied
+from seller_agent.tasks.approvals import run_approvals_close, run_approvals_status
 
 
 def test_approvals_status_links_pending_to_approved_package(tmp_path: Path) -> None:

@@ -56,8 +56,8 @@ sed -n '1,220p' data/planning/catalog_mapping_runbook.md
 
 ```bash
 git status --short --ignored
-PYTHONPATH=src python3 -m takterra_agent.cli sessions status
-PYTHONPATH=src python3 -m takterra_agent.cli status-preflight
+PYTHONPATH=src python3 -m seller_agent.cli sessions status
+PYTHONPATH=src python3 -m seller_agent.cli status-preflight
 PYTHONPATH=src pytest -q
 ```
 
@@ -122,7 +122,7 @@ storage_state: .sessions/wb/wb_storage_state.json
 Проверка:
 
 ```bash
-PYTHONPATH=src python3 -m takterra_agent.cli sessions status
+PYTHONPATH=src python3 -m seller_agent.cli sessions status
 node scripts/sessions/ozon_session_keepalive_cdp.js
 node scripts/sessions/wb_session_keepalive.js
 ```
@@ -250,10 +250,10 @@ API. ЛК использовать только если API недостато�
 1. Перевести Ozon/WB refresh с legacy watchdog на `systemd --user` timers:
 
 ```bash
-PYTHONPATH=src python3 -m takterra_agent.cli install-session-systemd
-PYTHONPATH=src python3 -m takterra_agent.cli install-session-systemd --apply --switch
-PYTHONPATH=src python3 -m takterra_agent.cli sessions status
-PYTHONPATH=src python3 -m takterra_agent.cli status-preflight
+PYTHONPATH=src python3 -m seller_agent.cli install-session-systemd
+PYTHONPATH=src python3 -m seller_agent.cli install-session-systemd --apply --switch
+PYTHONPATH=src python3 -m seller_agent.cli sessions status
+PYTHONPATH=src python3 -m seller_agent.cli status-preflight
 ```
 
 2. Подготовить единый безопасный loader `.env` для shell-скриптов.
@@ -268,9 +268,9 @@ PYTHONPATH=src python3 -m takterra_agent.cli status-preflight
 - сопоставление каталогов;
 - будущая унификация seller SKU.
 
-5. Отдельным этапом переименовать Python package `takterra_agent` в
-нейтральное имя (`seller_agent` или `vital_shevron_agent`) только после
-проверенного плана, чтобы не сломать рабочий контур.
+5. Package rename выполнен 2026-06-18 отдельным rename-only этапом:
+рабочий package `src/seller_agent/`, CLI `seller-agent`. Новую бизнес-логику
+с package rename не смешивать.
 
 ## Документы для fresh-агента
 
@@ -293,4 +293,3 @@ data/planning/catalog_mapping_runbook.md
 data/planning/daily_morning_report_runbook.md
 data/planning/reviews_questions_runbook.md
 ```
-

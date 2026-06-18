@@ -4,9 +4,9 @@ import json
 
 import pytest
 
-from takterra_agent.bot.dispatcher import build_registry as build_bot_registry, telegram_tasks
-from takterra_agent.cli import build_parser, main
-from takterra_agent.tasks.registry import default_task_registry, get_task_definition, list_task_definitions
+from seller_agent.bot.dispatcher import build_registry as build_bot_registry, telegram_tasks
+from seller_agent.cli import build_parser, main
+from seller_agent.tasks.registry import default_task_registry, get_task_definition, list_task_definitions
 
 
 def test_task_registry_covers_cli_commands() -> None:

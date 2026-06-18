@@ -3,10 +3,10 @@
 ## Команды
 
 ```bash
-PYTHONPATH=src python3 -m takterra_agent.cli sessions status
-PYTHONPATH=src python3 -m takterra_agent.cli sessions start --marketplace ozon
-PYTHONPATH=src python3 -m takterra_agent.cli sessions stop --marketplace ozon
-PYTHONPATH=src python3 -m takterra_agent.cli sessions restart --marketplace ozon
+PYTHONPATH=src python3 -m seller_agent.cli sessions status
+PYTHONPATH=src python3 -m seller_agent.cli sessions start --marketplace ozon
+PYTHONPATH=src python3 -m seller_agent.cli sessions stop --marketplace ozon
+PYTHONPATH=src python3 -m seller_agent.cli sessions restart --marketplace ozon
 ```
 
 ## Systemd
@@ -14,13 +14,13 @@ PYTHONPATH=src python3 -m takterra_agent.cli sessions restart --marketplace ozon
 Dry-run:
 
 ```bash
-PYTHONPATH=src python3 -m takterra_agent.cli install-session-systemd
+PYTHONPATH=src python3 -m seller_agent.cli install-session-systemd
 ```
 
 Apply после проверки:
 
 ```bash
-PYTHONPATH=src python3 -m takterra_agent.cli install-session-systemd --apply --switch
+PYTHONPATH=src python3 -m seller_agent.cli install-session-systemd --apply --switch
 ```
 
 Unit names:
@@ -50,7 +50,7 @@ keeper-процессу, а не только разовому Playwright-кон
 
 ```bash
 node scripts/sessions/ozon_session_keepalive_cdp.js
-PYTHONPATH=src python3 -m takterra_agent.cli sessions status --marketplace ozon
+PYTHONPATH=src python3 -m seller_agent.cli sessions status --marketplace ozon
 ```
 
 ## Восстановление Ozon-сессии
@@ -58,13 +58,13 @@ PYTHONPATH=src python3 -m takterra_agent.cli sessions status --marketplace ozon
 Dry-run:
 
 ```bash
-PYTHONPATH=src python3 -m takterra_agent.cli restore-ozon-session --dry-run
+PYTHONPATH=src python3 -m seller_agent.cli restore-ozon-session --dry-run
 ```
 
 Фактическое восстановление:
 
 ```bash
-PYTHONPATH=src python3 -m takterra_agent.cli restore-ozon-session
+PYTHONPATH=src python3 -m seller_agent.cli restore-ozon-session
 ```
 
 Сценарий интерактивно запрашивает email и коды входа. Коды не сохранять в
@@ -76,9 +76,9 @@ PYTHONPATH=src python3 -m takterra_agent.cli restore-ozon-session
 поднять legacy keeper/watchdog вручную:
 
 ```bash
-PYTHONPATH=src python3 -m takterra_agent.cli sessions start --marketplace ozon
+PYTHONPATH=src python3 -m seller_agent.cli sessions start --marketplace ozon
 node scripts/sessions/ozon_session_keepalive_cdp.js
-PYTHONPATH=src python3 -m takterra_agent.cli sessions status --marketplace ozon
+PYTHONPATH=src python3 -m seller_agent.cli sessions status --marketplace ozon
 ```
 
 Критерий готовности после восстановления:
@@ -129,5 +129,5 @@ hardcoded путь к другому контуру.
 
 ```bash
 node scripts/sessions/wb_session_keepalive.js
-PYTHONPATH=src python3 -m takterra_agent.cli sessions status --marketplace wb
+PYTHONPATH=src python3 -m seller_agent.cli sessions status --marketplace wb
 ```

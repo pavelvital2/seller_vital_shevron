@@ -1,4 +1,4 @@
-from takterra_agent.tasks.wb_promotion_report import build_wb_promotion_rows
+from seller_agent.tasks.wb_promotion_report import build_wb_promotion_rows
 
 
 def test_wb_promotion_rows_aggregate_campaigns_and_products() -> None:

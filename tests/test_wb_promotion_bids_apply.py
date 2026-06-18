@@ -2,8 +2,8 @@ from decimal import Decimal
 
 import pytest
 
-from takterra_agent.config import AppCredentials
-from takterra_agent.tasks.wb_promotion_bids_apply import (
+from seller_agent.config import AppCredentials
+from seller_agent.tasks.wb_promotion_bids_apply import (
     _group_bid_payload,
     _split_apply_rows,
     run_wb_promotion_bids_apply,

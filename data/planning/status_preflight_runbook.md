@@ -5,13 +5,13 @@
 Без ЛК:
 
 ```bash
-PYTHONPATH=src python3 -m takterra_agent.cli status-preflight --skip-lk
+PYTHONPATH=src python3 -m seller_agent.cli status-preflight --skip-lk
 ```
 
 Полная проверка:
 
 ```bash
-PYTHONPATH=src python3 -m takterra_agent.cli status-preflight
+PYTHONPATH=src python3 -m seller_agent.cli status-preflight
 ```
 
 ## Vital Shevron Catalog Gate

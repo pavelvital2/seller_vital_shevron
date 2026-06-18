@@ -20,7 +20,7 @@ find data/runs data/pending data/approved -type f -print
 
 ```bash
 PYTHONPATH=src pytest -q
-PYTHONPATH=src python3 -m takterra_agent.cli --help
+PYTHONPATH=src python3 -m seller_agent.cli --help
 ```
 
 3. Подготовить секреты Vital Shevron во внешних файлах:
@@ -37,13 +37,13 @@ PYTHONPATH=src python3 -m takterra_agent.cli --help
 5. Выполнить read-only API preflight:
 
 ```bash
-PYTHONPATH=src python3 -m takterra_agent.cli status-preflight --skip-lk
+PYTHONPATH=src python3 -m seller_agent.cli status-preflight --skip-lk
 ```
 
 6. Получить первые каталоги:
 
 ```bash
-PYTHONPATH=src python3 -m takterra_agent.cli fetch-catalog
+PYTHONPATH=src python3 -m seller_agent.cli fetch-catalog
 ```
 
 7. Построить mapping draft Ozon/WB.

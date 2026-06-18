@@ -18,14 +18,14 @@
 
 ```bash
 PYTHONPATH=src NODE_PATH=/home/Codex/agent-tools/node/node_modules \
-  /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli plan-wb-actions-discounts
+  /home/Codex/agent-tools/python/bin/python -m seller_agent.cli plan-wb-actions-discounts
 ```
 
 Если владелец отдельно попросил другую схему:
 
 ```bash
 PYTHONPATH=src NODE_PATH=/home/Codex/agent-tools/node/node_modules \
-  /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli plan-wb-actions-discounts --scheme 70-55-55
+  /home/Codex/agent-tools/python/bin/python -m seller_agent.cli plan-wb-actions-discounts --scheme 70-55-55
 ```
 
 Команда выполняет read-only/dry-run: читает активные акции и текущие цены,
@@ -97,7 +97,7 @@ read-only -> dry-run -> review -> approved -> apply -> verify -> result
 
 ```bash
 PYTHONPATH=src NODE_PATH=/home/Codex/agent-tools/node/node_modules \
-  /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli apply-wb-actions-discounts \
+  /home/Codex/agent-tools/python/bin/python -m seller_agent.cli apply-wb-actions-discounts \
   --plan-run-id <approved_wb_actions_discount_plan_run_id> \
   --confirmed-by-user
 ```
@@ -155,7 +155,7 @@ Apply выполняет:
 
    ```bash
    PYTHONPATH=src NODE_PATH=/home/Codex/agent-tools/node/node_modules \
-     /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli plan-wb-actions-discounts --scheme 70-55-55
+     /home/Codex/agent-tools/python/bin/python -m seller_agent.cli plan-wb-actions-discounts --scheme 70-55-55
    ```
 
 4. Если fresh dry-run успешен и расчет не изменился критично, повторить apply

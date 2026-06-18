@@ -19,8 +19,8 @@ OZON_EXPECTED_STORE=Vital Shevron
 Восстановление:
 
 ```bash
-PYTHONPATH=src python3 -m takterra_agent.cli restore-ozon-session --dry-run
-PYTHONPATH=src python3 -m takterra_agent.cli restore-ozon-session --email <email>
+PYTHONPATH=src python3 -m seller_agent.cli restore-ozon-session --dry-run
+PYTHONPATH=src python3 -m seller_agent.cli restore-ozon-session --email <email>
 ```
 
 Импорт cookies:
@@ -87,8 +87,8 @@ tmp/auth/wb-auth-once/sms-code.txt
 ## Проверка
 
 ```bash
-PYTHONPATH=src python3 -m takterra_agent.cli sessions status
-PYTHONPATH=src python3 -m takterra_agent.cli status-preflight
+PYTHONPATH=src python3 -m seller_agent.cli sessions status
+PYTHONPATH=src python3 -m seller_agent.cli status-preflight
 ```
 
 Секреты, cookies, storage state и коды входа в отчеты не выводить.

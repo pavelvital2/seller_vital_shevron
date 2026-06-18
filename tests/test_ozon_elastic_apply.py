@@ -1,6 +1,6 @@
 import pytest
 
-from takterra_agent.tasks.ozon_elastic_apply import _action_rows, _assert_no_drift
+from seller_agent.tasks.ozon_elastic_apply import _action_rows, _assert_no_drift
 
 
 def test_action_rows_selects_add_changed_updates_and_deactivations() -> None:

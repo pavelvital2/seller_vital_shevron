@@ -6,14 +6,14 @@ from pathlib import Path
 
 import pytest
 
-from takterra_agent.config import (
+from seller_agent.config import (
     WbCredentials,
     load_ozon_performance_credentials,
     load_ozon_seller_credentials,
     load_wb_credentials,
 )
-from takterra_agent.marketplaces.wb.communications_adapter import WbCommunicationsAdapter
-from takterra_agent.tasks.reviews_questions import (
+from seller_agent.marketplaces.wb.communications_adapter import WbCommunicationsAdapter
+from seller_agent.tasks.reviews_questions import (
     _approved_actions,
     _build_report,
     build_actions,

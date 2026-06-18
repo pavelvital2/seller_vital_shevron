@@ -1,6 +1,6 @@
 import pytest
 
-from takterra_agent.tasks.wb_actions_discount_apply import (
+from seller_agent.tasks.wb_actions_discount_apply import (
     _assert_no_drift,
     _latest_history_data,
     _payload_from_rows,

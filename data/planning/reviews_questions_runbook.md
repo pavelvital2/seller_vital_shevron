@@ -4,14 +4,14 @@
 
 ```bash
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
-  -m takterra_agent.cli reviews-questions --marketplace all
+  -m seller_agent.cli reviews-questions --marketplace all
 ```
 
 Для проверки только WB:
 
 ```bash
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
-  -m takterra_agent.cli reviews-questions --marketplace wb
+  -m seller_agent.cli reviews-questions --marketplace wb
 ```
 
 Команда выполняет read-only сбор отзывов и вопросов, готовит отчет и не
@@ -41,7 +41,7 @@ Approved-пакет должен содержать:
 
 ```bash
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
-  -m takterra_agent.cli prepare-reviews-questions-approved \
+  -m seller_agent.cli prepare-reviews-questions-approved \
   --source-pending <pending_id> \
   --mode all
 ```
@@ -68,7 +68,7 @@ data/approved/<approved_id>/APPROVED_PACKAGE.md
 
 ```bash
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
-  -m takterra_agent.cli approvals status \
+  -m seller_agent.cli approvals status \
   --id <pending_id>
 ```
 
@@ -76,7 +76,7 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 
 ```bash
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
-  -m takterra_agent.cli approvals close \
+  -m seller_agent.cli approvals close \
   --id <pending_id> \
   --kind pending \
   --reason "superseded"
@@ -94,7 +94,7 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 
 ```bash
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
-  -m takterra_agent.cli reviews-questions --marketplace all
+  -m seller_agent.cli reviews-questions --marketplace all
 ```
 
 Успешной операцией считать только результат, где:

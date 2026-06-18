@@ -12,13 +12,13 @@ credentials/LK/mapping и необходимость подтверждения 
 ## Где находится
 
 ```text
-src/takterra_agent/tasks/registry.py
+src/seller_agent/tasks/registry.py
 ```
 
 Bot dispatcher должен брать список задач из этого же registry:
 
 ```text
-src/takterra_agent/bot/dispatcher.py
+src/seller_agent/bot/dispatcher.py
 ```
 
 ## CLI
@@ -27,14 +27,14 @@ src/takterra_agent/bot/dispatcher.py
 
 ```bash
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
-  -m takterra_agent.cli tasks list
+  -m seller_agent.cli tasks list
 ```
 
 Показать одну задачу:
 
 ```bash
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
-  -m takterra_agent.cli tasks show --task reviews-questions
+  -m seller_agent.cli tasks show --task reviews-questions
 ```
 
 Фильтры:
