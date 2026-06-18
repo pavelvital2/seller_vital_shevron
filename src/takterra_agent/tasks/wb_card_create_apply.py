@@ -9,9 +9,16 @@ import time
 from typing import Any
 
 from takterra_agent.config import AppCredentials
+from takterra_agent.core.run_manifest import write_summary_run_manifest
 from takterra_agent.http import ApiError
 from takterra_agent.marketplaces.wb.adapter import WbContentAdapter
 from takterra_agent.reports.writer import ensure_dir, write_json
+from takterra_agent.safety.approvals import (
+    apply_marker_for,
+    assert_apply_not_repeated,
+    canonical_checksum,
+    mark_approved_applied,
+)
 from takterra_agent.tasks.wb_card_create_plan import WB_BARCODE_PLACEHOLDER
 
 
@@ -239,6 +246,8 @@ def run_wb_card_create_apply(
     run_id = run_id or f"wb_card_create_apply_{started_at.strftime('%Y%m%dT%H%M%S')}"
     run_dir = ensure_dir(data_dir / "runs" / started_at.strftime("%Y-%m-%d") / run_id)
     plan_dir = _resolve_plan_dir(data_dir, plan_run_id)
+    approved_id = plan_dir.name
+    assert_apply_not_repeated(data_dir=data_dir, approved_id=approved_id)
     plan_items = _read_json(plan_dir / "wb_card_create_plan.json")
     if not isinstance(plan_items, list) or not plan_items:
         raise RuntimeError(f"Plan has no items: {plan_dir}")
@@ -421,12 +430,28 @@ def run_wb_card_create_apply(
         "wb_card_errors_relevant": str(run_dir / "wb_card_errors_relevant.json"),
         "report": str(run_dir / "wb_card_create_apply_report.md"),
         "summary": str(run_dir / "summary.json"),
+        "run_manifest": str(run_dir / "manifest.json"),
+        "apply_marker": str(apply_marker_for(data_dir=data_dir, approved_id=approved_id)),
     }
+    verify_status = "ok" if summary["missing_after_apply"] == 0 and summary["operation_errors"] == 0 else "warning"
+    if summary["relevant_error_batches"] or summary["media_upload_errors"] or summary["pending_media_uploads"]:
+        verify_status = "warning"
 
     result = {
         "run_id": run_id,
         "started_at": started_at.isoformat(timespec="seconds"),
+        "mode": "apply",
+        "overall_status": "ok" if verify_status == "ok" else "warning",
+        "approved_plan_run_id": approved_id,
+        "approved_id": approved_id,
         "summary": summary,
+        "verify": {
+            "status": verify_status,
+            "missing_after_apply": summary["missing_after_apply"],
+            "operation_errors": summary["operation_errors"],
+            "relevant_error_batches": summary["relevant_error_batches"],
+            "pending_media_uploads": summary["pending_media_uploads"],
+        },
         "artifacts": artifacts,
     }
     write_json(run_dir / "summary.json", result)
@@ -445,6 +470,31 @@ def run_wb_card_create_apply(
         relevant_errors=relevant_errors,
         summary=summary,
         artifacts=artifacts,
+    )
+    manifest_paths = write_summary_run_manifest(
+        data_dir=data_dir,
+        run_dir=run_dir,
+        summary=result,
+        task="wb-card-create-apply",
+        mode="apply",
+        risk="high",
+        marketplaces=["wb"],
+        inputs={
+            "plan_run_id": plan_run_id,
+            "confirmed_by_user": confirmed_by_user,
+            "allow_manual_review": allow_manual_review,
+            "wait_seconds": wait_seconds,
+            "poll_interval": poll_interval,
+        },
+    )
+    mark_approved_applied(
+        data_dir=data_dir,
+        approved_id=approved_id,
+        apply_run_id=run_id,
+        task="wb-card-create-apply",
+        status=result["overall_status"],
+        run_manifest_path=manifest_paths["manifest"],
+        checksum=canonical_checksum({"approved_id": approved_id, "summary": summary}),
     )
     return result
 

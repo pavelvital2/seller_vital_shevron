@@ -8,8 +8,15 @@ from pathlib import Path
 from typing import Any
 
 from takterra_agent.config import AppCredentials
+from takterra_agent.core.run_manifest import write_summary_run_manifest
 from takterra_agent.marketplaces.ozon.performance_adapter import OzonPerformanceAdapter
 from takterra_agent.reports.writer import ensure_dir, write_json
+from takterra_agent.safety.approvals import (
+    apply_marker_for,
+    assert_apply_not_repeated,
+    canonical_checksum,
+    mark_approved_applied,
+)
 from takterra_agent.tasks.ozon_cpc_optimization_plan import run_ozon_cpc_optimization_plan
 from takterra_agent.tasks.status_preflight import run_status_preflight
 
@@ -251,6 +258,8 @@ def run_ozon_cpc_bids_apply(
         raise RuntimeError("missing Ozon Performance API credentials")
 
     approved_plan_dir = _plan_dir(data_dir, plan_run_id)
+    approved_id = approved_plan_dir.name
+    assert_apply_not_repeated(data_dir=data_dir, approved_id=approved_id)
     approved_summary = json.loads((approved_plan_dir / "summary.json").read_text(encoding="utf-8"))
     approved_rows = _read_csv(approved_plan_dir / "ozon_cpc_bid_changes.csv")
 
@@ -326,13 +335,16 @@ def run_ozon_cpc_bids_apply(
         "current_bids_before": str(fresh_current_bids_path),
         "current_bids_after": str(processed_dir / "current_bids_after_apply.json"),
         "update_response": str(raw_dir / "update_response.json"),
+        "run_manifest": str(run_dir / "manifest.json"),
+        "apply_marker": str(apply_marker_for(data_dir=data_dir, approved_id=approved_id)),
     }
     result = {
         "run_id": run_id,
         "started_at": started_at.isoformat(timespec="seconds"),
         "mode": "apply",
         "overall_status": overall_status,
-        "approved_plan_run_id": approved_plan_dir.name,
+        "approved_plan_run_id": approved_id,
+        "approved_id": approved_id,
         "preflight": {
             "run_id": preflight["run_id"],
             "overall_status": preflight["overall_status"],
@@ -351,4 +363,27 @@ def run_ozon_cpc_bids_apply(
     }
     write_json(run_dir / "summary.json", result)
     _write_report(run_dir / "ozon_cpc_bids_apply_result.md", result)
+    manifest_paths = write_summary_run_manifest(
+        data_dir=data_dir,
+        run_dir=run_dir,
+        summary=result,
+        task="ozon-cpc-bids-apply",
+        mode="apply",
+        risk="high",
+        marketplaces=["ozon"],
+        inputs={
+            "plan_run_id": plan_run_id,
+            "confirmed_by_user": confirmed_by_user,
+            "min_bid": str(min_bid),
+        },
+    )
+    mark_approved_applied(
+        data_dir=data_dir,
+        approved_id=approved_id,
+        apply_run_id=run_id,
+        task="ozon-cpc-bids-apply",
+        status=overall_status,
+        run_manifest_path=manifest_paths["manifest"],
+        checksum=canonical_checksum({"approved_id": approved_id, "summary": summary, "drift": drift}),
+    )
     return result

@@ -36,6 +36,7 @@ data/runs/index.jsonl
   "risk": "none|low|normal|high",
   "marketplaces": ["ozon", "wb"],
   "status": "ok|warning|blocked|error",
+  "lifecycle_status": "created|pending_review|approved|applied|verified|failed|closed",
   "started_at": "",
   "finished_at": "",
   "inputs": {},
@@ -48,9 +49,9 @@ data/runs/index.jsonl
 }
 ```
 
-## Подключено в MVP
+## Подключено
 
-Первый проход Этапа 1 подключает manifest к безопасным read-only/dry-run
+Первый проход Этапа 1 подключил manifest к безопасным read-only/dry-run
 задачам:
 
 - `status-preflight`: `mode=read_only`, `risk=none`;
@@ -58,7 +59,49 @@ data/runs/index.jsonl
 - `reviews-questions`: `mode=dry_run`, `risk=low`, потому что команда готовит
   pending-пакет с draft-ответами, но не пишет в маркетплейсы.
 
-Write/apply-задачи будут подключаться следующим проходом после проверки MVP.
+Ветка `feature/run-manifest-coverage` расширяет покрытие:
+
+- `catalog-fetch`: `mode=read_only`, `risk=low`;
+- `wb-promotion-report`: `mode=read_only`, `risk=low`;
+- `ozon-elastic-plan`: `mode=dry_run`, `risk=normal`;
+- `ozon-elastic-apply`: `mode=apply`, `risk=high`;
+- `ozon-cpc-optimization-plan`: `mode=dry_run`, `risk=normal`;
+- `ozon-cpc-bids-apply`: `mode=apply`, `risk=high`;
+- `wb-actions-discount-plan`: `mode=dry_run`, `risk=normal`;
+- `wb-actions-discount-apply`: `mode=apply`, `risk=high`;
+- `wb-promotion-bid-plan`: `mode=dry_run`, `risk=normal`;
+- `wb-promotion-bids-apply`: `mode=apply`, `risk=high`;
+- `wb-card-create-plan`: `mode=dry_run`, `risk=high`;
+- `wb-card-create-apply`: `mode=apply`, `risk=high`;
+- `actions-apply`: `mode=apply`, `risk=high`;
+- `reviews-questions-apply`: `mode=apply`, `risk=low`.
+
+Dry-run задачи получают `pending_id=<run_id>_pending`.
+Apply-задачи получают `approved_id` из `approved_plan_run_id` или
+`approved_path`, `applied_by_run_id=<apply_run_id>` и `source_run_ids` из
+approved/fresh/preflight запусков.
+
+## Idempotency Guard
+
+Ветка `feature/run-manifest-coverage` добавляет первый общий guard от
+повторного apply:
+
+- до внешних write-запросов apply-команда вызывает
+  `assert_apply_not_repeated(data_dir, approved_id)`;
+- guard проверяет runtime marker:
+
+```text
+data/approved/applied/<sha256-approved-id>.applied.json
+```
+
+- если marker отсутствует, guard дополнительно смотрит
+  `data/runs/index.jsonl` и блокирует повтор, если уже есть apply-run с тем же
+  `approved_id`, статусом `ok|warning` и lifecycle `applied|verified|closed`;
+- после успешного apply команда пишет marker через `mark_approved_applied`.
+
+Marker является runtime-файлом и не коммитится. Он хранит только безопасные
+поля: `approved_id`, `apply_run_id`, `task`, `status`, `run_manifest`,
+`checksum`, `applied_at`.
 
 ## CLI
 
@@ -105,13 +148,21 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli r
 секретоподобными именами. Это не заменяет ручную дисциплину: новые задачи
 должны передавать в manifest только безопасные summary-level данные.
 
+## Lifecycle
+
+`lifecycle_status` нужен не вместо `status`, а поверх него:
+
+- `pending_review` - dry-run готов к review владельца;
+- `applied` - apply выполнен, но verify не дал финальный `ok`;
+- `verified` - apply выполнен и verify подтвердил результат;
+- `failed` - запуск заблокирован или завершился ошибкой;
+- `closed` - read-only/maintenance запуск завершен и не требует дальнейших
+  действий.
+
 ## Следующий шаг
 
-После проверки MVP:
-
-1. Подключить `RunManifest` ко всем dry-run/apply/verify задачам.
-2. Добавить связь `pending_id -> approved_id -> applied_by_run_id`.
-3. Подключить будущий `TaskRegistry` к `task`, `mode`, `risk`, `marketplaces`
+1. Добавить единый builder approved package с checksum action rows.
+2. Подключить будущий `TaskRegistry` к `task`, `mode`, `risk`, `marketplaces`
    и `runbook_path`.
-4. Использовать `data/runs/index.jsonl` для Telegram-команд `/status`,
+3. Использовать `data/runs/index.jsonl` для Telegram-команд `/status`,
    `/today`, `/reviews`, `/approvals`.

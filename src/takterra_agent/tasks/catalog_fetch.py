@@ -12,6 +12,7 @@ from takterra_agent.catalog.loader import (
     rows_as_dicts,
 )
 from takterra_agent.config import AppCredentials
+from takterra_agent.core.run_manifest import write_summary_run_manifest
 from takterra_agent.marketplaces.ozon.adapter import OzonSellerAdapter
 from takterra_agent.marketplaces.wb.adapter import WbContentAdapter
 from takterra_agent.reports.writer import (
@@ -134,11 +135,14 @@ def run_catalog_fetch(
         "master_catalog_csv": str(master_csv_path),
         "report": str(run_dir / "catalog_check_report.md"),
         "summary": str(run_dir / "summary.json"),
+        "run_manifest": str(run_dir / "manifest.json"),
     }
 
     result = {
         "run_id": run_id,
         "started_at": started_at.isoformat(timespec="seconds"),
+        "mode": "read_only",
+        "overall_status": "warning" if errors else "ok",
         "summary": summary,
         "errors": errors,
         "artifacts": artifacts,
@@ -154,4 +158,14 @@ def run_catalog_fetch(
         artifacts=artifacts,
     )
     write_json(run_dir / "master_catalog_preview.json", [asdict(row) for row in rows[:50]])
+    write_summary_run_manifest(
+        data_dir=data_dir,
+        run_dir=run_dir,
+        summary=result,
+        task="catalog-fetch",
+        mode="read_only",
+        risk="low",
+        marketplaces=["ozon", "wb"],
+        inputs={},
+    )
     return result

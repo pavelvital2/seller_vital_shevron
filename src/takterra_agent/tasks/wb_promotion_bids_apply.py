@@ -9,8 +9,15 @@ import time
 from typing import Any
 
 from takterra_agent.config import AppCredentials
+from takterra_agent.core.run_manifest import write_summary_run_manifest
 from takterra_agent.marketplaces.wb.promotion_adapter import WbPromotionAdapter
 from takterra_agent.reports.writer import ensure_dir, write_json
+from takterra_agent.safety.approvals import (
+    apply_marker_for,
+    assert_apply_not_repeated,
+    canonical_checksum,
+    mark_approved_applied,
+)
 from takterra_agent.tasks.status_preflight import run_status_preflight
 from takterra_agent.tasks.wb_promotion_bid_plan import WbPromotionBidThresholds, run_wb_promotion_bid_plan
 from takterra_agent.tasks.wb_promotion_report import run_wb_promotion_report
@@ -289,6 +296,8 @@ def run_wb_promotion_bids_apply(
 
     allowed_actions = allowed_actions or {"scale_candidate"}
     approved_plan_dir = _plan_dir(data_dir, plan_run_id)
+    approved_id = approved_plan_dir.name
+    assert_apply_not_repeated(data_dir=data_dir, approved_id=approved_id)
     approved_summary = json.loads((approved_plan_dir / "summary.json").read_text(encoding="utf-8"))
     approved_rows = _read_csv(approved_plan_dir / "wb_promotion_bid_changes.csv")
     thresholds = _thresholds_from_summary(approved_summary)
@@ -362,13 +371,16 @@ def run_wb_promotion_bids_apply(
         "update_payload": str(processed_dir / "update_payload.json"),
         "update_response": str(raw_dir / "update_response.json"),
         "campaigns_after_apply": str(raw_dir / "campaigns_after_apply.json"),
+        "run_manifest": str(run_dir / "manifest.json"),
+        "apply_marker": str(apply_marker_for(data_dir=data_dir, approved_id=approved_id)),
     }
     result = {
         "run_id": run_id,
         "started_at": started_at.isoformat(timespec="seconds"),
         "mode": "apply",
         "overall_status": overall_status,
-        "approved_plan_run_id": approved_plan_dir.name,
+        "approved_plan_run_id": approved_id,
+        "approved_id": approved_id,
         "preflight": {
             "run_id": preflight["run_id"],
             "overall_status": preflight["overall_status"],
@@ -392,4 +404,28 @@ def run_wb_promotion_bids_apply(
     }
     write_json(run_dir / "summary.json", result)
     _write_report(run_dir / "wb_promotion_bids_apply_result.md", result)
+    manifest_paths = write_summary_run_manifest(
+        data_dir=data_dir,
+        run_dir=run_dir,
+        summary=result,
+        task="wb-promotion-bids-apply",
+        mode="apply",
+        risk="high",
+        marketplaces=["wb"],
+        inputs={
+            "plan_run_id": plan_run_id,
+            "confirmed_by_user": confirmed_by_user,
+            "allowed_actions": sorted(allowed_actions),
+            "wait_seconds": wait_seconds,
+        },
+    )
+    mark_approved_applied(
+        data_dir=data_dir,
+        approved_id=approved_id,
+        apply_run_id=run_id,
+        task="wb-promotion-bids-apply",
+        status=overall_status,
+        run_manifest_path=manifest_paths["manifest"],
+        checksum=canonical_checksum({"approved_id": approved_id, "summary": summary, "drift": drift}),
+    )
     return result

@@ -10,6 +10,7 @@ from typing import Any
 
 from openpyxl import Workbook
 
+from takterra_agent.core.run_manifest import write_summary_run_manifest
 from takterra_agent.reports.writer import ensure_dir, write_json
 
 
@@ -494,16 +495,33 @@ def run_ozon_cpc_optimization_plan(
         "summary": str(run_dir / "summary.json"),
         "source_rows_csv": str(rows_csv),
         "current_bids_json": str(current_bids_json) if current_bids_json else "",
+        "run_manifest": str(run_dir / "manifest.json"),
     }
     result = {
         "run_id": run_id,
         "source_run_id": source_run_id or (source_dir.name if source_dir else ""),
         "started_at": started_at.isoformat(timespec="seconds"),
         "mode": "dry-run",
+        "overall_status": "ok",
+        "pending_id": f"{run_id}_pending",
         "summary": summary,
         "artifacts": artifacts,
         "apply_performed": False,
     }
     write_json(run_dir / "summary.json", result)
     _write_report(report_path, result=result, rows=rows)
+    write_summary_run_manifest(
+        data_dir=data_dir,
+        run_dir=run_dir,
+        summary=result,
+        task="ozon-cpc-optimization-plan",
+        mode="dry_run",
+        risk="normal",
+        marketplaces=["ozon"],
+        inputs={
+            "source_run_id": source_run_id,
+            "rows_csv": str(rows_csv),
+            "current_bids_json": str(current_bids_json) if current_bids_json else "",
+        },
+    )
     return result

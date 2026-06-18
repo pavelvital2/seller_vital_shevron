@@ -157,6 +157,11 @@ MVP начат 2026-06-18 в ветке `feature/run-manifest-stage-1`: доба
 `data/runs/index.jsonl`, CLI `runs list/latest/show` и подключение к
 `status-preflight`, `daily-morning-report`, `reviews-questions`.
 
+Ветка `feature/run-manifest-coverage` расширяет Этап 1: добавляет
+`lifecycle_status`, автоматическое извлечение `source_run_ids`, связи
+`pending_id/approved_id/applied_by_run_id` и подключает manifest к основным
+read-only/dry-run/apply задачам Ozon/WB.
+
 Цель: любой запуск task-runner должен иметь общий машинно-читаемый паспорт.
 
 Минимальная схема:
@@ -169,6 +174,7 @@ MVP начат 2026-06-18 в ветке `feature/run-manifest-stage-1`: доба
   "risk": "none|low|normal|high",
   "marketplaces": ["ozon", "wb"],
   "status": "ok|warning|blocked|error",
+  "lifecycle_status": "created|pending_review|approved|applied|verified|failed|closed",
   "started_at": "",
   "finished_at": "",
   "inputs": {},
@@ -186,7 +192,8 @@ MVP начат 2026-06-18 в ветке `feature/run-manifest-stage-1`: доба
 1. Добавить `src/takterra_agent/core/run_manifest.py`.
 2. Добавить запись строк в `data/runs/index.jsonl`.
 3. Подключить manifest к новым запускам, затем постепенно к существующим.
-4. Добавить команды:
+4. Добавить lifecycle-связи `pending_id -> approved_id -> applied_by_run_id`.
+5. Добавить команды:
 
 ```bash
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli runs list
@@ -199,7 +206,10 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli r
 - новые runs пишут `manifest.json`;
 - `data/runs/index.jsonl` пополняется;
 - можно найти последний успешный run нужной задачи без ручного поиска по
-  папкам.
+  папкам;
+- dry-run запускам назначается `pending_review`;
+- apply-запуски связываются с approved/fresh/preflight run и получают
+  `applied` или `verified`.
 
 ## Этап 2. Реальный `TaskRegistry`
 
@@ -364,7 +374,16 @@ approved mapping -> dry-run rename plan -> owner approval -> apply -> verify
 
 ## Этап 3. Approval package и lifecycle
 
+Статус: `in_progress`.
+
 Цель: закрыть безопасный цикл dangerous operations.
+
+Ветка `feature/run-manifest-coverage` добавляет первый технический слой:
+stable checksum helpers, runtime marker
+`data/approved/applied/<sha256-approved-id>.applied.json` и idempotency guard
+для основных apply-команд. Guard блокирует повторный apply до внешних
+write-запросов, если approved/pending пакет уже отмечен marker или уже есть в
+`data/runs/index.jsonl` как примененный.
 
 Lifecycle:
 
@@ -377,7 +396,9 @@ pending -> approved -> applied -> verified -> closed
 1. Описать единый JSON-формат pending/approved package.
 2. Добавить checksum action rows.
 3. Добавить idempotency guard: старый approved нельзя применить повторно.
+   Первый общий guard уже добавлен в `src/takterra_agent/safety/approvals.py`.
 4. После успешного apply обновлять status package.
+   Первый runtime marker уже пишется в `data/approved/applied/`.
 5. Начать с отзывов/вопросов, потому что там уже есть pending/approved
    практика.
 
@@ -396,6 +417,10 @@ approvals close --approved-id <id>
 - после apply visible связь: source pending, approved package, apply run,
   verify status;
 - ручная сборка approved JSON больше не нужна для типовых сценариев.
+
+Оставшийся gap этапа: единый approved package builder и CLI/Telegram-команды
+`approvals status/close`. Сейчас guard уже защищает apply-команды, но
+унифицированное создание approved-пакетов еще не реализовано.
 
 ## Этап 4. Централизованный safety guard
 

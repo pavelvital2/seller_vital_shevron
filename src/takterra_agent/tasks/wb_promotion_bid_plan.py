@@ -10,6 +10,7 @@ from typing import Any
 
 from openpyxl import Workbook
 
+from takterra_agent.core.run_manifest import write_summary_run_manifest
 from takterra_agent.reports.writer import ensure_dir, write_json
 
 
@@ -459,12 +460,15 @@ def run_wb_promotion_bid_plan(
         "summary": str(run_dir / "summary.json"),
         "source_products_csv": str(products_csv),
         "source_campaigns_json": str(campaigns_json),
+        "run_manifest": str(run_dir / "manifest.json"),
     }
     result = {
         "run_id": run_id,
         "source_run_id": source_run_id or (source_dir.name if source_dir else ""),
         "started_at": started_at.isoformat(timespec="seconds"),
         "mode": "dry-run",
+        "overall_status": "ok",
+        "pending_id": f"{run_id}_pending",
         "active_cpc_only": active_cpc_only,
         "summary": summary,
         "artifacts": artifacts,
@@ -472,4 +476,19 @@ def run_wb_promotion_bid_plan(
     }
     write_json(run_dir / "summary.json", result)
     _write_report(report, result=result, rows=rows)
+    write_summary_run_manifest(
+        data_dir=data_dir,
+        run_dir=run_dir,
+        summary=result,
+        task="wb-promotion-bid-plan",
+        mode="dry_run",
+        risk="normal",
+        marketplaces=["wb"],
+        inputs={
+            "source_run_id": source_run_id,
+            "products_csv": str(products_csv),
+            "campaigns_json": str(campaigns_json),
+            "active_cpc_only": active_cpc_only,
+        },
+    )
     return result

@@ -12,6 +12,15 @@ from takterra_agent.reports.writer import ensure_dir, write_json
 ManifestMode = Literal["read_only", "dry_run", "apply", "verify", "maintenance"]
 ManifestRisk = Literal["none", "low", "normal", "high"]
 ManifestStatus = Literal["ok", "warning", "blocked", "error"]
+ManifestLifecycleStatus = Literal[
+    "created",
+    "pending_review",
+    "approved",
+    "applied",
+    "verified",
+    "failed",
+    "closed",
+]
 
 SENSITIVE_KEY_PARTS = (
     "authorization",
@@ -38,6 +47,7 @@ class RunManifest:
     marketplaces: list[str]
     status: ManifestStatus
     started_at: str
+    lifecycle_status: ManifestLifecycleStatus = "created"
     finished_at: str = ""
     inputs: dict[str, Any] = field(default_factory=dict)
     artifacts: dict[str, str] = field(default_factory=dict)
@@ -77,6 +87,10 @@ def manifest_from_summary(
     marketplaces: list[str],
     inputs: dict[str, Any] | None = None,
     source_run_ids: list[str] | None = None,
+    pending_id: str | None = None,
+    approved_id: str | None = None,
+    applied_by_run_id: str | None = None,
+    lifecycle_status: ManifestLifecycleStatus | None = None,
     closed: bool = False,
 ) -> RunManifest:
     run_id = str(summary.get("run_id") or "")
@@ -86,12 +100,28 @@ def manifest_from_summary(
     status = _normalize_status(str(summary.get("overall_status") or summary.get("status") or "warning"))
     artifacts = _string_artifacts(summary.get("artifacts") if isinstance(summary.get("artifacts"), dict) else {})
 
-    pending_id = str(summary.get("pending_id") or "")
-    approved_id = str(summary.get("approved_id") or "")
-    applied_by_run_id = str(summary.get("applied_by_run_id") or "")
+    pending_id = str(pending_id if pending_id is not None else summary.get("pending_id") or "")
+    approved_id = str(
+        approved_id
+        if approved_id is not None
+        else summary.get("approved_id") or summary.get("approved_plan_run_id") or summary.get("approved_path") or ""
+    )
+    applied_by_run_id = str(
+        applied_by_run_id
+        if applied_by_run_id is not None
+        else summary.get("applied_by_run_id") or (run_id if mode == "apply" else "")
+    )
     if not source_run_ids:
-        raw_source = summary.get("source_run_ids")
-        source_run_ids = [str(item) for item in raw_source] if isinstance(raw_source, list) else []
+        source_run_ids = _source_run_ids_from_summary(summary)
+    lifecycle_status = lifecycle_status or _infer_lifecycle_status(
+        mode=mode,
+        status=status,
+        pending_id=pending_id,
+        approved_id=approved_id,
+        summary=summary,
+    )
+    if closed is False and lifecycle_status in {"verified", "closed"}:
+        closed = True
 
     return RunManifest(
         run_id=run_id,
@@ -100,6 +130,7 @@ def manifest_from_summary(
         risk=risk,
         marketplaces=list(marketplaces),
         status=status,
+        lifecycle_status=lifecycle_status,
         started_at=started_at,
         finished_at=datetime.now().isoformat(timespec="seconds"),
         inputs=sanitize_manifest_value(inputs or {}),
@@ -109,6 +140,43 @@ def manifest_from_summary(
         approved_id=approved_id,
         applied_by_run_id=applied_by_run_id,
         closed=closed,
+    )
+
+
+def write_summary_run_manifest(
+    *,
+    data_dir: Path,
+    run_dir: Path,
+    summary: dict[str, Any],
+    task: str,
+    mode: ManifestMode,
+    risk: ManifestRisk,
+    marketplaces: list[str],
+    inputs: dict[str, Any] | None = None,
+    source_run_ids: list[str] | None = None,
+    pending_id: str | None = None,
+    approved_id: str | None = None,
+    applied_by_run_id: str | None = None,
+    lifecycle_status: ManifestLifecycleStatus | None = None,
+    closed: bool = False,
+) -> dict[str, Any]:
+    return write_run_manifest(
+        data_dir=data_dir,
+        run_dir=run_dir,
+        manifest=manifest_from_summary(
+            summary=summary,
+            task=task,
+            mode=mode,
+            risk=risk,
+            marketplaces=marketplaces,
+            inputs=inputs,
+            source_run_ids=source_run_ids,
+            pending_id=pending_id,
+            approved_id=approved_id,
+            applied_by_run_id=applied_by_run_id,
+            lifecycle_status=lifecycle_status,
+            closed=closed,
+        ),
     )
 
 
@@ -211,6 +279,48 @@ def _normalize_status(status: str) -> ManifestStatus:
     if status in {"ok", "warning", "blocked", "error"}:
         return status  # type: ignore[return-value]
     return "warning"
+
+
+def _source_run_ids_from_summary(summary: dict[str, Any]) -> list[str]:
+    raw_source = summary.get("source_run_ids")
+    values: list[str] = [str(item) for item in raw_source] if isinstance(raw_source, list) else []
+    for key in ("source_run_id", "approved_plan_run_id"):
+        value = summary.get(key)
+        if value:
+            values.append(str(value))
+    for key in ("preflight", "fresh_plan", "fresh_report"):
+        nested = summary.get(key)
+        if isinstance(nested, dict) and nested.get("run_id"):
+            values.append(str(nested["run_id"]))
+    for key in ("ozon", "wb"):
+        nested = summary.get(key)
+        if isinstance(nested, dict) and nested.get("fresh_run_id"):
+            values.append(str(nested["fresh_run_id"]))
+    return list(dict.fromkeys(value for value in values if value))
+
+
+def _infer_lifecycle_status(
+    *,
+    mode: ManifestMode,
+    status: ManifestStatus,
+    pending_id: str,
+    approved_id: str,
+    summary: dict[str, Any],
+) -> ManifestLifecycleStatus:
+    if status in {"blocked", "error"}:
+        return "failed"
+    if mode == "dry_run":
+        return "pending_review" if pending_id else "created"
+    if mode == "apply":
+        verify = summary.get("verify")
+        if isinstance(verify, dict) and verify.get("status") == "ok":
+            return "verified"
+        return "applied" if status in {"ok", "warning"} else "failed"
+    if approved_id:
+        return "approved"
+    if mode in {"read_only", "verify", "maintenance"} and status == "ok":
+        return "closed"
+    return "created"
 
 
 def _string_artifacts(artifacts: dict[Any, Any]) -> dict[str, str]:

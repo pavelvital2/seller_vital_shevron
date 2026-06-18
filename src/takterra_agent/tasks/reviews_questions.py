@@ -10,11 +10,18 @@ import subprocess
 from typing import Any
 
 from takterra_agent.config import AppCredentials
-from takterra_agent.core.run_manifest import manifest_from_summary, write_run_manifest
+from takterra_agent.core.run_manifest import manifest_from_summary, write_run_manifest, write_summary_run_manifest
 from takterra_agent.http import ApiError
 from takterra_agent.marketplaces.ozon.adapter import OzonSellerAdapter
 from takterra_agent.marketplaces.wb.communications_adapter import WbCommunicationsAdapter
 from takterra_agent.reports.writer import ensure_dir, write_json
+from takterra_agent.safety.approvals import (
+    apply_marker_for,
+    approval_identity_from_path,
+    assert_apply_not_repeated,
+    canonical_checksum,
+    mark_approved_applied,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -1052,7 +1059,13 @@ def run_reviews_questions_apply(
     run_day = started_at.date().isoformat()
     run_dir = ensure_dir(data_dir / "runs" / run_day / run_id)
 
-    artifacts: dict[str, str] = {"run_dir": str(run_dir), "approved_path": str(approved_path)}
+    approved_id = approval_identity_from_path(approved_path)
+    artifacts: dict[str, str] = {
+        "run_dir": str(run_dir),
+        "approved_path": str(approved_path),
+        "run_manifest": str(run_dir / "manifest.json"),
+        "apply_marker": str(apply_marker_for(data_dir=data_dir, approved_id=approved_id)),
+    }
     if not confirmed_by_user:
         summary = {
             "run_id": run_id,
@@ -1060,12 +1073,25 @@ def run_reviews_questions_apply(
             "overall_status": "blocked",
             "mode": "apply",
             "blocker": "Apply requires --confirmed-by-user",
+            "approved_id": approved_id,
             "artifacts": artifacts,
         }
         write_json(run_dir / "summary.json", summary)
+        write_summary_run_manifest(
+            data_dir=data_dir,
+            run_dir=run_dir,
+            summary=summary,
+            task="reviews-questions-apply",
+            mode="apply",
+            risk="low",
+            marketplaces=["ozon", "wb"],
+            inputs={"approved_path": str(approved_path), "confirmed_by_user": confirmed_by_user},
+            approved_id=approved_id,
+        )
         return summary
 
     approved_plan = _safe_read_json(approved_path)
+    assert_apply_not_repeated(data_dir=data_dir, approved_id=approved_id)
     pending_id = str(approved_plan.get("pending_id") or "") if isinstance(approved_plan, dict) else ""
     source_run_id = str(approved_plan.get("source_run_id") or "") if isinstance(approved_plan, dict) else ""
     actions = _approved_actions(approved_path)
@@ -1106,6 +1132,7 @@ def run_reviews_questions_apply(
         "mode": "apply",
         "pending_id": pending_id,
         "source_run_id": source_run_id,
+        "approved_id": approved_id,
         "approved_path": str(approved_path),
         "applied_counts": {
             "wb_public_review_replies": len(wb_result.get("sent") or []),
@@ -1120,4 +1147,25 @@ def run_reviews_questions_apply(
     summary_path = run_dir / "summary.json"
     write_json(summary_path, summary)
     summary["artifacts"]["summary"] = str(summary_path)
+    write_json(summary_path, summary)
+    manifest_paths = write_summary_run_manifest(
+        data_dir=data_dir,
+        run_dir=run_dir,
+        summary=summary,
+        task="reviews-questions-apply",
+        mode="apply",
+        risk="low",
+        marketplaces=["ozon", "wb"],
+        inputs={"approved_path": str(approved_path), "confirmed_by_user": confirmed_by_user},
+        approved_id=approved_id,
+    )
+    mark_approved_applied(
+        data_dir=data_dir,
+        approved_id=approved_id,
+        apply_run_id=run_id,
+        task="reviews-questions-apply",
+        status=overall_status,
+        run_manifest_path=manifest_paths["manifest"],
+        checksum=canonical_checksum({"approved_id": approved_id, "actions": actions}),
+    )
     return summary

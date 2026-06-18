@@ -10,6 +10,7 @@ from typing import Any
 from openpyxl import Workbook
 
 from takterra_agent.config import AppCredentials
+from takterra_agent.core.run_manifest import write_summary_run_manifest
 from takterra_agent.marketplaces.wb.promotion_adapter import WbPromotionAdapter
 from takterra_agent.reports.writer import ensure_dir, write_json
 from takterra_agent.tasks.status_preflight import run_status_preflight
@@ -471,11 +472,13 @@ def run_wb_promotion_report(
         "campaigns_raw": str(raw_dir / "campaigns.json"),
         "fullstats_raw": str(raw_dir / "fullstats.json"),
         "balance_raw": str(raw_dir / "balance.json"),
+        "run_manifest": str(run_dir / "manifest.json"),
     }
     result = {
         "run_id": run_id,
         "started_at": started_at.isoformat(timespec="seconds"),
         "mode": "read_only",
+        "overall_status": "ok" if preflight["overall_status"] in {"ok", "warning"} else "warning",
         "source": "WB Promotion API",
         "period": {"date_from": date_from, "date_to": date_to},
         "preflight": {
@@ -490,4 +493,14 @@ def run_wb_promotion_report(
     }
     write_json(run_dir / "summary.json", result)
     _write_report(report, result=result, campaign_rows=campaign_rows, nm_rows=nm_rows)
+    write_summary_run_manifest(
+        data_dir=data_dir,
+        run_dir=run_dir,
+        summary=result,
+        task="wb-promotion-report",
+        mode="read_only",
+        risk="low",
+        marketplaces=["wb"],
+        inputs={"date_from": date_from, "date_to": date_to, "payment_type": payment_type},
+    )
     return result

@@ -11,6 +11,7 @@ from typing import Any
 from openpyxl import Workbook
 
 from takterra_agent.config import AppCredentials
+from takterra_agent.core.run_manifest import write_summary_run_manifest
 from takterra_agent.marketplaces.ozon.adapter import OzonSellerAdapter
 from takterra_agent.reports.writer import ensure_dir, write_json
 
@@ -477,15 +478,28 @@ def run_ozon_elastic_plan(
         "xlsx": str(xlsx_path),
         "payload_preview": str(payload_path),
         "summary": str(run_dir / "summary.json"),
+        "run_manifest": str(run_dir / "manifest.json"),
     }
     result = {
         "run_id": run_id,
         "started_at": started_at.isoformat(timespec="seconds"),
         "mode": "dry-run",
+        "overall_status": "ok",
+        "pending_id": f"{run_id}_pending",
         "summary": summary,
         "artifacts": artifacts,
         "apply_performed": False,
     }
     write_json(run_dir / "summary.json", result)
     _write_report(report_path, result=result, rows=rows)
+    write_summary_run_manifest(
+        data_dir=data_dir,
+        run_dir=run_dir,
+        summary=result,
+        task="ozon-elastic-plan",
+        mode="dry_run",
+        risk="normal",
+        marketplaces=["ozon"],
+        inputs={},
+    )
     return result

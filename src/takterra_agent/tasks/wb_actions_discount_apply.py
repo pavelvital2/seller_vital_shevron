@@ -11,7 +11,14 @@ import urllib.parse
 import urllib.request
 
 from takterra_agent.config import AppCredentials
+from takterra_agent.core.run_manifest import write_summary_run_manifest
 from takterra_agent.reports.writer import ensure_dir, write_json
+from takterra_agent.safety.approvals import (
+    apply_marker_for,
+    assert_apply_not_repeated,
+    canonical_checksum,
+    mark_approved_applied,
+)
 from takterra_agent.tasks.status_preflight import run_status_preflight
 from takterra_agent.tasks.wb_actions_discount_plan import _price_value, run_wb_actions_discount_plan
 
@@ -193,6 +200,8 @@ def run_wb_actions_discount_apply(
         raise RuntimeError("missing WB API token")
 
     approved_plan_dir = _plan_dir(data_dir, plan_run_id)
+    approved_id = approved_plan_dir.name
+    assert_apply_not_repeated(data_dir=data_dir, approved_id=approved_id)
     approved_summary = json.loads((approved_plan_dir / "summary.json").read_text(encoding="utf-8"))
     scheme = str(approved_summary["summary"]["scheme"])
     approved_csv = Path(approved_summary["artifacts"]["csv"])
@@ -262,13 +271,16 @@ def run_wb_actions_discount_apply(
         "upload_response": str(raw_dir / "wb_upload_response.json"),
         "upload_status_polls": str(raw_dir / "wb_upload_status_polls.json"),
         "upload_details": str(raw_dir / "wb_upload_details.json"),
+        "run_manifest": str(run_dir / "manifest.json"),
+        "apply_marker": str(apply_marker_for(data_dir=data_dir, approved_id=approved_id)),
     }
     result = {
         "run_id": run_id,
         "started_at": started_at.isoformat(timespec="seconds"),
         "mode": "apply",
         "overall_status": "ok" if upload_ok else "warning",
-        "approved_plan_run_id": approved_plan_dir.name,
+        "approved_plan_run_id": approved_id,
+        "approved_id": approved_id,
         "scheme": scheme,
         "preflight": {
             "run_id": preflight["run_id"],
@@ -295,4 +307,23 @@ def run_wb_actions_discount_apply(
     }
     write_json(run_dir / "summary.json", result)
     _write_report(run_dir / "wb_actions_discount_apply_result.md", result)
+    manifest_paths = write_summary_run_manifest(
+        data_dir=data_dir,
+        run_dir=run_dir,
+        summary=result,
+        task="wb-actions-discount-apply",
+        mode="apply",
+        risk="high",
+        marketplaces=["wb"],
+        inputs={"plan_run_id": plan_run_id, "confirmed_by_user": confirmed_by_user},
+    )
+    mark_approved_applied(
+        data_dir=data_dir,
+        approved_id=approved_id,
+        apply_run_id=run_id,
+        task="wb-actions-discount-apply",
+        status=result["overall_status"],
+        run_manifest_path=manifest_paths["manifest"],
+        checksum=canonical_checksum({"approved_id": approved_id, "drift": drift}),
+    )
     return result

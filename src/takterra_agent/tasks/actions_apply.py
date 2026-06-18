@@ -13,8 +13,15 @@ import urllib.parse
 import urllib.request
 
 from takterra_agent.config import AppCredentials
+from takterra_agent.core.run_manifest import write_summary_run_manifest
 from takterra_agent.marketplaces.ozon.adapter import OzonSellerAdapter
 from takterra_agent.reports.writer import ensure_dir, write_json
+from takterra_agent.safety.approvals import (
+    apply_marker_for,
+    assert_apply_not_repeated,
+    canonical_checksum,
+    mark_approved_applied,
+)
 from takterra_agent.tasks.ozon_elastic_plan import ACTIVE, _fetch_action_group, run_ozon_elastic_plan
 from takterra_agent.tasks.status_preflight import run_status_preflight
 from takterra_agent.tasks.wb_actions_discount_plan import _price_value, run_wb_actions_discount_plan
@@ -265,6 +272,8 @@ def run_actions_apply(
     processed_dir = ensure_dir(run_dir / "processed")
 
     pending_dir = data_dir / "pending" / pending_id
+    approved_id = pending_id
+    assert_apply_not_repeated(data_dir=data_dir, approved_id=approved_id)
     pending_manifest = _read_json(pending_dir / "manifest.json")
 
     preflight = run_status_preflight(credentials=credentials, data_dir=data_dir)
@@ -364,6 +373,8 @@ def run_actions_apply(
         "wb_guarded_payload": str(processed_dir / "wb_guarded_payload.json"),
         "wb_guarded_rows": str(processed_dir / "wb_guarded_rows.csv"),
         "wb_excluded_rows": str(processed_dir / "wb_excluded_rows.csv"),
+        "run_manifest": str(run_dir / "manifest.json"),
+        "apply_marker": str(apply_marker_for(data_dir=data_dir, approved_id=approved_id)),
     }
     result = {
         "run_id": run_id,
@@ -371,6 +382,7 @@ def run_actions_apply(
         "mode": "apply",
         "overall_status": overall_status,
         "pending_id": pending_id,
+        "approved_id": approved_id,
         "preflight": {
             "run_id": preflight["run_id"],
             "overall_status": preflight["overall_status"],
@@ -396,4 +408,23 @@ def run_actions_apply(
     }
     write_json(run_dir / "summary.json", result)
     _write_report(run_dir / "actions_apply_result.md", result)
+    manifest_paths = write_summary_run_manifest(
+        data_dir=data_dir,
+        run_dir=run_dir,
+        summary=result,
+        task="actions-apply",
+        mode="apply",
+        risk="high",
+        marketplaces=["ozon", "wb"],
+        inputs={"pending_id": pending_id, "confirmed_by_user": confirmed_by_user},
+    )
+    mark_approved_applied(
+        data_dir=data_dir,
+        approved_id=approved_id,
+        apply_run_id=run_id,
+        task="actions-apply",
+        status=overall_status,
+        run_manifest_path=manifest_paths["manifest"],
+        checksum=canonical_checksum({"approved_id": approved_id, "pending_manifest": pending_manifest}),
+    )
     return result

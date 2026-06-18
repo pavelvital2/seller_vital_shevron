@@ -10,6 +10,7 @@ import re
 from typing import Any
 
 from takterra_agent.config import AppCredentials
+from takterra_agent.core.run_manifest import write_summary_run_manifest
 from takterra_agent.marketplaces.ozon.adapter import OzonSellerAdapter
 from takterra_agent.marketplaces.wb.adapter import WbContentAdapter
 from takterra_agent.reports.writer import ensure_dir, write_json
@@ -435,6 +436,8 @@ def run_wb_card_create_plan(
         "ozon_attributes": str(run_dir / "ozon_only_attributes.json"),
         "subject_characteristics": str(run_dir / "wb_subject_characteristics.json"),
         "report": str(run_dir / "wb_card_create_dry_run.md"),
+        "summary": str(run_dir / "summary.json"),
+        "run_manifest": str(run_dir / "manifest.json"),
     }
 
     write_json(run_dir / "wb_card_create_plan.json", plan_items)
@@ -443,10 +446,30 @@ def run_wb_card_create_plan(
     write_json(run_dir / "wb_media_upload_plan.json", media_upload_plan)
     write_json(run_dir / "ozon_only_attributes.json", ozon_attrs_items)
     write_json(run_dir / "wb_subject_characteristics.json", subject_charcs)
-    write_json(run_dir / "summary.json", {"run_id": run_id, "summary": summary, "artifacts": artifacts})
+    result = {
+        "run_id": run_id,
+        "started_at": started_at.isoformat(timespec="seconds"),
+        "mode": "dry-run",
+        "overall_status": "warning" if summary["manual_review_items"] else "ok",
+        "pending_id": f"{run_id}_pending",
+        "summary": summary,
+        "artifacts": artifacts,
+        "apply_performed": False,
+    }
+    write_json(run_dir / "summary.json", result)
+    write_summary_run_manifest(
+        data_dir=data_dir,
+        run_dir=run_dir,
+        summary=result,
+        task="wb-card-create-plan",
+        mode="dry_run",
+        risk="high",
+        marketplaces=["ozon", "wb"],
+        inputs={},
+    )
 
     _write_report(run_dir / "wb_card_create_dry_run.md", run_id, summary, artifacts, plan_items)
-    return {"run_id": run_id, "summary": summary, "artifacts": artifacts}
+    return result
 
 
 def _write_report(

@@ -35,9 +35,13 @@
 - `src/takterra_agent/` - рабочий Python package. Имя оставлено временно для
   снижения риска при переносе; будущий rename stage должен переименовать пакет
   в универсальный `seller_agent`, подходящий под любой магазин.
-- `src/takterra_agent/core/run_manifest.py` - MVP единого паспорта запусков:
-  запись `manifest.json`, runtime-индекс `data/runs/index.jsonl`, команды
-  `runs list/latest/show`.
+- `src/takterra_agent/core/run_manifest.py` - единый паспорт запусков:
+  запись `manifest.json`, runtime-индекс `data/runs/index.jsonl`, lifecycle
+  `pending_review/applied/verified/closed`, связи
+  `pending_id/approved_id/applied_by_run_id`, команды `runs list/latest/show`.
+- `src/takterra_agent/safety/approvals.py` - approval/idempotency helpers:
+  stable checksum, marker `data/approved/applied/*.applied.json`, проверка
+  повторного apply по marker и `RunManifest` index.
 - `src/takterra_agent/tasks/ozon_elastic_apply.py` - применение согласованного
   Ozon Elastic dry-run с fresh preflight, drift-check и verify.
 - `src/takterra_agent/tasks/ozon_cpc_optimization_plan.py` - SKU-level dry-run
@@ -89,6 +93,8 @@ Ozon CDP port по умолчанию: `9544`.
 - `data/runs/index.jsonl` - runtime-индекс `RunManifest`, не коммитить.
 - `data/pending/` - pending packages перед approval, не коммитить.
 - `data/approved/` - approved packages, не коммитить.
+- `data/approved/applied/` - runtime-маркеры уже примененных approved/pending
+  пакетов для idempotency guard, не коммитить.
 - `data/reports/` - экспортные отчеты, не коммитить без отдельного решения.
 - `data/reference/takterra_development_docs/` - read-only копия markdown-
   документов TAKTERRA по развитию проекта, архитектуре, task-runner,
