@@ -115,12 +115,10 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 
 ## Следующий шаг
 
-1. Использовать `bot preview` и `telegram_bot_mvp_runbook.md` как первый
-   consumer registry для read-only Telegram MVP.
-2. Подключить генерацию CLI/help или документации из registry без изменения
+1. Подключить генерацию CLI/help или документации из registry без изменения
    внешнего поведения команд.
-3. Использовать registry в read-only Telegram MVP: `/status`, `/today`,
-   `/reviews`, `/approvals`, `/catalog`.
-4. После этого проектировать общий `WorkflowRunner` и `SafetyGuard`, чтобы
+2. Расширять `WorkflowRunner` только через задачи, уже описанные в registry и
+   профильных runbook-ах.
+3. Проектировать общий `SafetyGuard`, чтобы
    apply-команды не дублировали проверки подтверждения, preflight, drift-check
    и idempotency.

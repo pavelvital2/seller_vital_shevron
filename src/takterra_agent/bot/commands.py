@@ -1,18 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-import fcntl
 from pathlib import Path
 from typing import Any
 
-from takterra_agent.config import AppCredentials, load_credentials
+from takterra_agent.config import AppCredentials
 from takterra_agent.core.run_manifest import latest_run
-from takterra_agent.tasks.daily_morning_report import run_daily_morning_report
+from takterra_agent.core.workflow_runner import WorkflowRunner
 from takterra_agent.tasks.approvals import run_approvals_status
 from takterra_agent.tasks.registry import default_task_registry
-
-
-LIVE_TODAY_LOCK_FILE = Path(".sessions/telegram/live_today.lock")
 
 
 SUPPORTED_READ_ONLY_COMMANDS = {
@@ -143,14 +139,11 @@ def _fresh_daily_report(
     data_dir: Path,
     credentials: AppCredentials | None,
 ) -> TelegramCommandResult:
-    try:
-        with _CommandLock(LIVE_TODAY_LOCK_FILE):
-            result = run_daily_morning_report(
-                credentials=credentials or load_credentials(),
-                data_dir=data_dir,
-                seller_v3=True,
-            )
-    except RuntimeError as exc:
+    result = WorkflowRunner(data_dir=data_dir, credentials=credentials).run_read_only(
+        "daily-morning-report",
+        inputs={"seller_v3": True},
+    )
+    if result.blocked_reason == "workflow_busy":
         return TelegramCommandResult(
             command="/today",
             ok=False,
@@ -158,28 +151,28 @@ def _fresh_daily_report(
             text=(
                 "Ежедневный отчет\n\n"
                 "Итог: свежий отчет уже собирается другим процессом.\n\n"
-                f"Причина: `{_safe_error(exc)}`\n\n"
+                f"Причина: `{result.error}`\n\n"
                 "Изменений в Ozon/WB не выполнял."
             ),
         )
-    except Exception as exc:  # noqa: BLE001 - Telegram must return a safe failure.
+    if not result.ok:
         return TelegramCommandResult(
             command="/today",
             ok=False,
-            blocked_reason="daily_report_failed",
+            blocked_reason=result.blocked_reason or "daily_report_failed",
             text=(
                 "Ежедневный отчет\n\n"
                 "Итог: свежий read-only отчет не удалось построить.\n\n"
-                f"Причина: `{_safe_error(exc)}`\n\n"
+                f"Причина: `{result.error or result.status}`\n\n"
                 "Изменений в Ozon/WB не выполнял."
             ),
         )
 
     return TelegramCommandResult(
         command="/today",
-        ok=result.get("overall_status") in {"ok", "warning"},
-        text=_daily_report_chat_text(result),
-        artifacts=_safe_artifacts(result),
+        ok=True,
+        text=_daily_report_chat_text(result.summary),
+        artifacts=result.artifacts,
     )
 
 
@@ -408,38 +401,6 @@ def _money(value: Any) -> str:
         return f"{float(value):,.0f}".replace(",", " ") + " ₽"
     except (TypeError, ValueError):
         return str(value)
-
-
-def _safe_error(exc: BaseException) -> str:
-    raw = str(exc).replace("\n", " ").replace("\r", " ")
-    for marker in ("token", "secret", "cookie", "storage", "auth", "api_key", "client_secret"):
-        raw = raw.replace(marker, "<redacted>")
-    return raw[:500]
-
-
-class _CommandLock:
-    def __init__(self, path: Path) -> None:
-        self.path = path
-        self._file: Any | None = None
-
-    def __enter__(self) -> "_CommandLock":
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._file = self.path.open("a+", encoding="utf-8")
-        try:
-            fcntl.flock(self._file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            self._file.close()
-            self._file = None
-            raise RuntimeError(f"lock is busy: {self.path}") from exc
-        self.path.chmod(0o600)
-        return self
-
-    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
-        if self._file is None:
-            return
-        fcntl.flock(self._file.fileno(), fcntl.LOCK_UN)
-        self._file.close()
-        self._file = None
 
 
 def _normalize_command(message: str) -> str:

@@ -239,8 +239,9 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli r
 ## Следующий шаг
 
 1. Распространить builder approved package на акции, ставки, карточки и цены.
-2. Подключить `approvals status` к будущему Telegram `/approvals`.
-3. Использовать `TaskRegistry` для navigation, Telegram-команд и будущего
-   `WorkflowRunner`.
-4. Использовать `data/runs/index.jsonl` для Telegram-команд `/status`,
+2. Использовать `WorkflowRunner` для live read-only задач и сохранять
+   `RunManifest` как единый источник runtime-статуса.
+3. Использовать `data/runs/index.jsonl` для Telegram-команд `/status`,
    `/today`, `/reviews`, `/approvals`.
+4. При добавлении новых live задач проверять, что task writes manifest/report
+   до подключения к Telegram.

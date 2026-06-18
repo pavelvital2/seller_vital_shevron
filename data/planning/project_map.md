@@ -39,6 +39,10 @@
   запись `manifest.json`, runtime-индекс `data/runs/index.jsonl`, lifecycle
   `pending_review/applied/verified/closed`, связи
   `pending_id/approved_id/applied_by_run_id`, команды `runs list/latest/show`.
+- `src/takterra_agent/core/workflow_runner.py` - read-only `WorkflowRunner`:
+  запуск задач через `TaskRegistry`, блокировка не-read-only задач,
+  per-task locks под `.sessions/workflows/`, safe error и handler-и для
+  `daily-morning-report` и `status-preflight`.
 - `src/takterra_agent/tasks/registry.py` - единый `TaskRegistry`: метаданные
   текущих CLI-команд, режимы `read_only/dry_run/apply/maintenance`, риск,
   marketplace, runbook, требования к credentials/LK/mapping/confirmation и
@@ -49,8 +53,8 @@
 - `src/takterra_agent/bot/commands.py` - read-only Telegram MVP command layer:
   `/help`, `/status`, `/today`, `/reviews`, `/approvals`, `/catalog`, `/runs`;
   возвращает текст Telegram-summary без write-операций; `/today` может
-  запускать свежий read-only `daily-morning-report --seller-v3`, если включен
-  `--live-today`.
+  запускать свежий read-only `daily-morning-report --seller-v3` через
+  `WorkflowRunner`, если включен `--live-today`.
 - `src/takterra_agent/bot/telegram_runner.py` - read-only Telegram Bot API
   adapter: загрузка токена из внешнего файла/env, `sendMessage`,
   безопасный `sendDocument` для `artifacts.report`, одноразовый `getUpdates`

@@ -11,8 +11,9 @@ Read-only Telegram MVP - это первый безопасный слой бу�
 Текущая реализация подключает безопасный read-only Telegram adapter поверх
 того же command layer. Adapter умеет отправить preview-ответ, один раз
 обработать входящие updates через Telegram Bot API, работать в controlled
-polling loop и прикреплять безопасный файл отчета из `artifacts`. Он не
-запускает marketplace write-операции.
+polling loop и прикреплять безопасный файл отчета из `artifacts`. Live
+read-only `/today` запускается через `WorkflowRunner`. Marketplace
+write-операции не запускаются.
 
 Токен бота не хранится в проекте. Если токен был отправлен в чат или попал в
 логи, считать его засвеченным и перевыпустить через BotFather перед
@@ -24,6 +25,7 @@ production-запуском.
 src/takterra_agent/bot/commands.py
 src/takterra_agent/bot/dispatcher.py
 src/takterra_agent/bot/telegram_runner.py
+src/takterra_agent/core/workflow_runner.py
 ```
 
 ## CLI Preview
@@ -194,9 +196,9 @@ cookies, storage state и файлы вне разрешенных директ�
   `--live-today`. Остальные команды показывают уже сохраненные runtime-данные.
 - Постоянный polling требует allowlist и lock-file; второй экземпляр polling
   должен завершаться с ошибкой lock.
-- `/today` использует отдельный command lock
-  `.sessions/telegram/live_today.lock`, чтобы не запускать несколько свежих
-  ежедневных отчетов параллельно.
+- Live read-only задачи используют per-task lock
+  `.sessions/workflows/<task>.lock`; для `/today` это
+  `.sessions/workflows/daily-morning-report.lock`.
 - Прикрепление файлов ограничено безопасным `report`-артефактом и не должно
   отправлять секреты, raw snapshots или закрытые runtime-файлы.
 - Неподдерживаемые команды возвращают `unsupported_command`.
@@ -206,6 +208,7 @@ cookies, storage state и файлы вне разрешенных директ�
 ## Источники данных
 
 - `TaskRegistry` - список команд и safety metadata.
+- `WorkflowRunner` - единый read-only запуск live задач с gate/lock/safe error.
 - `data/runs/index.jsonl` - последние RunManifest по задачам.
 - `data/pending/` и `data/approved/` - только read-only для `/approvals`.
 - `data/approved/applied/` и `data/approved/closed/` - только read-only для
@@ -213,7 +216,8 @@ cookies, storage state и файлы вне разрешенных директ�
 
 ## Следующий шаг
 
-1. Расширять live read-only задачи только через отдельный `WorkflowRunner` и
-   safety policy. Следующие кандидаты: `/status`, затем `/reviews` dry-run.
+1. Перевести live `/status` на `WorkflowRunner.run_read_only("status-preflight")`.
+   Следующий кандидат после этого - `/reviews` в безопасном dry-run/read-only
+   режиме, но только после отдельного review.
 2. Write-кнопки проектировать только после `WorkflowRunner`, `SafetyGuard`,
    approved package builder для всех write-контуров и отдельного owner review.

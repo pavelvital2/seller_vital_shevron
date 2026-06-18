@@ -78,6 +78,8 @@
   task-runner и runtime-индекс `data/runs/index.jsonl`.
 - `data/planning/task_registry_runbook.md` - единый реестр задач для CLI,
   fresh-агентов и будущего Telegram-бота.
+- `data/planning/workflow_runner_runbook.md` - единый read-only запуск задач
+  через `TaskRegistry`, locks и безопасный результат для Telegram/timers.
 - `data/planning/telegram_bot_mvp_runbook.md` - read-only Telegram MVP:
   command layer, preview CLI, safe Telegram adapter, controlled polling,
   live read-only `/today`, безопасное прикрепление файла отчета из `artifacts`,

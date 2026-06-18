@@ -64,45 +64,59 @@ def test_bot_today_live_mode_builds_fresh_report(
     tmp_path: Path,
 ) -> None:
     from takterra_agent.bot import commands
+    from takterra_agent.core.workflow_runner import WorkflowRunResult
 
-    monkeypatch.setattr(commands, "LIVE_TODAY_LOCK_FILE", tmp_path / "live_today.lock")
-    monkeypatch.setattr(commands, "load_credentials", lambda: None)
+    workflow_calls: list[dict] = []
+    summary = {
+        "run_id": "daily_morning_report_v3_test",
+        "overall_status": "warning",
+        "business": {
+            "periods": {"yesterday": "2026-06-17"},
+            "ozon": {
+                "orders": {"yesterday": {"ordered_units": 10, "revenue": 2000}},
+                "finance_buyouts": {"buyout_units": 8, "buyout_amount": 1600},
+                "finance_expenses": {"total_expenses": 500},
+                "stocks": {"present_total": 100, "out_of_stock_count": 2},
+                "communications": {"unanswered_feedbacks": 1, "unanswered_questions": 0},
+            },
+            "wb": {
+                "orders": {"yesterday": {"active_orders": 12, "amount": 2400}},
+                "sales": {"yesterday": {"sales_rows": 9, "sales_amount": 1800}},
+                "finance_expenses": {"total_expenses": 600},
+                "stocks": {"quantity_total": 120, "zero_stock_count": 3},
+                "communications": {"unanswered_feedbacks": 2, "unanswered_questions": 1},
+            },
+        },
+        "actions_v3": {
+            "ozon": {"active_actions": 1, "products_in_actions": 50, "products_not_in_actions": 5},
+            "wb": {"active_actions": 2, "products_in_actions": 60, "products_not_in_actions": 6},
+        },
+        "executive_summary": ["Период отчета: 2026-06-17 00:00-23:59 MSK."],
+        "artifacts": {
+            "report": str(tmp_path / "daily_morning_report_v3.md"),
+            "summary": str(tmp_path / "summary.json"),
+        },
+    }
 
-    def fake_daily_report(**kwargs: object) -> dict:
-        assert kwargs["data_dir"] == tmp_path
-        assert kwargs["seller_v3"] is True
-        return {
-            "run_id": "daily_morning_report_v3_test",
-            "overall_status": "warning",
-            "business": {
-                "periods": {"yesterday": "2026-06-17"},
-                "ozon": {
-                    "orders": {"yesterday": {"ordered_units": 10, "revenue": 2000}},
-                    "finance_buyouts": {"buyout_units": 8, "buyout_amount": 1600},
-                    "finance_expenses": {"total_expenses": 500},
-                    "stocks": {"present_total": 100, "out_of_stock_count": 2},
-                    "communications": {"unanswered_feedbacks": 1, "unanswered_questions": 0},
-                },
-                "wb": {
-                    "orders": {"yesterday": {"active_orders": 12, "amount": 2400}},
-                    "sales": {"yesterday": {"sales_rows": 9, "sales_amount": 1800}},
-                    "finance_expenses": {"total_expenses": 600},
-                    "stocks": {"quantity_total": 120, "zero_stock_count": 3},
-                    "communications": {"unanswered_feedbacks": 2, "unanswered_questions": 1},
-                },
-            },
-            "actions_v3": {
-                "ozon": {"active_actions": 1, "products_in_actions": 50, "products_not_in_actions": 5},
-                "wb": {"active_actions": 2, "products_in_actions": 60, "products_not_in_actions": 6},
-            },
-            "executive_summary": ["Период отчета: 2026-06-17 00:00-23:59 MSK."],
-            "artifacts": {
-                "report": str(tmp_path / "daily_morning_report_v3.md"),
-                "summary": str(tmp_path / "summary.json"),
-            },
-        }
+    class FakeWorkflowRunner:
+        def __init__(self, **kwargs: object) -> None:
+            workflow_calls.append({"init": kwargs})
 
-    monkeypatch.setattr(commands, "run_daily_morning_report", fake_daily_report)
+        def run_read_only(self, task_name: str, *, inputs: dict | None = None) -> WorkflowRunResult:
+            workflow_calls.append({"task_name": task_name, "inputs": inputs})
+            return WorkflowRunResult(
+                task="daily-morning-report",
+                command="daily-morning-report",
+                title="Daily morning report",
+                ok=True,
+                status="warning",
+                mode="read_only",
+                risk="low",
+                summary=summary,
+                artifacts=summary["artifacts"],
+            )
+
+    monkeypatch.setattr(commands, "WorkflowRunner", FakeWorkflowRunner)
 
     latest_result = dispatch_message("/today", data_dir=tmp_path)
     assert latest_result.ok is False
@@ -116,6 +130,11 @@ def test_bot_today_live_mode_builds_fresh_report(
     assert "Ozon: заказы `10`" in live_result.text
     assert "WB: заказы `12`" in live_result.text
     assert live_result.artifacts["report"].endswith("daily_morning_report_v3.md")
+    assert workflow_calls[0]["init"]["data_dir"] == tmp_path
+    assert workflow_calls[1] == {
+        "task_name": "daily-morning-report",
+        "inputs": {"seller_v3": True},
+    }
 
 
 def test_bot_approvals_summarizes_open_packages(tmp_path: Path) -> None:
