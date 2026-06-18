@@ -23,6 +23,25 @@ def canonical_checksum(value: Any) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def action_rows_checksum(actions: list[dict[str, Any]]) -> str:
+    return canonical_checksum([_canonical_action(action) for action in actions])
+
+
+def verify_action_rows_checksum(
+    *,
+    actions: list[dict[str, Any]],
+    expected_checksum: str,
+) -> None:
+    if not expected_checksum:
+        return
+    actual_checksum = action_rows_checksum(actions)
+    if actual_checksum != expected_checksum:
+        raise RuntimeError(
+            "approved package action checksum mismatch: "
+            f"expected {expected_checksum}, got {actual_checksum}"
+        )
+
+
 def file_sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -111,3 +130,8 @@ def _read_json(path: Path) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError):
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _canonical_action(action: dict[str, Any]) -> dict[str, Any]:
+    ignored = {"approved", "approved_at", "approved_by", "state"}
+    return {key: value for key, value in sorted(action.items()) if key not in ignored}

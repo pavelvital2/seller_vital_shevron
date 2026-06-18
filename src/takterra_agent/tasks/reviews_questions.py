@@ -16,11 +16,13 @@ from takterra_agent.marketplaces.ozon.adapter import OzonSellerAdapter
 from takterra_agent.marketplaces.wb.communications_adapter import WbCommunicationsAdapter
 from takterra_agent.reports.writer import ensure_dir, write_json
 from takterra_agent.safety.approvals import (
+    action_rows_checksum,
     apply_marker_for,
     approval_identity_from_path,
     assert_apply_not_repeated,
     canonical_checksum,
     mark_approved_applied,
+    verify_action_rows_checksum,
 )
 
 
@@ -569,6 +571,177 @@ def _write_pending_package(
     }
 
 
+def _is_approvable_action(action: dict[str, Any]) -> bool:
+    action_type = action.get("action_type")
+    platform = action.get("platform")
+    if action_type == "public_review_reply" and platform in {"ozon", "wb"}:
+        return bool(str(action.get("draft_text") or "").strip())
+    if action_type == "question_answer" and platform == "wb":
+        return bool(str(action.get("draft_text") or "").strip())
+    if action_type == "mark_review_viewed" and platform == "ozon":
+        return True
+    return False
+
+
+def _action_matches_approval_mode(action: dict[str, Any], mode: str) -> bool:
+    if mode == "all":
+        return True
+    if mode == "replies-only":
+        return action.get("action_type") in {"public_review_reply", "question_answer"}
+    if mode == "mark-viewed-only":
+        return action.get("action_type") == "mark_review_viewed"
+    raise ValueError(f"Unsupported reviews/questions approval mode: {mode}")
+
+
+def _approved_action(action: dict[str, Any], *, approved_by: str, approved_at: str) -> dict[str, Any]:
+    return {
+        **action,
+        "approved": True,
+        "state": "approved",
+        "approved_by": approved_by,
+        "approved_at": approved_at,
+    }
+
+
+def _write_reviews_questions_approved_report(
+    path: Path,
+    *,
+    package: dict[str, Any],
+    skipped_actions: list[dict[str, Any]],
+    artifacts: dict[str, str],
+) -> None:
+    action_counts = Counter(str(action.get("action_type") or "") for action in package["actions"])
+    skipped_counts = Counter(str(action.get("action_type") or "") for action in skipped_actions)
+    lines = [
+        "# Reviews And Questions Approved Package",
+        "",
+        f"Approved ID: `{package['approved_id']}`",
+        f"Pending ID: `{package['pending_id']}`",
+        f"Source run: `{package['source_run_id']}`",
+        f"Mode: `{package['mode']}`",
+        f"Created at: `{package['created_at']}`",
+        f"Approved by: `{package['approved_by']}`",
+        "",
+        "## Summary",
+        "",
+        f"- selected actions: `{package['selected_actions_count']}`",
+        f"- skipped actions: `{len(skipped_actions)}`",
+        f"- actions checksum: `{package['actions_checksum']}`",
+        "",
+        "## Selected Action Counts",
+        "",
+    ]
+    if not action_counts:
+        lines.append("- none")
+    for action_type, count in sorted(action_counts.items()):
+        lines.append(f"- `{action_type}`: `{count}`")
+    lines.extend(["", "## Skipped Action Counts", ""])
+    if not skipped_counts:
+        lines.append("- none")
+    for action_type, count in sorted(skipped_counts.items()):
+        lines.append(f"- `{action_type}`: `{count}`")
+    lines.extend(["", "## Safety", ""])
+    lines.append("- Apply still requires `--confirmed-by-user`.")
+    lines.append("- Apply will verify `actions_checksum` before marketplace write operations.")
+    lines.append("- Apply idempotency guard blocks repeated use of the same approved package.")
+    lines.extend(["", "## Artifacts", ""])
+    for key, value in sorted(artifacts.items()):
+        lines.append(f"- `{key}`: `{value}`")
+    lines.append("")
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def run_reviews_questions_prepare_approved(
+    *,
+    data_dir: Path = Path("data"),
+    source_pending: str,
+    mode: str = "all",
+    approved_id: str | None = None,
+    approved_by: str = "owner",
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    pending_dir = data_dir / "pending" / source_pending
+    pending_manifest_path = pending_dir / "manifest.json"
+    draft_answers_path = pending_dir / "draft_answers.json"
+    if not pending_manifest_path.exists():
+        raise FileNotFoundError(f"Pending manifest not found: {pending_manifest_path}")
+    if not draft_answers_path.exists():
+        raise FileNotFoundError(f"Pending draft answers not found: {draft_answers_path}")
+
+    pending_manifest = _safe_read_json(pending_manifest_path)
+    draft_answers = _safe_read_json(draft_answers_path)
+    if not isinstance(pending_manifest, dict):
+        raise RuntimeError(f"Pending manifest is not a JSON object: {pending_manifest_path}")
+    if not isinstance(draft_answers, dict) or not isinstance(draft_answers.get("actions"), list):
+        raise RuntimeError(f"Pending draft answers must contain actions list: {draft_answers_path}")
+
+    source_run_id = str(pending_manifest.get("run_id") or draft_answers.get("run_id") or "")
+    if not source_run_id:
+        raise RuntimeError(f"Pending package has no source run id: {source_pending}")
+    raw_actions = [action for action in draft_answers["actions"] if isinstance(action, dict)]
+    approved_at = _now().isoformat(timespec="seconds")
+    selected_actions: list[dict[str, Any]] = []
+    skipped_actions: list[dict[str, Any]] = []
+    for action in raw_actions:
+        if _is_approvable_action(action) and _action_matches_approval_mode(action, mode):
+            selected_actions.append(_approved_action(action, approved_by=approved_by, approved_at=approved_at))
+        else:
+            skipped_actions.append(action)
+    if not selected_actions:
+        raise RuntimeError(f"No approvable reviews/questions actions selected for mode: {mode}")
+
+    approved_id = approved_id or f"{source_pending}_approved"
+    approved_dir = data_dir / "approved" / approved_id
+    if approved_dir.exists() and not overwrite:
+        raise FileExistsError(f"Approved package already exists: {approved_dir}")
+    ensure_dir(approved_dir)
+
+    created_at = _now().isoformat(timespec="seconds")
+    actions_checksum = action_rows_checksum(selected_actions)
+    package = {
+        "schema_version": "approval-package/v1",
+        "package_type": "reviews_questions",
+        "status": "approved",
+        "approved_id": approved_id,
+        "pending_id": source_pending,
+        "source_run_id": source_run_id,
+        "source_pending_manifest": str(pending_manifest_path),
+        "created_at": created_at,
+        "approved_by": approved_by,
+        "mode": mode,
+        "source_actions_count": len(raw_actions),
+        "selected_actions_count": len(selected_actions),
+        "skipped_actions_count": len(raw_actions) - len(selected_actions),
+        "actions_checksum": actions_checksum,
+        "actions": selected_actions,
+    }
+    package_path = approved_dir / "approved_apply_plan.json"
+    skipped_path = approved_dir / "skipped_actions.json"
+    report_path = approved_dir / "APPROVED_PACKAGE.md"
+    artifacts = {
+        "approved_dir": str(approved_dir),
+        "approved_package": str(package_path),
+        "skipped_actions": str(skipped_path),
+        "report": str(report_path),
+        "source_pending_manifest": str(pending_manifest_path),
+        "source_draft_answers": str(draft_answers_path),
+    }
+    write_json(package_path, package)
+    write_json(skipped_path, skipped_actions)
+    _write_reviews_questions_approved_report(report_path, package=package, skipped_actions=skipped_actions, artifacts=artifacts)
+
+    return {
+        "approved_id": approved_id,
+        "pending_id": source_pending,
+        "source_run_id": source_run_id,
+        "mode": mode,
+        "selected_actions_count": len(selected_actions),
+        "skipped_actions_count": len(raw_actions) - len(selected_actions),
+        "actions_checksum": actions_checksum,
+        "artifacts": artifacts,
+    }
+
+
 def _build_report(
     *,
     run_id: str,
@@ -808,7 +981,12 @@ def _approved_actions(approved_path: Path) -> list[dict[str, Any]]:
     actions = data.get("actions")
     if not isinstance(actions, list):
         raise RuntimeError(f"Approved plan has no actions list: {approved_path}")
-    return [action for action in actions if isinstance(action, dict)]
+    approved_actions = [action for action in actions if isinstance(action, dict)]
+    verify_action_rows_checksum(
+        actions=approved_actions,
+        expected_checksum=str(data.get("actions_checksum") or ""),
+    )
+    return approved_actions
 
 
 def _build_apply_report(

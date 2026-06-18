@@ -385,6 +385,10 @@ stable checksum helpers, runtime marker
 write-запросов, если approved/pending пакет уже отмечен marker или уже есть в
 `data/runs/index.jsonl` как примененный.
 
+Ветка `feature/approval-package-builder` начинает следующий слой: добавляет
+builder approved package для `reviews-questions`, checksum action rows и
+проверку checksum в `apply-reviews-questions` перед write-операциями.
+
 Lifecycle:
 
 ```text
@@ -394,7 +398,9 @@ pending -> approved -> applied -> verified -> closed
 Что сделать:
 
 1. Описать единый JSON-формат pending/approved package.
+   Первый формат `approval-package/v1` добавлен для `reviews-questions`.
 2. Добавить checksum action rows.
+   Для `reviews-questions` checksum считается и проверяется перед apply.
 3. Добавить idempotency guard: старый approved нельзя применить повторно.
    Первый общий guard уже добавлен в `src/takterra_agent/safety/approvals.py`.
 4. После успешного apply обновлять status package.
@@ -419,8 +425,9 @@ approvals close --approved-id <id>
 - ручная сборка approved JSON больше не нужна для типовых сценариев.
 
 Оставшийся gap этапа: единый approved package builder и CLI/Telegram-команды
-`approvals status/close`. Сейчас guard уже защищает apply-команды, но
-унифицированное создание approved-пакетов еще не реализовано.
+`approvals status/close` для всех операций. Сейчас guard уже защищает
+apply-команды, а создание approved-пакетов реализовано только для
+`reviews-questions`.
 
 ## Этап 4. Централизованный safety guard
 

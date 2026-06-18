@@ -29,10 +29,40 @@ read-only -> draft answers -> owner review -> approved -> apply -> verify -> res
 
 Approved-пакет должен содержать:
 
+- `schema_version: "approval-package/v1"` для новых пакетов;
 - верхнеуровневый `status: "approved"`;
+- `pending_id` и `source_run_id`;
+- `actions_checksum` для применяемых строк;
 - список `actions`;
 - у каждой применяемой строки `approved: true`;
 - у каждой применяемой строки `state: "approved"`.
+
+Штатный способ создать approved-пакет после согласования владельца:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m takterra_agent.cli prepare-reviews-questions-approved \
+  --source-pending <pending_id> \
+  --mode all
+```
+
+Режимы:
+
+- `all` - ответы на отзывы/вопросы и отметка Ozon-отзывов просмотренными;
+- `replies-only` - только публичные ответы и WB-вопросы;
+- `mark-viewed-only` - только отметка Ozon-отзывов просмотренными.
+
+Команда сохраняет:
+
+```text
+data/approved/<approved_id>/approved_apply_plan.json
+data/approved/<approved_id>/skipped_actions.json
+data/approved/<approved_id>/APPROVED_PACKAGE.md
+```
+
+`apply-reviews-questions` проверяет `actions_checksum` до внешних write-
+операций. Если approved JSON был изменен после создания, apply должен
+завершиться ошибкой checksum mismatch.
 
 Если `status: "approved"` есть только наверху, но у строк нет
 `approved: true`, apply может завершиться техническим `ok`, но ничего не

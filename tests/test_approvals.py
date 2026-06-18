@@ -7,6 +7,7 @@ import pytest
 
 from takterra_agent.core.run_manifest import manifest_from_summary, write_run_manifest
 from takterra_agent.safety.approvals import (
+    action_rows_checksum,
     apply_marker_for,
     assert_apply_not_repeated,
     canonical_checksum,
@@ -16,6 +17,22 @@ from takterra_agent.safety.approvals import (
 
 def test_canonical_checksum_is_stable_for_key_order() -> None:
     assert canonical_checksum({"b": 2, "a": 1}) == canonical_checksum({"a": 1, "b": 2})
+
+
+def test_action_rows_checksum_ignores_approval_metadata_only() -> None:
+    base = [
+        {
+            "platform": "wb",
+            "source_id": "feedback-1",
+            "action_type": "public_review_reply",
+            "draft_text": "Спасибо!",
+        }
+    ]
+    approved = [{**base[0], "approved": True, "state": "approved", "approved_by": "owner"}]
+    changed = [{**base[0], "draft_text": "Другой текст"}]
+
+    assert action_rows_checksum(base) == action_rows_checksum(approved)
+    assert action_rows_checksum(base) != action_rows_checksum(changed)
 
 
 def test_apply_marker_blocks_repeated_apply(tmp_path: Path) -> None:

@@ -41,7 +41,10 @@
   `pending_id/approved_id/applied_by_run_id`, команды `runs list/latest/show`.
 - `src/takterra_agent/safety/approvals.py` - approval/idempotency helpers:
   stable checksum, marker `data/approved/applied/*.applied.json`, проверка
-  повторного apply по marker и `RunManifest` index.
+  повторного apply по marker и `RunManifest` index, checksum action rows.
+- `prepare-reviews-questions-approved` - CLI-команда создания approved package
+  из `data/pending/<pending_id>/` для отзывов/вопросов с
+  `actions_checksum`.
 - `src/takterra_agent/tasks/ozon_elastic_apply.py` - применение согласованного
   Ozon Elastic dry-run с fresh preflight, drift-check и verify.
 - `src/takterra_agent/tasks/ozon_cpc_optimization_plan.py` - SKU-level dry-run
@@ -92,7 +95,9 @@ Ozon CDP port по умолчанию: `9544`.
 - `data/runs/` - runtime reports, не коммитить.
 - `data/runs/index.jsonl` - runtime-индекс `RunManifest`, не коммитить.
 - `data/pending/` - pending packages перед approval, не коммитить.
-- `data/approved/` - approved packages, не коммитить.
+- `data/approved/` - approved packages, включая
+  `approved_apply_plan.json`/`skipped_actions.json`/`APPROVED_PACKAGE.md`, не
+  коммитить.
 - `data/approved/applied/` - runtime-маркеры уже примененных approved/pending
   пакетов для idempotency guard, не коммитить.
 - `data/reports/` - экспортные отчеты, не коммитить без отдельного решения.

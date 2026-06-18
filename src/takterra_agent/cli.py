@@ -15,7 +15,11 @@ from takterra_agent.tasks.ozon_cpc_bids_apply import run_ozon_cpc_bids_apply
 from takterra_agent.tasks.ozon_elastic_apply import run_ozon_elastic_apply
 from takterra_agent.tasks.ozon_cpc_optimization_plan import CpcOptimizationThresholds, run_ozon_cpc_optimization_plan
 from takterra_agent.tasks.ozon_elastic_plan import run_ozon_elastic_plan
-from takterra_agent.tasks.reviews_questions import run_reviews_questions, run_reviews_questions_apply
+from takterra_agent.tasks.reviews_questions import (
+    run_reviews_questions,
+    run_reviews_questions_apply,
+    run_reviews_questions_prepare_approved,
+)
 from takterra_agent.tasks.status_preflight import run_status_preflight
 from takterra_agent.tasks.wb_actions_discount_apply import run_wb_actions_discount_apply
 from takterra_agent.tasks.wb_actions_discount_plan import run_wb_actions_discount_plan
@@ -593,6 +597,42 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Required explicit confirmation for marketplace write operations.",
     )
+
+    prepare_reviews_questions_approved = subparsers.add_parser(
+        "prepare-reviews-questions-approved",
+        help="Create approved reviews/questions package from a pending dry-run package.",
+    )
+    prepare_reviews_questions_approved.add_argument(
+        "--source-pending",
+        required=True,
+        help="Pending package id from data/pending/<id>.",
+    )
+    prepare_reviews_questions_approved.add_argument(
+        "--mode",
+        choices=("all", "replies-only", "mark-viewed-only"),
+        default="all",
+        help="Which approved actions to include.",
+    )
+    prepare_reviews_questions_approved.add_argument(
+        "--approved-id",
+        default=None,
+        help="Optional approved package id. Defaults to <source-pending>_approved.",
+    )
+    prepare_reviews_questions_approved.add_argument(
+        "--approved-by",
+        default="owner",
+        help="Approval actor label stored in package metadata.",
+    )
+    prepare_reviews_questions_approved.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Allow replacing an existing approved package directory.",
+    )
+    prepare_reviews_questions_approved.add_argument(
+        "--data-dir",
+        default="data",
+        help="Project data directory.",
+    )
     return parser
 
 
@@ -864,6 +904,18 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["overall_status"] in {"ok", "warning"} else 2
+
+    if args.command == "prepare-reviews-questions-approved":
+        result = run_reviews_questions_prepare_approved(
+            data_dir=Path(args.data_dir),
+            source_pending=args.source_pending,
+            mode=args.mode,
+            approved_id=args.approved_id,
+            approved_by=args.approved_by,
+            overwrite=args.overwrite,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
 
     parser.error(f"Unknown command: {args.command}")
     return 2

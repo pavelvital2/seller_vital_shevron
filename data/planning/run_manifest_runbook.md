@@ -103,6 +103,23 @@ Marker является runtime-файлом и не коммитится. Он 
 поля: `approved_id`, `apply_run_id`, `task`, `status`, `run_manifest`,
 `checksum`, `applied_at`.
 
+## Approved Package Builder
+
+Первый builder подключен для отзывов и вопросов:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m takterra_agent.cli prepare-reviews-questions-approved \
+  --source-pending <pending_id> \
+  --mode all|replies-only|mark-viewed-only
+```
+
+Builder читает `data/pending/<pending_id>/manifest.json` и
+`draft_answers.json`, выбирает только поддерживаемые действия, проставляет
+`approved: true`, `state: "approved"`, `approved_by`, `approved_at`, считает
+`actions_checksum` и сохраняет пакет в `data/approved/<approved_id>/`.
+`apply-reviews-questions` проверяет checksum перед write-операциями.
+
 ## CLI
 
 Список последних запусков:
@@ -161,7 +178,7 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli r
 
 ## Следующий шаг
 
-1. Добавить единый builder approved package с checksum action rows.
+1. Распространить builder approved package на акции, ставки, карточки и цены.
 2. Подключить будущий `TaskRegistry` к `task`, `mode`, `risk`, `marketplaces`
    и `runbook_path`.
 3. Использовать `data/runs/index.jsonl` для Telegram-команд `/status`,

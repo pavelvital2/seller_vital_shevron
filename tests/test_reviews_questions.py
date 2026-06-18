@@ -4,6 +4,8 @@ from datetime import datetime
 import json
 from pathlib import Path
 
+import pytest
+
 from takterra_agent.config import (
     WbCredentials,
     load_ozon_performance_credentials,
@@ -12,6 +14,7 @@ from takterra_agent.config import (
 )
 from takterra_agent.marketplaces.wb.communications_adapter import WbCommunicationsAdapter
 from takterra_agent.tasks.reviews_questions import (
+    _approved_actions,
     _build_report,
     build_actions,
     classify_item,
@@ -19,6 +22,7 @@ from takterra_agent.tasks.reviews_questions import (
     draft_question_reply,
     normalize_wb_feedback,
     normalize_wb_question,
+    run_reviews_questions_prepare_approved,
 )
 
 
@@ -307,3 +311,180 @@ def test_wb_question_answer_uses_answer_object_payload(monkeypatch) -> None:
         "answer": {"text": "Ответ"},
         "state": "wbRu",
     }
+
+
+def test_prepare_reviews_questions_approved_builds_replies_package(tmp_path: Path) -> None:
+    pending_id = "reviews_questions_test_pending"
+    pending_dir = tmp_path / "pending" / pending_id
+    pending_dir.mkdir(parents=True)
+    (pending_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "pending_id": pending_id,
+                "run_id": "reviews_questions_test",
+                "status": "pending_owner_review",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    actions = [
+        {
+            "platform": "wb",
+            "source_type": "review",
+            "source_id": "feedback-1",
+            "action_type": "public_review_reply",
+            "state": "pending_owner_confirmation",
+            "draft_text": "Спасибо за отзыв!",
+        },
+        {
+            "platform": "ozon",
+            "source_type": "review",
+            "source_id": "review-1",
+            "action_type": "mark_review_viewed",
+            "state": "pending_owner_confirmation",
+            "draft_text": "",
+        },
+        {
+            "platform": "wb",
+            "source_type": "question",
+            "source_id": "question-1",
+            "action_type": "manual_question_review",
+            "state": "needs_owner_input",
+            "draft_text": "",
+        },
+    ]
+    (pending_dir / "draft_answers.json").write_text(
+        json.dumps({"run_id": "reviews_questions_test", "actions": actions}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    result = run_reviews_questions_prepare_approved(
+        data_dir=tmp_path,
+        source_pending=pending_id,
+        mode="replies-only",
+        approved_by="owner-test",
+    )
+
+    package_path = Path(result["artifacts"]["approved_package"])
+    package = json.loads(package_path.read_text(encoding="utf-8"))
+
+    assert result["selected_actions_count"] == 1
+    assert result["skipped_actions_count"] == 2
+    assert package["status"] == "approved"
+    assert package["schema_version"] == "approval-package/v1"
+    assert package["pending_id"] == pending_id
+    assert package["actions"][0]["approved"] is True
+    assert package["actions"][0]["state"] == "approved"
+    assert package["actions"][0]["approved_by"] == "owner-test"
+    assert _approved_actions(package_path) == package["actions"]
+
+
+def test_prepare_reviews_questions_approved_builds_mark_viewed_package(tmp_path: Path) -> None:
+    pending_id = "reviews_questions_test_pending"
+    pending_dir = tmp_path / "pending" / pending_id
+    pending_dir.mkdir(parents=True)
+    (pending_dir / "manifest.json").write_text(
+        json.dumps({"run_id": "reviews_questions_test"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    actions = [
+        {
+            "platform": "ozon",
+            "source_type": "review",
+            "source_id": "review-1",
+            "action_type": "mark_review_viewed",
+            "state": "pending_owner_confirmation",
+            "draft_text": "",
+        },
+        {
+            "platform": "wb",
+            "source_type": "review",
+            "source_id": "feedback-1",
+            "action_type": "public_review_reply",
+            "state": "pending_owner_confirmation",
+            "draft_text": "Спасибо!",
+        },
+    ]
+    (pending_dir / "draft_answers.json").write_text(
+        json.dumps({"actions": actions}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    result = run_reviews_questions_prepare_approved(
+        data_dir=tmp_path,
+        source_pending=pending_id,
+        mode="mark-viewed-only",
+    )
+
+    package = json.loads(Path(result["artifacts"]["approved_package"]).read_text(encoding="utf-8"))
+
+    assert [action["action_type"] for action in package["actions"]] == ["mark_review_viewed"]
+    assert result["selected_actions_count"] == 1
+
+
+def test_approved_actions_rejects_checksum_mismatch(tmp_path: Path) -> None:
+    pending_id = "reviews_questions_test_pending"
+    pending_dir = tmp_path / "pending" / pending_id
+    pending_dir.mkdir(parents=True)
+    (pending_dir / "manifest.json").write_text(
+        json.dumps({"run_id": "reviews_questions_test"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (pending_dir / "draft_answers.json").write_text(
+        json.dumps(
+            {
+                "actions": [
+                    {
+                        "platform": "wb",
+                        "source_type": "review",
+                        "source_id": "feedback-1",
+                        "action_type": "public_review_reply",
+                        "state": "pending_owner_confirmation",
+                        "draft_text": "Спасибо!",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    result = run_reviews_questions_prepare_approved(data_dir=tmp_path, source_pending=pending_id)
+    package_path = Path(result["artifacts"]["approved_package"])
+    package = json.loads(package_path.read_text(encoding="utf-8"))
+    package["actions"][0]["draft_text"] = "Другой текст"
+    package_path.write_text(json.dumps(package, ensure_ascii=False), encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="checksum mismatch"):
+        _approved_actions(package_path)
+
+
+def test_prepare_reviews_questions_approved_rejects_empty_selection(tmp_path: Path) -> None:
+    pending_id = "reviews_questions_test_pending"
+    pending_dir = tmp_path / "pending" / pending_id
+    pending_dir.mkdir(parents=True)
+    (pending_dir / "manifest.json").write_text(
+        json.dumps({"run_id": "reviews_questions_test"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (pending_dir / "draft_answers.json").write_text(
+        json.dumps(
+            {
+                "actions": [
+                    {
+                        "platform": "wb",
+                        "source_type": "question",
+                        "source_id": "question-1",
+                        "action_type": "manual_question_review",
+                        "state": "needs_owner_input",
+                        "draft_text": "",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="No approvable"):
+        run_reviews_questions_prepare_approved(data_dir=tmp_path, source_pending=pending_id)
