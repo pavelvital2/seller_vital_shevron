@@ -10,6 +10,7 @@ import subprocess
 from typing import Any
 
 from takterra_agent.config import AppCredentials
+from takterra_agent.core.run_manifest import manifest_from_summary, write_run_manifest
 from takterra_agent.http import ApiError
 from takterra_agent.marketplaces.ozon.adapter import OzonSellerAdapter
 from takterra_agent.marketplaces.wb.communications_adapter import WbCommunicationsAdapter
@@ -721,6 +722,7 @@ def run_reviews_questions(
         "run_dir": str(run_dir),
         "processed_items": str(processed_items_path),
         "actions": str(actions_path),
+        "run_manifest": str(run_dir / "manifest.json"),
     }
 
     report_text = _build_report(
@@ -766,6 +768,7 @@ def run_reviews_questions(
         "overall_status": overall_status,
         "mode": "read_only_dry_run",
         "marketplace": marketplace,
+        "pending_id": f"{run_id}_pending",
         "items_count": len(normalized_items),
         "actions_count": len(actions),
         "sources": sources,
@@ -774,6 +777,18 @@ def run_reviews_questions(
     summary_path = run_dir / "summary.json"
     write_json(summary_path, summary)
     summary["artifacts"]["summary"] = str(summary_path)
+    write_run_manifest(
+        data_dir=data_dir,
+        run_dir=run_dir,
+        manifest=manifest_from_summary(
+            summary=summary,
+            task="reviews-questions",
+            mode="dry_run",
+            risk="low",
+            marketplaces=[marketplace] if marketplace != "all" else ["ozon", "wb"],
+            inputs={"marketplace": marketplace, "limit": limit},
+        ),
+    )
     return summary
 
 

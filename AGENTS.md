@@ -67,6 +67,8 @@
 - `data/planning/wb_cabinet_map.md` - подробная карта ЛК Wildberries:
   вкладки, ссылки, назначение, риски и API-first маршруты.
 - `data/planning/status_preflight_runbook.md` - единая проверка состояния.
+- `data/planning/run_manifest_runbook.md` - единый паспорт запусков
+  task-runner и runtime-индекс `data/runs/index.jsonl`.
 - `data/planning/daily_morning_report_runbook.md` - утренний отчет.
 - `data/planning/reviews_questions_runbook.md` - отзывы и вопросы.
 - `data/planning/ozon_messenger_runbook.md` - Ozon Messenger/уведомления:

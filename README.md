@@ -39,6 +39,8 @@ data/catalog/unified/
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/pytest -q
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli --help
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli status-preflight --skip-lk
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli runs list
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli runs latest --task status-preflight
 ```
 
 После получения API credentials:
@@ -61,6 +63,8 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli i
 Основные постоянные инструкции находятся в `data/planning/`:
 
 - `status_preflight_runbook.md` - единая проверка состояния.
+- `run_manifest_runbook.md` - единый паспорт запусков task-runner и runtime-
+  индекс `data/runs/index.jsonl`.
 - `lk_connection_runbook.md` - подключение ЛК Ozon/WB.
 - `session_manager_runbook.md` - управление LK-сессиями и восстановление.
 - `ozon_cabinet_map.md` - подробная карта ЛК Ozon.

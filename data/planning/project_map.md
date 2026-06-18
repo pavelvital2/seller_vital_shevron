@@ -35,6 +35,9 @@
 - `src/takterra_agent/` - рабочий Python package. Имя оставлено временно для
   снижения риска при переносе; будущий rename stage должен переименовать пакет
   в универсальный `seller_agent`, подходящий под любой магазин.
+- `src/takterra_agent/core/run_manifest.py` - MVP единого паспорта запусков:
+  запись `manifest.json`, runtime-индекс `data/runs/index.jsonl`, команды
+  `runs list/latest/show`.
 - `src/takterra_agent/tasks/ozon_elastic_apply.py` - применение согласованного
   Ozon Elastic dry-run с fresh preflight, drift-check и verify.
 - `src/takterra_agent/tasks/ozon_cpc_optimization_plan.py` - SKU-level dry-run
@@ -83,6 +86,7 @@ Ozon CDP port по умолчанию: `9544`.
 - `data/catalog/mapping/` - mapping Ozon/WB товаров.
 - `data/catalog/unified/` - будущий план унификации seller SKU.
 - `data/runs/` - runtime reports, не коммитить.
+- `data/runs/index.jsonl` - runtime-индекс `RunManifest`, не коммитить.
 - `data/pending/` - pending packages перед approval, не коммитить.
 - `data/approved/` - approved packages, не коммитить.
 - `data/reports/` - экспортные отчеты, не коммитить без отдельного решения.
@@ -115,6 +119,7 @@ Ozon CDP port по умолчанию: `9544`.
 - `data/planning/ozon_cabinet_map.md`
 - `data/planning/wb_cabinet_map.md`
 - `data/planning/status_preflight_runbook.md`
+- `data/planning/run_manifest_runbook.md`
 - `data/planning/daily_morning_report_runbook.md`
 - `data/planning/reviews_questions_runbook.md`
 - `data/planning/ozon_messenger_runbook.md` - Ozon Messenger/уведомления:

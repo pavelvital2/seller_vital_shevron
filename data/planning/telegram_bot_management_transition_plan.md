@@ -150,6 +150,13 @@ data/
 
 ## Этап 1. Единый `RunManifest`
 
+Статус: `in_progress`.
+
+MVP начат 2026-06-18 в ветке `feature/run-manifest-stage-1`: добавлен
+`src/takterra_agent/core/run_manifest.py`, runtime-индекс
+`data/runs/index.jsonl`, CLI `runs list/latest/show` и подключение к
+`status-preflight`, `daily-morning-report`, `reviews-questions`.
+
 Цель: любой запуск task-runner должен иметь общий машинно-читаемый паспорт.
 
 Минимальная схема:
@@ -184,6 +191,7 @@ data/
 ```bash
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli runs list
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli runs latest --task status-preflight
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli runs show --run-id <run_id>
 ```
 
 Критерий готовности:

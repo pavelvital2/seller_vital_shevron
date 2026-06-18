@@ -11,6 +11,7 @@ from urllib.error import URLError
 from urllib.request import urlopen
 
 from takterra_agent.config import AppCredentials
+from takterra_agent.core.run_manifest import manifest_from_summary, write_run_manifest
 from takterra_agent.marketplaces.ozon.adapter import OzonSellerAdapter
 from takterra_agent.marketplaces.ozon.performance_adapter import OzonPerformanceAdapter
 from takterra_agent.marketplaces.wb.adapter import WbContentAdapter
@@ -416,10 +417,12 @@ def run_status_preflight(
         "run_dir": str(run_dir),
         "summary": str(run_dir / "summary.json"),
         "report": str(run_dir / "status_preflight_report.md"),
+        "run_manifest": str(run_dir / "manifest.json"),
     }
     result = {
         "run_id": run_id,
         "started_at": started_at.isoformat(timespec="seconds"),
+        "mode": "read_only",
         "overall_status": _overall_status(checks),
         "checks": checks,
         "artifacts": artifacts,
@@ -427,4 +430,16 @@ def run_status_preflight(
 
     write_json(run_dir / "summary.json", result)
     _write_status_report(run_dir / "status_preflight_report.md", result=result)
+    write_run_manifest(
+        data_dir=data_dir,
+        run_dir=run_dir,
+        manifest=manifest_from_summary(
+            summary=result,
+            task="status-preflight",
+            mode="read_only",
+            risk="none",
+            marketplaces=["ozon", "wb"],
+            inputs={"include_lk": include_lk},
+        ),
+    )
     return result

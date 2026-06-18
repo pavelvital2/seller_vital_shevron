@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 
 from takterra_agent.config import load_credentials
+from takterra_agent.core.run_manifest import find_run, latest_run, list_runs
 from takterra_agent.tasks.catalog_fetch import run_catalog_fetch
 from takterra_agent.tasks.actions_apply import run_actions_apply
 from takterra_agent.tasks.daily_morning_report import run_daily_morning_report
@@ -29,6 +30,43 @@ from takterra_agent.sessions.manager import install_systemd_units, restore_ozon_
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="takterra-agent")
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    runs = subparsers.add_parser(
+        "runs",
+        help="List and inspect RunManifest entries from data/runs/index.jsonl.",
+    )
+    runs.add_argument(
+        "action",
+        choices=("list", "latest", "show"),
+        help="Run manifest action.",
+    )
+    runs.add_argument(
+        "--data-dir",
+        default="data",
+        help="Project data directory.",
+    )
+    runs.add_argument(
+        "--task",
+        default=None,
+        help="Optional task filter, for example status-preflight.",
+    )
+    runs.add_argument(
+        "--status",
+        default=None,
+        choices=("ok", "warning", "blocked", "error"),
+        help="Optional manifest status filter.",
+    )
+    runs.add_argument(
+        "--limit",
+        type=int,
+        default=20,
+        help="Maximum rows for runs list.",
+    )
+    runs.add_argument(
+        "--run-id",
+        default=None,
+        help="Run id for runs show.",
+    )
 
     fetch_catalog = subparsers.add_parser(
         "fetch-catalog",
@@ -561,6 +599,28 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if args.command == "runs":
+        data_dir = Path(args.data_dir)
+        if args.action == "list":
+            result = {
+                "rows": list_runs(data_dir=data_dir, task=args.task, status=args.status, limit=args.limit),
+                "artifacts": {"index": str(data_dir / "runs" / "index.jsonl")},
+            }
+        elif args.action == "latest":
+            result = {
+                "run": latest_run(data_dir=data_dir, task=args.task, status=args.status),
+                "artifacts": {"index": str(data_dir / "runs" / "index.jsonl")},
+            }
+        else:
+            if not args.run_id:
+                parser.error("runs show requires --run-id")
+            result = {
+                "run": find_run(data_dir=data_dir, run_id=args.run_id),
+                "artifacts": {"index": str(data_dir / "runs" / "index.jsonl")},
+            }
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result.get("run") is not None or result.get("rows") is not None else 2
 
     if args.command == "fetch-catalog":
         result = run_catalog_fetch(

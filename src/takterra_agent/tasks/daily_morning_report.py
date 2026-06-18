@@ -9,6 +9,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from takterra_agent.config import AppCredentials
+from takterra_agent.core.run_manifest import manifest_from_summary, write_run_manifest
 from takterra_agent.marketplaces.ozon.adapter import OzonSellerAdapter
 from takterra_agent.marketplaces.wb.communications_adapter import WbCommunicationsAdapter
 from takterra_agent.marketplaces.wb.finance_adapter import WbFinanceAdapter
@@ -2111,6 +2112,7 @@ def run_daily_morning_report(
         "run_dir": str(run_dir),
         "summary": str(run_dir / "summary.json"),
         "report": str(run_dir / report_name),
+        "run_manifest": str(run_dir / "manifest.json"),
     }
     result = {
         "run_id": run_id,
@@ -2140,4 +2142,21 @@ def run_daily_morning_report(
         _write_seller_v2_report(run_dir / report_name, result)
     else:
         _write_report(run_dir / report_name, result)
+    write_run_manifest(
+        data_dir=data_dir,
+        run_dir=run_dir,
+        manifest=manifest_from_summary(
+            summary=result,
+            task="daily-morning-report",
+            mode="read_only",
+            risk="low",
+            marketplaces=["ozon", "wb"],
+            inputs={
+                "refresh_preflight": refresh_preflight,
+                "seller_v2": seller_v2,
+                "seller_v3": seller_v3,
+            },
+            source_run_ids=[str(preflight.get("run_id"))] if isinstance(preflight, dict) and preflight.get("run_id") else [],
+        ),
+    )
     return result
