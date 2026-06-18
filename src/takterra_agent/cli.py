@@ -21,6 +21,7 @@ from takterra_agent.tasks.reviews_questions import (
     run_reviews_questions_apply,
     run_reviews_questions_prepare_approved,
 )
+from takterra_agent.tasks.registry import get_task_definition, list_task_definitions
 from takterra_agent.tasks.status_preflight import run_status_preflight
 from takterra_agent.tasks.wb_actions_discount_apply import run_wb_actions_discount_apply
 from takterra_agent.tasks.wb_actions_discount_plan import run_wb_actions_discount_plan
@@ -71,6 +72,44 @@ def build_parser() -> argparse.ArgumentParser:
         "--run-id",
         default=None,
         help="Run id for runs show.",
+    )
+
+    tasks = subparsers.add_parser(
+        "tasks",
+        help="List and inspect task metadata from TaskRegistry.",
+    )
+    tasks.add_argument(
+        "action",
+        choices=("list", "show"),
+        help="Task registry action.",
+    )
+    tasks.add_argument(
+        "--task",
+        default=None,
+        help="Task name or CLI command for tasks show.",
+    )
+    tasks.add_argument(
+        "--mode",
+        choices=("read_only", "dry_run", "apply", "verify", "maintenance"),
+        default=None,
+        help="Optional mode filter for tasks list.",
+    )
+    tasks.add_argument(
+        "--risk",
+        choices=("none", "low", "normal", "high"),
+        default=None,
+        help="Optional risk filter for tasks list.",
+    )
+    tasks.add_argument(
+        "--marketplace",
+        choices=("all", "ozon", "wb"),
+        default=None,
+        help="Optional marketplace filter for tasks list.",
+    )
+    tasks.add_argument(
+        "--telegram-only",
+        action="store_true",
+        help="Show only tasks enabled for future Telegram bot.",
     )
 
     approvals = subparsers.add_parser(
@@ -719,6 +758,23 @@ def main(argv: list[str] | None = None) -> int:
             }
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result.get("run") is not None or result.get("rows") is not None else 2
+
+    if args.command == "tasks":
+        if args.action == "list":
+            result = {
+                "rows": list_task_definitions(
+                    mode=args.mode,
+                    risk=args.risk,
+                    marketplace=args.marketplace,
+                    telegram_only=args.telegram_only,
+                )
+            }
+        else:
+            if not args.task:
+                parser.error("tasks show requires --task")
+            result = {"task": get_task_definition(args.task)}
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
 
     if args.command == "approvals":
         data_dir = Path(args.data_dir)

@@ -39,6 +39,13 @@
   запись `manifest.json`, runtime-индекс `data/runs/index.jsonl`, lifecycle
   `pending_review/applied/verified/closed`, связи
   `pending_id/approved_id/applied_by_run_id`, команды `runs list/latest/show`.
+- `src/takterra_agent/tasks/registry.py` - единый `TaskRegistry`: метаданные
+  текущих CLI-команд, режимы `read_only/dry_run/apply/maintenance`, риск,
+  marketplace, runbook, требования к credentials/LK/mapping/confirmation и
+  Telegram-label для будущего бота.
+- `tasks list|show` - CLI-команды просмотра `TaskRegistry`.
+- `src/takterra_agent/bot/dispatcher.py` - thin layer над `TaskRegistry` для
+  будущего Telegram-бота.
 - `src/takterra_agent/safety/approvals.py` - approval/idempotency helpers:
   stable checksum, marker `data/approved/applied/*.applied.json`, проверка
   повторного apply по marker и `RunManifest` index, checksum action rows,
@@ -140,6 +147,7 @@ Ozon CDP port по умолчанию: `9544`.
 - `data/planning/wb_cabinet_map.md`
 - `data/planning/status_preflight_runbook.md`
 - `data/planning/run_manifest_runbook.md`
+- `data/planning/task_registry_runbook.md`
 - `data/planning/daily_morning_report_runbook.md`
 - `data/planning/reviews_questions_runbook.md`
 - `data/planning/ozon_messenger_runbook.md` - Ozon Messenger/уведомления:

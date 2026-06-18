@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from takterra_agent.tasks.registry import RegisteredTask, TaskRegistry
+from takterra_agent.tasks.registry import TaskRegistry, default_task_registry
 
 
 def build_registry() -> TaskRegistry:
-    registry = TaskRegistry()
-    registry.register(RegisteredTask(name="catalog_fetch", is_read_only=True, handler=None))
-    return registry
+    return default_task_registry()
 
+
+def telegram_tasks() -> list[dict]:
+    return build_registry().to_list(telegram_only=True)

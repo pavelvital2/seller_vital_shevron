@@ -213,7 +213,14 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli r
 
 ## Этап 2. Реальный `TaskRegistry`
 
-Цель: CLI и будущий бот должны брать список задач из одного источника.
+Статус: `in_progress`.
+
+Ветка `feature/task-registry` добавляет первый рабочий слой:
+`src/takterra_agent/tasks/registry.py`, CLI `tasks list/show` и
+`bot/dispatcher.py` как thin layer поверх registry.
+
+Цель: CLI, fresh-агенты и будущий бот должны брать список задач из одного
+источника.
 
 Task metadata:
 
@@ -236,16 +243,21 @@ telegram_button_label
 
 Что сделать:
 
-1. Расширить `src/takterra_agent/tasks/registry.py`.
-2. Зарегистрировать все текущие CLI-команды.
-3. Подключить CLI help к registry без изменения внешнего поведения.
-4. Сделать `bot/dispatcher.py` thin layer поверх registry.
+1. Расширить `src/takterra_agent/tasks/registry.py` - выполнено первым
+   проходом.
+2. Зарегистрировать все текущие CLI-команды - выполнено первым проходом.
+3. Добавить CLI `tasks list/show` - выполнено первым проходом.
+4. Подключить CLI help/docs к registry без изменения внешнего поведения.
+5. Сделать `bot/dispatcher.py` thin layer поверх registry - выполнено первым
+   проходом.
 
 Критерий готовности:
 
 - все текущие команды видны в registry;
 - для каждой команды известен риск и режим;
 - будущий бот не дублирует список команд руками.
+- `tasks list --telegram-only` показывает команды, которые можно подключать к
+  read-only Telegram MVP.
 
 ## Этап 2A. Сопоставление Ozon/WB и общий каталог продукции
 
@@ -432,9 +444,10 @@ approvals close --id <id> --kind pending|approved
 - ручная сборка approved JSON больше не нужна для типовых сценариев.
 
 Оставшийся gap этапа: расширить единый approved package builder на остальные
-write-контуры и подключить `approvals status/close` к TaskRegistry/Telegram.
-Сейчас guard уже защищает apply-команды, создание approved-пакетов реализовано
-только для `reviews-questions`, а CLI-обзор lifecycle уже добавлен.
+write-контуры и подключить `approvals status/close` к Telegram. Сейчас guard
+уже защищает apply-команды, создание approved-пакетов реализовано только для
+`reviews-questions`, CLI-обзор lifecycle уже добавлен, а TaskRegistry содержит
+метаданные `approvals`.
 
 ## Этап 4. Централизованный safety guard
 
@@ -747,6 +760,7 @@ bot command schema
 4. `approvals status/close` и lifecycle schema.
 5. Расширенный `TaskRegistry` для всех текущих CLI-команд.
 6. Обновление README/CLI docs из registry или по registry.
+7. Read-only Telegram MVP на registry без write-кнопок.
 
 Критерий завершения спринта:
 
