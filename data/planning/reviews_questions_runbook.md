@@ -64,6 +64,28 @@ data/approved/<approved_id>/APPROVED_PACKAGE.md
 операций. Если approved JSON был изменен после создания, apply должен
 завершиться ошибкой checksum mismatch.
 
+Проверить статус pending/approved/apply chain:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m takterra_agent.cli approvals status \
+  --id <pending_id>
+```
+
+Закрыть устаревший pending-пакет, если владелец решил не применять его:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m takterra_agent.cli approvals close \
+  --id <pending_id> \
+  --kind pending \
+  --reason "superseded"
+```
+
+Непримененный approved-пакет закрывать только осознанно: команда требует
+`--force`, потому что это скрывает уже согласованную write-операцию из обычного
+`approvals status`.
+
 Если `status: "approved"` есть только наверху, но у строк нет
 `approved: true`, apply может завершиться техническим `ok`, но ничего не
 отправить. Такой результат считать нулевым apply, а не успешной операцией.

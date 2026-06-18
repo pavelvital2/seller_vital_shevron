@@ -117,6 +117,45 @@
 - `.agents/skills/marketplace-analytics/SKILL.md` - repo skill для read-only
   аналитики Ozon/WB, SEO, parser-позиций, цен, рекламы и отчетов.
 
+## Shared Seller Skills
+
+Помимо проектного `.agents/skills/marketplace-analytics/SKILL.md`, агенты
+должны использовать общие user-level skills из `/home/pavel/.codex/skills`,
+если задача попадает в их область:
+
+- `marketplace-sales-analytics` - продажи, маржа, остатки, поставки и сравнение периодов.
+- `marketplace-promotion-analytics` - реклама, продвижение, ставки, бюджеты, DRR/ROAS и dry-run рекомендаций.
+- `marketplace-seo-card-optimization` - SEO карточек, поисковый спрос, parser-позиции и видимость.
+- `marketplace-product-card-content` - контент карточек, фото, атрибуты, хештеги и задачи дизайнеру.
+- `marketplace-reporting` - отчеты владельцу в Telegram, Markdown, Excel/PDF и approval-сводки.
+- `seller-api-safety` - обязательный safety-контур перед write-операциями.
+- `seller-runtime-diagnostics` - tmux, бот, topic bindings, Parser Data API и runtime проекта.
+
+Установленные official support skills:
+
+- `jupyter-notebook`
+- `playwright`
+- `playwright-interactive`
+- `screenshot`
+- `pdf`
+- `security-best-practices`
+
+Правило постоянного апгрейда skills:
+
+- Если наш skill помог решить новую подтвержденную повторяемую проблему,
+  агент обязан дополнить соответствующий `SKILL.md`: дата, симптом/задача,
+  подтвержденная причина или ограничение, безопасный порядок действий,
+  источник/проверка результата, без секретов.
+- Если правило критично для операций магазина, агент также обновляет
+  профильный runbook в `data/planning/`, этот `AGENTS.md` при необходимости и
+  сохраняет краткий Hermes summary без секретов.
+- Нельзя добавлять в skills догадки, сырые логи, cookies, tokens,
+  `storage_state`, auth headers, пароли, закрытые данные покупателей или
+  непроверенные выводы.
+- Если существующий skill не помогает, агент должен искать новые безопасные
+  пути через код проекта, логи, run reports, официальные docs, Hermes memory и
+  малые smoke tests. После подтвержденного решения skill нужно обновить.
+
 ## Источники опыта
 
 Использовать как read-only источники:

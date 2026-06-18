@@ -8,6 +8,7 @@ import sys
 
 from takterra_agent.config import load_credentials
 from takterra_agent.core.run_manifest import find_run, latest_run, list_runs
+from takterra_agent.tasks.approvals import run_approvals_close, run_approvals_status
 from takterra_agent.tasks.catalog_fetch import run_catalog_fetch
 from takterra_agent.tasks.actions_apply import run_actions_apply
 from takterra_agent.tasks.daily_morning_report import run_daily_morning_report
@@ -70,6 +71,63 @@ def build_parser() -> argparse.ArgumentParser:
         "--run-id",
         default=None,
         help="Run id for runs show.",
+    )
+
+    approvals = subparsers.add_parser(
+        "approvals",
+        help="List or close pending/approved approval packages.",
+    )
+    approvals.add_argument(
+        "action",
+        choices=("status", "close"),
+        help="Approval action.",
+    )
+    approvals.add_argument(
+        "--data-dir",
+        default="data",
+        help="Project data directory.",
+    )
+    approvals.add_argument(
+        "--id",
+        default=None,
+        help="Pending/approved package id or approved package path identity.",
+    )
+    approvals.add_argument(
+        "--kind",
+        choices=("all", "pending", "approved", "auto"),
+        default="all",
+        help="Target kind. Use auto only with approvals close.",
+    )
+    approvals.add_argument(
+        "--include-closed",
+        action="store_true",
+        help="Include closed approval rows in status output.",
+    )
+    approvals.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        help="Maximum rows for approvals status.",
+    )
+    approvals.add_argument(
+        "--closed-by",
+        default="owner",
+        help="Actor label stored in close marker.",
+    )
+    approvals.add_argument(
+        "--reason",
+        default="",
+        help="Close reason stored in close marker.",
+    )
+    approvals.add_argument(
+        "--force",
+        action="store_true",
+        help="Allow closing unapplied approved packages or already closed targets.",
+    )
+    approvals.add_argument(
+        "--run-id",
+        default=None,
+        help="Optional stable run id for approvals close.",
     )
 
     fetch_catalog = subparsers.add_parser(
@@ -661,6 +719,34 @@ def main(argv: list[str] | None = None) -> int:
             }
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result.get("run") is not None or result.get("rows") is not None else 2
+
+    if args.command == "approvals":
+        data_dir = Path(args.data_dir)
+        if args.action == "status":
+            if args.kind == "auto":
+                parser.error("approvals status does not support --kind auto")
+            result = run_approvals_status(
+                data_dir=data_dir,
+                target_id=args.id,
+                kind=args.kind,
+                include_closed=args.include_closed,
+                limit=args.limit,
+            )
+        else:
+            if not args.id:
+                parser.error("approvals close requires --id")
+            close_kind = "auto" if args.kind == "all" else args.kind
+            result = run_approvals_close(
+                data_dir=data_dir,
+                target_id=args.id,
+                kind=close_kind,
+                closed_by=args.closed_by,
+                reason=args.reason,
+                force=args.force,
+                run_id=args.run_id,
+            )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
 
     if args.command == "fetch-catalog":
         result = run_catalog_fetch(

@@ -120,6 +120,66 @@ Builder читает `data/pending/<pending_id>/manifest.json` и
 `actions_checksum` и сохраняет пакет в `data/approved/<approved_id>/`.
 `apply-reviews-questions` проверяет checksum перед write-операциями.
 
+## Approvals Status/Close
+
+Ветка `feature/approval-status-close` добавляет первый общий read-only обзор
+approval lifecycle и maintenance-закрытие runtime-пакетов:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m takterra_agent.cli approvals status
+```
+
+Фильтры:
+
+```bash
+--kind all|pending|approved
+--id <pending_id|approved_id|approved_path_identity>
+--include-closed
+--limit <n>
+```
+
+Команда читает:
+
+- `data/pending/*/manifest.json`;
+- `data/approved/*/approved_apply_plan.json`;
+- старые `data/approved/*.approved.json`;
+- `data/approved/applied/*.applied.json`;
+- `data/approved/closed/*.closed.json`;
+- `data/runs/index.jsonl`.
+
+Нормализованные статусы:
+
+- `pending_review` - pending-пакет ждет review владельца;
+- `approved` - approved-пакет создан, но apply еще не выполнен;
+- `applied` - apply был выполнен, но verify/закрытие не дало финальный статус;
+- `verified` - apply выполнен и подтвержден verify или run lifecycle;
+- `failed` - связанный apply завершился `blocked/error`;
+- `closed` - пакет закрыт maintenance-маркером и скрывается из обычного
+  `approvals status`.
+
+Закрытие:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m takterra_agent.cli approvals close \
+  --id <pending_id|approved_id> \
+  --kind pending|approved \
+  --closed-by owner \
+  --reason "superseded"
+```
+
+`close` не удаляет исходный pending/approved package и не пишет в
+маркетплейсы. Он создает runtime-маркер:
+
+```text
+data/approved/closed/<sha256-kind-id>.closed.json
+```
+
+и maintenance `RunManifest` с task `approvals-close`. Если закрывается
+непримененный approved-пакет со статусом `approved`, команда требует
+`--force`, чтобы случайно не скрыть согласованную write-операцию.
+
 ## CLI
 
 Список последних запусков:
@@ -179,7 +239,8 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli r
 ## Следующий шаг
 
 1. Распространить builder approved package на акции, ставки, карточки и цены.
-2. Подключить будущий `TaskRegistry` к `task`, `mode`, `risk`, `marketplaces`
+2. Подключить `approvals status` к будущему Telegram `/approvals`.
+3. Подключить будущий `TaskRegistry` к `task`, `mode`, `risk`, `marketplaces`
    и `runbook_path`.
-3. Использовать `data/runs/index.jsonl` для Telegram-команд `/status`,
+4. Использовать `data/runs/index.jsonl` для Telegram-команд `/status`,
    `/today`, `/reviews`, `/approvals`.

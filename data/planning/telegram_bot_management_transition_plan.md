@@ -389,6 +389,11 @@ write-запросов, если approved/pending пакет уже отмече
 builder approved package для `reviews-questions`, checksum action rows и
 проверку checksum в `apply-reviews-questions` перед write-операциями.
 
+Ветка `feature/approval-status-close` добавляет CLI-основу для будущего
+Telegram `/approvals`: read-only `approvals status`, maintenance
+`approvals close`, close-marker `data/approved/closed/*.closed.json` и
+RunManifest task `approvals-close`.
+
 Lifecycle:
 
 ```text
@@ -405,7 +410,9 @@ pending -> approved -> applied -> verified -> closed
    Первый общий guard уже добавлен в `src/takterra_agent/safety/approvals.py`.
 4. После успешного apply обновлять status package.
    Первый runtime marker уже пишется в `data/approved/applied/`.
-5. Начать с отзывов/вопросов, потому что там уже есть pending/approved
+5. Добавить обзор и закрытие lifecycle.
+   Первый CLI-слой `approvals status/close` добавлен.
+6. Начать с отзывов/вопросов, потому что там уже есть pending/approved
    практика.
 
 Минимальные команды:
@@ -414,7 +421,7 @@ pending -> approved -> applied -> verified -> closed
 prepare-reviews-questions-approved --source-pending <id> --mode replies-only
 prepare-reviews-questions-approved --source-pending <id> --mode mark-viewed-only
 approvals status
-approvals close --approved-id <id>
+approvals close --id <id> --kind pending|approved
 ```
 
 Критерий готовности:
@@ -424,10 +431,10 @@ approvals close --approved-id <id>
   verify status;
 - ручная сборка approved JSON больше не нужна для типовых сценариев.
 
-Оставшийся gap этапа: единый approved package builder и CLI/Telegram-команды
-`approvals status/close` для всех операций. Сейчас guard уже защищает
-apply-команды, а создание approved-пакетов реализовано только для
-`reviews-questions`.
+Оставшийся gap этапа: расширить единый approved package builder на остальные
+write-контуры и подключить `approvals status/close` к TaskRegistry/Telegram.
+Сейчас guard уже защищает apply-команды, создание approved-пакетов реализовано
+только для `reviews-questions`, а CLI-обзор lifecycle уже добавлен.
 
 ## Этап 4. Централизованный safety guard
 
@@ -519,7 +526,7 @@ schemas.py
 | `/ads` | Ozon CPC + WB promotion summaries |
 | `/search` | будущий `search-queries` |
 | `/positions` | будущий `wb-parser-positions` |
-| `/approvals` | approvals list/status |
+| `/approvals` | `approvals status` |
 
 Критерий готовности:
 
@@ -736,9 +743,9 @@ bot command schema
 
 1. `RunManifest` MVP.
 2. `data/runs/index.jsonl`.
-3. Расширенный `TaskRegistry` для всех текущих CLI-команд.
-4. `approvals status` и lifecycle schema.
-5. `prepare-reviews-questions-approved` как первый approved package builder.
+3. `prepare-reviews-questions-approved` как первый approved package builder.
+4. `approvals status/close` и lifecycle schema.
+5. Расширенный `TaskRegistry` для всех текущих CLI-команд.
 6. Обновление README/CLI docs из registry или по registry.
 
 Критерий завершения спринта:

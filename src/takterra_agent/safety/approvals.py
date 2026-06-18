@@ -63,6 +63,18 @@ def apply_marker_for(
     return data_dir / "approved" / "applied" / f"{marker_name}.applied.json"
 
 
+def close_marker_for(
+    *,
+    data_dir: Path,
+    target_kind: str,
+    target_id: str,
+) -> Path:
+    if target_kind not in {"pending", "approved"}:
+        raise ValueError(f"unsupported approval close target kind: {target_kind}")
+    marker_name = canonical_checksum({"target_kind": target_kind, "target_id": target_id})
+    return data_dir / "approved" / "closed" / f"{marker_name}.closed.json"
+
+
 def assert_apply_not_repeated(
     *,
     data_dir: Path,

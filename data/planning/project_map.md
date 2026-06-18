@@ -41,10 +41,17 @@
   `pending_id/approved_id/applied_by_run_id`, команды `runs list/latest/show`.
 - `src/takterra_agent/safety/approvals.py` - approval/idempotency helpers:
   stable checksum, marker `data/approved/applied/*.applied.json`, проверка
-  повторного apply по marker и `RunManifest` index, checksum action rows.
+  повторного apply по marker и `RunManifest` index, checksum action rows,
+  close-marker `data/approved/closed/*.closed.json`.
+- `src/takterra_agent/tasks/approvals.py` - read-only/maintenance слой
+  approval lifecycle: `approvals status` собирает pending/approved/applied/
+  closed статусы, `approvals close` закрывает runtime-пакеты без write-
+  операций в маркетплейсах.
 - `prepare-reviews-questions-approved` - CLI-команда создания approved package
   из `data/pending/<pending_id>/` для отзывов/вопросов с
   `actions_checksum`.
+- `approvals status|close` - CLI-команды просмотра и закрытия pending/approved
+  lifecycle для будущего Telegram `/approvals`.
 - `src/takterra_agent/tasks/ozon_elastic_apply.py` - применение согласованного
   Ozon Elastic dry-run с fresh preflight, drift-check и verify.
 - `src/takterra_agent/tasks/ozon_cpc_optimization_plan.py` - SKU-level dry-run
@@ -100,6 +107,8 @@ Ozon CDP port по умолчанию: `9544`.
   коммитить.
 - `data/approved/applied/` - runtime-маркеры уже примененных approved/pending
   пакетов для idempotency guard, не коммитить.
+- `data/approved/closed/` - runtime-маркеры закрытых pending/approved пакетов,
+  не коммитить.
 - `data/reports/` - экспортные отчеты, не коммитить без отдельного решения.
 - `data/reference/takterra_development_docs/` - read-only копия markdown-
   документов TAKTERRA по развитию проекта, архитектуре, task-runner,
