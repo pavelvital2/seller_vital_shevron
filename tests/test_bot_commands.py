@@ -58,6 +58,65 @@ def test_bot_status_reports_missing_runtime_data(tmp_path: Path) -> None:
     assert "я не могу это подтвердить" in result.text
 
 
+def test_bot_today_live_mode_builds_fresh_report(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from takterra_agent.bot import commands
+
+    monkeypatch.setattr(commands, "LIVE_TODAY_LOCK_FILE", tmp_path / "live_today.lock")
+    monkeypatch.setattr(commands, "load_credentials", lambda: None)
+
+    def fake_daily_report(**kwargs: object) -> dict:
+        assert kwargs["data_dir"] == tmp_path
+        assert kwargs["seller_v3"] is True
+        return {
+            "run_id": "daily_morning_report_v3_test",
+            "overall_status": "warning",
+            "business": {
+                "periods": {"yesterday": "2026-06-17"},
+                "ozon": {
+                    "orders": {"yesterday": {"ordered_units": 10, "revenue": 2000}},
+                    "finance_buyouts": {"buyout_units": 8, "buyout_amount": 1600},
+                    "finance_expenses": {"total_expenses": 500},
+                    "stocks": {"present_total": 100, "out_of_stock_count": 2},
+                    "communications": {"unanswered_feedbacks": 1, "unanswered_questions": 0},
+                },
+                "wb": {
+                    "orders": {"yesterday": {"active_orders": 12, "amount": 2400}},
+                    "sales": {"yesterday": {"sales_rows": 9, "sales_amount": 1800}},
+                    "finance_expenses": {"total_expenses": 600},
+                    "stocks": {"quantity_total": 120, "zero_stock_count": 3},
+                    "communications": {"unanswered_feedbacks": 2, "unanswered_questions": 1},
+                },
+            },
+            "actions_v3": {
+                "ozon": {"active_actions": 1, "products_in_actions": 50, "products_not_in_actions": 5},
+                "wb": {"active_actions": 2, "products_in_actions": 60, "products_not_in_actions": 6},
+            },
+            "executive_summary": ["Период отчета: 2026-06-17 00:00-23:59 MSK."],
+            "artifacts": {
+                "report": str(tmp_path / "daily_morning_report_v3.md"),
+                "summary": str(tmp_path / "summary.json"),
+            },
+        }
+
+    monkeypatch.setattr(commands, "run_daily_morning_report", fake_daily_report)
+
+    latest_result = dispatch_message("/today", data_dir=tmp_path)
+    assert latest_result.ok is False
+    assert latest_result.blocked_reason == "no_runtime_data"
+
+    live_result = dispatch_message("/today", data_dir=tmp_path, live_today=True)
+
+    assert live_result.ok is True
+    assert "свежий read-only отчет построен" in live_result.text
+    assert "daily_morning_report_v3_test" in live_result.text
+    assert "Ozon: заказы `10`" in live_result.text
+    assert "WB: заказы `12`" in live_result.text
+    assert live_result.artifacts["report"].endswith("daily_morning_report_v3.md")
+
+
 def test_bot_approvals_summarizes_open_packages(tmp_path: Path) -> None:
     _write_json(
         tmp_path / "pending" / "reviews_questions_test_pending" / "manifest.json",

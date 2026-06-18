@@ -522,6 +522,11 @@ Telegram, одноразовый `getUpdates` polling и controlled `poll-loop` 
 allowlist и lock. Production service включается только после подтверждения
 token-file, личного chat id и runtime allowlist.
 
+В следующем слое `/today` получает live read-only режим: бот строит свежий
+`daily-morning-report --seller-v3`, отправляет краткий Telegram-summary и
+сохраняет полный runtime-отчет. Это единственная live task-runner команда MVP;
+write-операций нет.
+
 Цель: первый бот должен только показывать состояние и отчеты, без write.
 
 Команды MVP:
@@ -553,16 +558,16 @@ token-file, личного chat id и runtime allowlist.
 - бот не делает write-операции;
 - Telegram bot token не хранится в проекте, документах, memory или git;
 - постоянный polling работает только с allowlist chat_id и lock-file;
-- production runner пишет `RunManifest` при live read-only запуске задачи;
-  preview-слой только читает текущий runtime;
+- production runner пишет `RunManifest` при live read-only `/today`; остальные
+  MVP-команды пока читают текущий runtime;
 - бот отправляет краткий отчет и ссылки на артефакты;
 - ошибки показываются безопасно, без секретов.
 
 Ограничение первого прохода: команды показывают последние runtime-данные и
 статусы; они не запускают live API-задачи. Adapter может отправить готовый
-read-only ответ в Telegram. Следующий слой после controlled polling - live
-read-only запуск `/today` через `daily-morning-report --seller-v3`, но только
-после lock/allowlist/service-smoke.
+read-only ответ в Telegram. Следующий слой после live `/today` - attachment
+policy для безопасной отправки файлов отчета и общий `WorkflowRunner` для
+следующих live read-only задач.
 Команды `/prices`, `/ads`, `/search`, `/positions` подключать после появления
 соответствующих read-only task-runner команд и стандартных отчетов.
 

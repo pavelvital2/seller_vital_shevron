@@ -156,7 +156,9 @@ Service должен включаться только после:
 
 - `/help` - список доступных read-only экранов.
 - `/status` - последний `status-preflight` из `data/runs/index.jsonl`.
-- `/today` - последний `daily-morning-report` из `data/runs/index.jsonl`.
+- `/today` - при `--live-today` строит свежий read-only
+  `daily-morning-report --seller-v3`; без `--live-today` показывает последний
+  `daily-morning-report` из `data/runs/index.jsonl`.
 - `/reviews` - последний `reviews-questions` из `data/runs/index.jsonl`.
 - `/approvals` - текущий обзор `approvals status`.
 - `/catalog` - последний `catalog-fetch` из `data/runs/index.jsonl`.
@@ -168,10 +170,13 @@ Service должен включаться только после:
 - MVP не создает approved package.
 - MVP не отправляет ответы покупателям.
 - MVP не меняет цены, акции, ставки, карточки, фото, остатки или поставки.
-- MVP не запускает task-runner задачи из Telegram; он показывает только уже
-  сохраненные runtime-данные.
+- MVP запускает из Telegram только live read-only `/today`, если явно включен
+  `--live-today`. Остальные команды показывают уже сохраненные runtime-данные.
 - Постоянный polling требует allowlist и lock-file; второй экземпляр polling
   должен завершаться с ошибкой lock.
+- `/today` использует отдельный command lock
+  `.sessions/telegram/live_today.lock`, чтобы не запускать несколько свежих
+  ежедневных отчетов параллельно.
 - Неподдерживаемые команды возвращают `unsupported_command`.
 - Если runtime-данных нет, команда возвращает `no_runtime_data` и пишет:
   `я не могу это подтвердить`.
@@ -186,11 +191,9 @@ Service должен включаться только после:
 
 ## Следующий шаг
 
-1. Зафиксировать личный `chat_id` владельца в runtime env-файле и включить
-   `vital-shevron-telegram-bot.service`.
-2. Добавить отправку прикрепленных файлов из `artifacts`, если файл существует
+1. Добавить отправку прикрепленных файлов из `artifacts`, если файл существует
    и безопасен для отправки.
-3. Добавить read-only запуск задач из Telegram только после отдельного
-   `WorkflowRunner` и safety policy: сначала `/status` и `/today`, без write.
-4. Write-кнопки проектировать только после `WorkflowRunner`, `SafetyGuard`,
+2. Расширять live read-only задачи только через отдельный `WorkflowRunner` и
+   safety policy. Следующие кандидаты: `/status`, затем `/reviews` dry-run.
+3. Write-кнопки проектировать только после `WorkflowRunner`, `SafetyGuard`,
    approved package builder для всех write-контуров и отдельного owner review.

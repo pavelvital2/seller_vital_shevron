@@ -14,5 +14,10 @@ def telegram_tasks() -> list[dict]:
     return build_registry().to_list(telegram_only=True)
 
 
-def dispatch_message(message: str, *, data_dir: Path = Path("data")) -> TelegramCommandResult:
-    return handle_telegram_command(message, data_dir=data_dir)
+def dispatch_message(
+    message: str,
+    *,
+    data_dir: Path = Path("data"),
+    live_today: bool = False,
+) -> TelegramCommandResult:
+    return handle_telegram_command(message, data_dir=data_dir, live_today=live_today)

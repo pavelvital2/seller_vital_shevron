@@ -48,7 +48,9 @@
   будущего Telegram-бота.
 - `src/takterra_agent/bot/commands.py` - read-only Telegram MVP command layer:
   `/help`, `/status`, `/today`, `/reviews`, `/approvals`, `/catalog`, `/runs`;
-  возвращает текст Telegram-summary без write-операций.
+  возвращает текст Telegram-summary без write-операций; `/today` может
+  запускать свежий read-only `daily-morning-report --seller-v3`, если включен
+  `--live-today`.
 - `src/takterra_agent/bot/telegram_runner.py` - read-only Telegram Bot API
   adapter: загрузка токена из внешнего файла/env, `sendMessage`,
   одноразовый `getUpdates` polling, controlled `poll-loop`, allowlist,
@@ -63,6 +65,8 @@
 - `bot poll-loop` - CLI-команда постоянного controlled polling; требует
   allowlist через `--allowed-chat-id` или
   `VITAL_SHEVRON_TELEGRAM_ALLOWED_CHAT_IDS`, использует lock-file.
+- `bot poll-loop --live-today` - включает свежий read-only `/today`; остальные
+  команды остаются в режиме просмотра сохраненных runtime-данных.
 - `src/takterra_agent/safety/approvals.py` - approval/idempotency helpers:
   stable checksum, marker `data/approved/applied/*.applied.json`, проверка
   повторного apply по marker и `RunManifest` index, checksum action rows,
@@ -113,8 +117,8 @@
 - `deploy/systemd/user/vital-shevron-wb-session-refresh.service`
 - `deploy/systemd/user/vital-shevron-wb-session-refresh.timer`
 - `deploy/systemd/user/vital-shevron-telegram-bot.service` - шаблон
-  read-only Telegram polling service; включать только после runtime allowlist
-  `.sessions/telegram/vital_shevron_telegram_bot.env`.
+  read-only Telegram polling service с live `/today`; включать только после
+  runtime allowlist `.sessions/telegram/vital_shevron_telegram_bot.env`.
 
 Ozon CDP port по умолчанию: `9544`.
 

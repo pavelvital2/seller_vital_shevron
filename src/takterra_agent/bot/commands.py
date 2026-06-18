@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+import fcntl
 from pathlib import Path
 from typing import Any
 
+from takterra_agent.config import AppCredentials, load_credentials
 from takterra_agent.core.run_manifest import latest_run
+from takterra_agent.tasks.daily_morning_report import run_daily_morning_report
 from takterra_agent.tasks.approvals import run_approvals_status
 from takterra_agent.tasks.registry import default_task_registry
+
+
+LIVE_TODAY_LOCK_FILE = Path(".sessions/telegram/live_today.lock")
 
 
 SUPPORTED_READ_ONLY_COMMANDS = {
@@ -47,6 +53,8 @@ def handle_telegram_command(
     message: str,
     *,
     data_dir: Path = Path("data"),
+    live_today: bool = False,
+    credentials: AppCredentials | None = None,
 ) -> TelegramCommandResult:
     command = _normalize_command(message)
     if command == "/help":
@@ -60,6 +68,8 @@ def handle_telegram_command(
             next_step="Если данные устарели, запустить read-only `status-preflight`.",
         )
     if command == "/today":
+        if live_today:
+            return _fresh_daily_report(data_dir=data_dir, credentials=credentials)
         return _latest_run_command(
             command=command,
             title="Ежедневный отчет",
@@ -120,11 +130,116 @@ def _help() -> TelegramCommandResult:
         [
             "",
             "Ограничения:",
-            "- MVP показывает последние runtime-данные и статусы.",
+            "- `/today` собирает свежий read-only отчет, если включен live mode.",
+            "- Остальные команды показывают последние runtime-данные и статусы.",
             "- Изменения в Ozon/WB через Telegram не выполняются.",
         ]
     )
     return TelegramCommandResult(command="/help", ok=True, text="\n".join(lines))
+
+
+def _fresh_daily_report(
+    *,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+) -> TelegramCommandResult:
+    try:
+        with _CommandLock(LIVE_TODAY_LOCK_FILE):
+            result = run_daily_morning_report(
+                credentials=credentials or load_credentials(),
+                data_dir=data_dir,
+                seller_v3=True,
+            )
+    except RuntimeError as exc:
+        return TelegramCommandResult(
+            command="/today",
+            ok=False,
+            blocked_reason="daily_report_busy",
+            text=(
+                "Ежедневный отчет\n\n"
+                "Итог: свежий отчет уже собирается другим процессом.\n\n"
+                f"Причина: `{_safe_error(exc)}`\n\n"
+                "Изменений в Ozon/WB не выполнял."
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001 - Telegram must return a safe failure.
+        return TelegramCommandResult(
+            command="/today",
+            ok=False,
+            blocked_reason="daily_report_failed",
+            text=(
+                "Ежедневный отчет\n\n"
+                "Итог: свежий read-only отчет не удалось построить.\n\n"
+                f"Причина: `{_safe_error(exc)}`\n\n"
+                "Изменений в Ozon/WB не выполнял."
+            ),
+        )
+
+    return TelegramCommandResult(
+        command="/today",
+        ok=result.get("overall_status") in {"ok", "warning"},
+        text=_daily_report_chat_text(result),
+        artifacts=_safe_artifacts(result),
+    )
+
+
+def _daily_report_chat_text(result: dict[str, Any]) -> str:
+    business = result.get("business") if isinstance(result.get("business"), dict) else {}
+    periods = _dict_value(business, "periods")
+    ozon = _dict_value(business, "ozon")
+    wb = _dict_value(business, "wb")
+    actions = result.get("actions_v3") if isinstance(result.get("actions_v3"), dict) else {}
+    ozon_actions = _dict_value(actions, "ozon")
+    wb_actions = _dict_value(actions, "wb")
+
+    ozon_orders_day = _nested(ozon, "orders", "yesterday")
+    wb_orders_day = _nested(wb, "orders", "yesterday")
+    ozon_buyouts = _nested(ozon, "finance_buyouts")
+    wb_sales_day = _nested(wb, "sales", "yesterday")
+    ozon_expenses = _nested(ozon, "finance_expenses")
+    wb_expenses = _nested(wb, "finance_expenses")
+    ozon_stocks = _nested(ozon, "stocks")
+    wb_stocks = _nested(wb, "stocks")
+    ozon_comm = _nested(ozon, "communications")
+    wb_comm = _nested(wb, "communications")
+
+    lines = [
+        "Ежедневный отчет",
+        "",
+        f"Итог: свежий read-only отчет построен, статус `{result.get('overall_status') or 'н/д'}`.",
+        f"Период: `{periods.get('yesterday') or 'н/д'}`, 00:00-23:59 MSK.",
+        f"Run ID: `{result.get('run_id') or 'н/д'}`",
+        "",
+        "Заказы / выкупы / расходы:",
+        f"- Ozon: заказы `{_int(ozon_orders_day.get('ordered_units'))}` шт. / `{_money(ozon_orders_day.get('revenue'))}`; выкупы `{_int(ozon_buyouts.get('buyout_units'))}` шт. / `{_money(ozon_buyouts.get('buyout_amount'))}`; расходы `{_money(ozon_expenses.get('total_expenses'))}`.",
+        f"- WB: заказы `{_int(wb_orders_day.get('active_orders'))}` шт. / `{_money(wb_orders_day.get('amount'))}`; выкупы `{_int(wb_sales_day.get('sales_rows'))}` шт. / `{_money(wb_sales_day.get('sales_amount'))}`; расходы `{_money(wb_expenses.get('total_expenses'))}`.",
+        "",
+        "Отзывы и вопросы:",
+        f"- Ozon требуют внимания: отзывы `{_int(ozon_comm.get('unanswered_feedbacks'))}`, вопросы `{_int(ozon_comm.get('unanswered_questions'))}`.",
+        f"- WB требуют внимания: отзывы `{_int(wb_comm.get('unanswered_feedbacks'))}`, вопросы `{_int(wb_comm.get('unanswered_questions'))}`.",
+        "",
+        "Остатки:",
+        f"- Ozon: всего `{_int(ozon_stocks.get('present_total'))}` шт., нулевой остаток `{_int(ozon_stocks.get('out_of_stock_count'))}` товаров.",
+        f"- WB: всего `{_int(wb_stocks.get('quantity_total'))}` шт., нулевой остаток `{_int(wb_stocks.get('zero_stock_count'))}` товаров.",
+        "",
+        "Акции:",
+        f"- Ozon: активные `{_int(ozon_actions.get('active_actions'))}`, товаров участвует `{_int(ozon_actions.get('products_in_actions'))}`, не участвует `{_int(ozon_actions.get('products_not_in_actions'))}`.",
+        f"- WB: активные `{_int(wb_actions.get('active_actions'))}`, товаров участвует `{_int(wb_actions.get('products_in_actions'))}`, не участвует `{_int(wb_actions.get('products_not_in_actions'))}`.",
+        "",
+        "Важно:",
+    ]
+    for item in result.get("executive_summary") or []:
+        lines.append(f"- {item}")
+
+    artifacts = _safe_artifacts(result)
+    if artifacts:
+        lines.extend(["", "Файлы:"])
+        if artifacts.get("report"):
+            lines.append(f"- отчет: `{artifacts['report']}`")
+        if artifacts.get("summary"):
+            lines.append(f"- summary: `{artifacts['summary']}`")
+    lines.extend(["", "Изменений в Ozon/WB не выполнял."])
+    return "\n".join(lines)
 
 
 def _latest_run_command(
@@ -261,6 +376,70 @@ def _safe_artifacts(run: dict[str, Any]) -> dict[str, str]:
             continue
         safe[key_text] = str(value)
     return safe
+
+
+def _dict_value(source: dict[str, Any], key: str) -> dict[str, Any]:
+    value = source.get(key)
+    return value if isinstance(value, dict) else {}
+
+
+def _nested(source: dict[str, Any], *keys: str) -> dict[str, Any]:
+    current: Any = source
+    for key in keys:
+        if not isinstance(current, dict):
+            return {}
+        current = current.get(key)
+    return current if isinstance(current, dict) else {}
+
+
+def _int(value: Any) -> str:
+    if value in (None, ""):
+        return "н/д"
+    try:
+        return f"{int(float(value)):,}".replace(",", " ")
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _money(value: Any) -> str:
+    if value in (None, ""):
+        return "н/д"
+    try:
+        return f"{float(value):,.0f}".replace(",", " ") + " ₽"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _safe_error(exc: BaseException) -> str:
+    raw = str(exc).replace("\n", " ").replace("\r", " ")
+    for marker in ("token", "secret", "cookie", "storage", "auth", "api_key", "client_secret"):
+        raw = raw.replace(marker, "<redacted>")
+    return raw[:500]
+
+
+class _CommandLock:
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self._file: Any | None = None
+
+    def __enter__(self) -> "_CommandLock":
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._file = self.path.open("a+", encoding="utf-8")
+        try:
+            fcntl.flock(self._file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            self._file.close()
+            self._file = None
+            raise RuntimeError(f"lock is busy: {self.path}") from exc
+        self.path.chmod(0o600)
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+        if self._file is None:
+            return
+        fcntl.flock(self._file.fileno(), fcntl.LOCK_UN)
+        self._file.close()
+        self._file = None
 
 
 def _normalize_command(message: str) -> str:

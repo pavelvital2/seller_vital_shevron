@@ -204,6 +204,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Stop poll-loop after N iterations. Intended for tests/smoke checks.",
     )
+    bot.add_argument(
+        "--live-today",
+        action="store_true",
+        help="Allow /today to build a fresh read-only seller-v3 daily report.",
+    )
     approvals = subparsers.add_parser(
         "approvals",
         help="List or close pending/approved approval packages.",
@@ -910,6 +915,7 @@ def main(argv: list[str] | None = None) -> int:
                 thread_id=args.thread_id,
                 message=args.message,
                 data_dir=data_dir,
+                live_today=args.live_today,
             )
         else:
             try:
@@ -934,6 +940,7 @@ def main(argv: list[str] | None = None) -> int:
                 state_file=Path(args.state_file),
                 lock_file=Path(args.lock_file),
                 allowed_chat_ids=allowed_chat_ids or set(),
+                live_today=args.live_today,
                 timeout_seconds=args.timeout,
                 limit=args.limit,
                 poll_interval_seconds=args.poll_interval,
@@ -945,6 +952,7 @@ def main(argv: list[str] | None = None) -> int:
                 data_dir=data_dir,
                 state_file=Path(args.state_file),
                 allowed_chat_ids=allowed_chat_ids,
+                live_today=args.live_today,
                 timeout_seconds=args.timeout,
                 limit=args.limit,
             )
