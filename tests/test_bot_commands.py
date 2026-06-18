@@ -10,6 +10,7 @@ from takterra_agent.bot.telegram_runner import (
     load_telegram_bot_token,
     poll_loop,
     poll_once,
+    safe_report_attachment_paths,
     send_preview_command,
 )
 from takterra_agent.cli import main
@@ -192,6 +193,82 @@ def test_send_preview_command_uses_mock_api_without_exposing_token(tmp_path: Pat
     assert calls[0][0] == "secret-token"
     assert calls[0][1] == "sendMessage"
     assert "Telegram MVP" in calls[0][2]["text"]
+    assert "secret-token" not in json.dumps(result, ensure_ascii=False)
+
+
+def test_safe_report_attachment_paths_only_allows_report_artifacts(tmp_path: Path) -> None:
+    report = tmp_path / "runs" / "2026-06-18" / "daily_report" / "daily_morning_report_v3.md"
+    report.parent.mkdir(parents=True)
+    report.write_text("report", encoding="utf-8")
+    summary = report.parent / "summary.json"
+    summary.write_text("{}", encoding="utf-8")
+    outside = tmp_path / "outside.md"
+    outside.write_text("outside", encoding="utf-8")
+    secret_report = tmp_path / "runs" / "2026-06-18" / "secret_report.md"
+    secret_report.write_text("secret", encoding="utf-8")
+
+    paths = safe_report_attachment_paths(
+        artifacts={
+            "report": str(report),
+            "summary": str(summary),
+            "outside_report": str(outside),
+            "secret": str(secret_report),
+        },
+        data_dir=tmp_path,
+        project_root=tmp_path,
+    )
+
+    assert paths == [report.resolve()]
+
+
+def test_send_preview_command_attaches_safe_report_artifact(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from takterra_agent.bot import telegram_runner
+    from takterra_agent.bot.commands import TelegramCommandResult
+
+    report = tmp_path / "runs" / "2026-06-18" / "daily_report" / "daily_morning_report_v3.md"
+    report.parent.mkdir(parents=True)
+    report.write_text("report", encoding="utf-8")
+
+    monkeypatch.setattr(
+        telegram_runner,
+        "dispatch_message",
+        lambda *args, **kwargs: TelegramCommandResult(
+            command="/today",
+            ok=True,
+            text="Ежедневный отчет",
+            artifacts={"report": str(report), "summary": str(report.parent / "summary.json")},
+        ),
+    )
+
+    calls: list[tuple[str, str, dict]] = []
+    document_calls: list[tuple[str, str, dict, Path]] = []
+
+    def fake_api(token: str, method: str, payload: dict) -> dict:
+        calls.append((token, method, payload))
+        return {"ok": True, "result": {"message_id": 10}}
+
+    def fake_document_api(token: str, method: str, payload: dict, document_path: Path) -> dict:
+        document_calls.append((token, method, payload, document_path))
+        return {"ok": True, "result": {"message_id": 11}}
+
+    result = send_preview_command(
+        token="secret-token",
+        chat_id=123,
+        message="/today",
+        data_dir=tmp_path,
+        api_request=fake_api,
+        document_api_request=fake_document_api,
+    )
+
+    assert result["ok"] is True
+    assert calls[0][1] == "sendMessage"
+    assert document_calls == [
+        ("secret-token", "sendDocument", {"chat_id": 123}, report.resolve())
+    ]
+    assert result["sent_documents"][0]["message_id"] == 11
     assert "secret-token" not in json.dumps(result, ensure_ascii=False)
 
 

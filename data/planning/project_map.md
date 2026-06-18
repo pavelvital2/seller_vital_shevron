@@ -53,9 +53,9 @@
   `--live-today`.
 - `src/takterra_agent/bot/telegram_runner.py` - read-only Telegram Bot API
   adapter: загрузка токена из внешнего файла/env, `sendMessage`,
-  одноразовый `getUpdates` polling, controlled `poll-loop`, allowlist,
-  lock-file, state offset под `.sessions/telegram/`; не запускает marketplace
-  write-операции.
+  безопасный `sendDocument` для `artifacts.report`, одноразовый `getUpdates`
+  polling, controlled `poll-loop`, allowlist, lock-file, state offset под
+  `.sessions/telegram/`; не запускает marketplace write-операции.
 - `bot preview` - CLI-команда локальной проверки Telegram MVP без подключения
   Telegram token и без отправки сообщений.
 - `bot send-preview` - CLI-команда отправки read-only preview-ответа в

@@ -10,8 +10,9 @@ Read-only Telegram MVP - это первый безопасный слой бу�
 
 Текущая реализация подключает безопасный read-only Telegram adapter поверх
 того же command layer. Adapter умеет отправить preview-ответ, один раз
-обработать входящие updates через Telegram Bot API и работать в controlled
-polling loop. Он не запускает marketplace write-операции.
+обработать входящие updates через Telegram Bot API, работать в controlled
+polling loop и прикреплять безопасный файл отчета из `artifacts`. Он не
+запускает marketplace write-операции.
 
 Токен бота не хранится в проекте. Если токен был отправлен в чат или попал в
 логи, считать его засвеченным и перевыпустить через BotFather перед
@@ -164,6 +165,25 @@ Service должен включаться только после:
 - `/catalog` - последний `catalog-fetch` из `data/runs/index.jsonl`.
 - `/runs` - краткий список последних runtime-статусов по Telegram-задачам.
 
+## Прикрепление файлов
+
+После текстового Telegram-summary adapter отправляет `sendDocument`, если
+команда вернула безопасный `report`-артефакт.
+
+Разрешено прикреплять только:
+
+- ключ `artifacts.report`;
+- существующий файл внутри `data/runs/` или `data/reports/`;
+- расширения `.md`, `.txt`, `.csv`, `.xlsx`, `.pdf`;
+- файл размером не больше 20 MB;
+- путь без маркеров `token`, `secret`, `cookie`, `storage`, `auth`,
+  `password`, `credential`.
+
+Технические артефакты вроде `summary.json`, `manifest.json`, raw snapshots,
+cookies, storage state и файлы вне разрешенных директорий не прикрепляются.
+Если файл отчета не прошел фильтр, бот оставляет путь в тексте, но не должен
+прикреплять подозрительный файл.
+
 ## Safety
 
 - MVP не запускает apply-команды.
@@ -177,6 +197,8 @@ Service должен включаться только после:
 - `/today` использует отдельный command lock
   `.sessions/telegram/live_today.lock`, чтобы не запускать несколько свежих
   ежедневных отчетов параллельно.
+- Прикрепление файлов ограничено безопасным `report`-артефактом и не должно
+  отправлять секреты, raw snapshots или закрытые runtime-файлы.
 - Неподдерживаемые команды возвращают `unsupported_command`.
 - Если runtime-данных нет, команда возвращает `no_runtime_data` и пишет:
   `я не могу это подтвердить`.
@@ -191,9 +213,7 @@ Service должен включаться только после:
 
 ## Следующий шаг
 
-1. Добавить отправку прикрепленных файлов из `artifacts`, если файл существует
-   и безопасен для отправки.
-2. Расширять live read-only задачи только через отдельный `WorkflowRunner` и
+1. Расширять live read-only задачи только через отдельный `WorkflowRunner` и
    safety policy. Следующие кандидаты: `/status`, затем `/reviews` dry-run.
-3. Write-кнопки проектировать только после `WorkflowRunner`, `SafetyGuard`,
+2. Write-кнопки проектировать только после `WorkflowRunner`, `SafetyGuard`,
    approved package builder для всех write-контуров и отдельного owner review.

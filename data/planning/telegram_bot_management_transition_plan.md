@@ -65,7 +65,10 @@ read-only -> dry-run -> review -> approved -> apply -> verify -> result
    нужен.
 7. Любая новая кнопка бота должна иметь runbook, task registry entry, тесты,
    safety metadata и понятный отчет.
-8. Целевой проект должен быть store-agnostic: core-код, package name,
+8. Telegram-ответ по отчетным задачам должен включать краткий chat-summary и,
+   если команда вернула безопасный `artifacts.report`, прикрепленный файл
+   полного отчета через `sendDocument`.
+9. Целевой проект должен быть store-agnostic: core-код, package name,
    task-runner, bot dispatcher, общие runbook-и и архитектурные документы не
    должны зависеть от названия конкретного магазина или старого проекта.
    Store-specific значения должны жить в отдельном `StoreProfile`/конфиге,
