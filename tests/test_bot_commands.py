@@ -8,6 +8,7 @@ import pytest
 from takterra_agent.bot.dispatcher import dispatch_message
 from takterra_agent.bot.telegram_runner import (
     load_telegram_bot_token,
+    poll_loop,
     poll_once,
     send_preview_command,
 )
@@ -176,9 +177,56 @@ def test_poll_once_dispatches_allowed_chat_and_writes_offset(tmp_path: Path) -> 
     assert result["processed_updates"] == 1
     assert result["sent_messages"] == 1
     assert result["skipped_updates"] == 1
+    assert result["received_chat_ids"] == [123, 999]
+    assert result["processed_chat_ids"] == [123]
+    assert result["skipped_chat_ids"] == [999]
     assert json.loads(state_file.read_text(encoding="utf-8"))["offset"] == 103
     send_call = [call for call in calls if call[1] == "sendMessage"][0]
     assert send_call[2]["message_thread_id"] == 55
+
+
+def test_poll_loop_requires_allowed_chat_ids(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match="allowed_chat_ids"):
+        poll_loop(
+            token="secret-token",
+            data_dir=tmp_path,
+            state_file=tmp_path / ".sessions" / "telegram" / "state.json",
+            lock_file=tmp_path / ".sessions" / "telegram" / "lock",
+            allowed_chat_ids=set(),
+            max_iterations=1,
+            emit_logs=False,
+        )
+
+
+def test_poll_loop_runs_one_iteration_with_lock(tmp_path: Path) -> None:
+    def fake_api(token: str, method: str, payload: dict) -> dict:
+        if method == "getUpdates":
+            return {
+                "ok": True,
+                "result": [
+                    {
+                        "update_id": 201,
+                        "message": {"chat": {"id": 123}, "text": "/help"},
+                    }
+                ],
+            }
+        return {"ok": True, "result": {"message_id": 12}}
+
+    result = poll_loop(
+        token="secret-token",
+        data_dir=tmp_path,
+        state_file=tmp_path / ".sessions" / "telegram" / "state.json",
+        lock_file=tmp_path / ".sessions" / "telegram" / "lock",
+        allowed_chat_ids={123},
+        max_iterations=1,
+        api_request=fake_api,
+        emit_logs=False,
+    )
+
+    assert result["ok"] is True
+    assert result["iterations"] == 1
+    assert result["processed_updates"] == 1
+    assert result["sent_messages"] == 1
 
 
 def test_cli_bot_send_preview_requires_token(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -186,6 +234,16 @@ def test_cli_bot_send_preview_requires_token(tmp_path: Path, capsys: pytest.Capt
     output = json.loads(capsys.readouterr().out)
     assert output["ok"] is False
     assert "missing Telegram bot token" in output["error"]
+
+
+def test_cli_bot_poll_loop_requires_allowlist(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    token_file = tmp_path / "token.txt"
+    token_file.write_text("secret-token", encoding="utf-8")
+
+    assert main(["bot", "poll-loop", "--token-file", str(token_file), "--max-iterations", "1"]) == 2
+    output = json.loads(capsys.readouterr().out)
+    assert output["ok"] is False
+    assert "requires --allowed-chat-id" in output["error"]
 
 
 def _write_json(path: Path, data: dict) -> None:

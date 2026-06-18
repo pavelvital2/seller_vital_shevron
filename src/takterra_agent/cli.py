@@ -3,13 +3,16 @@ from __future__ import annotations
 import argparse
 from decimal import Decimal
 import json
+import os
 from pathlib import Path
 import sys
 
 from takterra_agent.bot.dispatcher import dispatch_message
 from takterra_agent.bot.telegram_runner import (
+    DEFAULT_LOCK_FILE,
     DEFAULT_STATE_FILE,
     load_telegram_bot_token,
+    poll_loop,
     poll_once,
     send_preview_command,
 )
@@ -125,7 +128,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     bot.add_argument(
         "action",
-        choices=("preview", "send-preview", "poll-once"),
+        choices=("preview", "send-preview", "poll-once", "poll-loop"),
         help="Bot action.",
     )
     bot.add_argument(
@@ -173,6 +176,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Runtime polling state file under ignored .sessions/ by default.",
     )
     bot.add_argument(
+        "--lock-file",
+        default=str(DEFAULT_LOCK_FILE),
+        help="Runtime lock file for bot poll-loop.",
+    )
+    bot.add_argument(
         "--timeout",
         type=int,
         default=0,
@@ -184,7 +192,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=20,
         help="Telegram getUpdates limit for bot poll-once.",
     )
-
+    bot.add_argument(
+        "--poll-interval",
+        type=float,
+        default=1.0,
+        help="Seconds to sleep between poll-loop iterations after successful polling.",
+    )
+    bot.add_argument(
+        "--max-iterations",
+        type=int,
+        default=None,
+        help="Stop poll-loop after N iterations. Intended for tests/smoke checks.",
+    )
     approvals = subparsers.add_parser(
         "approvals",
         help="List or close pending/approved approval packages.",
@@ -806,6 +825,17 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _allowed_chat_ids(values: list[int] | None) -> set[int] | None:
+    result = set(values or [])
+    raw = os.environ.get("VITAL_SHEVRON_TELEGRAM_ALLOWED_CHAT_IDS", "")
+    for chunk in raw.replace(",", " ").split():
+        try:
+            result.add(int(chunk))
+        except ValueError as exc:
+            raise ValueError("VITAL_SHEVRON_TELEGRAM_ALLOWED_CHAT_IDS must contain integer chat ids") from exc
+    return result or None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -882,7 +912,34 @@ def main(argv: list[str] | None = None) -> int:
                 data_dir=data_dir,
             )
         else:
-            allowed_chat_ids = set(args.allowed_chat_id) if args.allowed_chat_id else None
+            try:
+                allowed_chat_ids = _allowed_chat_ids(args.allowed_chat_id)
+            except ValueError as exc:
+                parser.error(str(exc))
+            if args.action == "poll-loop" and not allowed_chat_ids:
+                result = {
+                    "ok": False,
+                    "error": (
+                        "bot poll-loop requires --allowed-chat-id or "
+                        "VITAL_SHEVRON_TELEGRAM_ALLOWED_CHAT_IDS"
+                    ),
+                }
+                print(json.dumps(result, ensure_ascii=False, indent=2))
+                return 2
+        result: dict
+        if args.action == "poll-loop":
+            result = poll_loop(
+                token=token,
+                data_dir=data_dir,
+                state_file=Path(args.state_file),
+                lock_file=Path(args.lock_file),
+                allowed_chat_ids=allowed_chat_ids or set(),
+                timeout_seconds=args.timeout,
+                limit=args.limit,
+                poll_interval_seconds=args.poll_interval,
+                max_iterations=args.max_iterations,
+            )
+        elif args.action == "poll-once":
             result = poll_once(
                 token=token,
                 data_dir=data_dir,

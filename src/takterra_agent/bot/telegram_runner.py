@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import fcntl
 import json
 import os
 from pathlib import Path
+import time
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -21,6 +23,7 @@ DEFAULT_TOKEN_ENVS = (
     "TELEGRAM_BOT_TOKEN",
 )
 DEFAULT_STATE_FILE = Path(".sessions/telegram/vital_shevron_bot_state.json")
+DEFAULT_LOCK_FILE = Path(".sessions/telegram/vital_shevron_bot_polling.lock")
 TELEGRAM_MAX_TEXT_LENGTH = 4096
 SAFE_CHUNK_LENGTH = 3900
 
@@ -179,6 +182,9 @@ def poll_once(
     sent = 0
     skipped = 0
     errors: list[str] = []
+    received_chat_ids: set[int] = set()
+    processed_chat_ids: set[int] = set()
+    skipped_chat_ids: set[int] = set()
 
     for update in updates:
         if not isinstance(update, dict):
@@ -198,8 +204,10 @@ def poll_once(
         if chat_id is None or not text:
             skipped += 1
             continue
+        received_chat_ids.add(chat_id)
         if allowed_chat_ids is not None and chat_id not in allowed_chat_ids:
             skipped += 1
+            skipped_chat_ids.add(chat_id)
             continue
 
         thread_id = _maybe_int(message_obj.get("message_thread_id"))
@@ -212,6 +220,7 @@ def poll_once(
             api_request=api_request,
         )
         processed += 1
+        processed_chat_ids.add(chat_id)
         sent += sum(1 for result in send_results if result.ok)
         errors.extend(result.error for result in send_results if result.error)
 
@@ -223,9 +232,82 @@ def poll_once(
         "processed_updates": processed,
         "sent_messages": sent,
         "skipped_updates": skipped,
+        "received_chat_ids": sorted(received_chat_ids),
+        "processed_chat_ids": sorted(processed_chat_ids),
+        "skipped_chat_ids": sorted(skipped_chat_ids),
         "next_offset": next_offset,
         "errors": errors,
         "state_file": str(state_file),
+    }
+
+
+def poll_loop(
+    *,
+    token: str,
+    data_dir: Path = Path("data"),
+    state_file: Path = DEFAULT_STATE_FILE,
+    lock_file: Path = DEFAULT_LOCK_FILE,
+    allowed_chat_ids: set[int],
+    timeout_seconds: int = 20,
+    limit: int = 20,
+    poll_interval_seconds: float = 1.0,
+    error_sleep_seconds: float = 5.0,
+    max_iterations: int | None = None,
+    api_request: ApiRequest = telegram_api_request,
+    emit_logs: bool = True,
+) -> dict[str, Any]:
+    if not allowed_chat_ids:
+        raise TelegramRunnerError("poll-loop requires allowed_chat_ids")
+
+    total_processed = 0
+    total_sent = 0
+    total_skipped = 0
+    iterations = 0
+    loop_errors: list[str] = []
+    with _ExclusiveLock(lock_file):
+        while max_iterations is None or iterations < max_iterations:
+            iterations += 1
+            try:
+                result = poll_once(
+                    token=token,
+                    data_dir=data_dir,
+                    state_file=state_file,
+                    allowed_chat_ids=allowed_chat_ids,
+                    timeout_seconds=timeout_seconds,
+                    limit=limit,
+                    api_request=api_request,
+                )
+            except TelegramRunnerError as exc:
+                result = {
+                    "ok": False,
+                    "processed_updates": 0,
+                    "sent_messages": 0,
+                    "skipped_updates": 0,
+                    "errors": [str(exc)],
+                    "state_file": str(state_file),
+                }
+
+            total_processed += int(result.get("processed_updates") or 0)
+            total_sent += int(result.get("sent_messages") or 0)
+            total_skipped += int(result.get("skipped_updates") or 0)
+            loop_errors.extend(str(error) for error in result.get("errors") or [])
+            if emit_logs:
+                print(json.dumps(_loop_log_row(iterations, result), ensure_ascii=False), flush=True)
+            if not result.get("ok"):
+                time.sleep(error_sleep_seconds)
+            elif max_iterations is None or iterations < max_iterations:
+                time.sleep(poll_interval_seconds)
+
+    return {
+        "ok": not loop_errors,
+        "iterations": iterations,
+        "processed_updates": total_processed,
+        "sent_messages": total_sent,
+        "skipped_updates": total_skipped,
+        "errors": loop_errors,
+        "state_file": str(state_file),
+        "lock_file": str(lock_file),
+        "allowed_chat_ids_count": len(allowed_chat_ids),
     }
 
 
@@ -258,6 +340,47 @@ def _write_state(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     path.chmod(0o600)
+
+
+def _loop_log_row(iteration: int, result: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "event": "telegram_poll_iteration",
+        "iteration": iteration,
+        "ok": bool(result.get("ok")),
+        "processed_updates": result.get("processed_updates", 0),
+        "sent_messages": result.get("sent_messages", 0),
+        "skipped_updates": result.get("skipped_updates", 0),
+        "received_chat_ids": result.get("received_chat_ids", []),
+        "processed_chat_ids": result.get("processed_chat_ids", []),
+        "skipped_chat_ids": result.get("skipped_chat_ids", []),
+        "errors_count": len(result.get("errors") or []),
+        "state_file": result.get("state_file", ""),
+    }
+
+
+class _ExclusiveLock:
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self._file: Any | None = None
+
+    def __enter__(self) -> "_ExclusiveLock":
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._file = self.path.open("a+", encoding="utf-8")
+        try:
+            fcntl.flock(self._file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            self._file.close()
+            self._file = None
+            raise TelegramRunnerError(f"another Telegram polling process holds lock: {self.path}") from exc
+        self.path.chmod(0o600)
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+        if self._file is None:
+            return
+        fcntl.flock(self._file.fileno(), fcntl.LOCK_UN)
+        self._file.close()
+        self._file = None
 
 
 def _maybe_int(value: Any) -> int | None:

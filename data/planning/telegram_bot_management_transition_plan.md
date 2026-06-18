@@ -518,9 +518,9 @@ preview `bot preview --message /status`.
 
 Ветка `feature/telegram-runner-adapter` добавляет real Telegram adapter
 `src/takterra_agent/bot/telegram_runner.py`: отправка read-only preview в
-Telegram и одноразовый `getUpdates` polling. Production service пока не
-включается; token-file, chat id/topic id и режим polling нужно подтвердить
-отдельно.
+Telegram, одноразовый `getUpdates` polling и controlled `poll-loop` с
+allowlist и lock. Production service включается только после подтверждения
+token-file, личного chat id и runtime allowlist.
 
 Цель: первый бот должен только показывать состояние и отчеты, без write.
 
@@ -552,6 +552,7 @@ Telegram и одноразовый `getUpdates` polling. Production service по
 
 - бот не делает write-операции;
 - Telegram bot token не хранится в проекте, документах, memory или git;
+- постоянный polling работает только с allowlist chat_id и lock-file;
 - production runner пишет `RunManifest` при live read-only запуске задачи;
   preview-слой только читает текущий runtime;
 - бот отправляет краткий отчет и ссылки на артефакты;
@@ -559,8 +560,9 @@ Telegram и одноразовый `getUpdates` polling. Production service по
 
 Ограничение первого прохода: команды показывают последние runtime-данные и
 статусы; они не запускают live API-задачи. Adapter может отправить готовый
-read-only ответ в Telegram, но не поднимается как постоянный service до
-отдельного подтверждения token-file/chat/topic.
+read-only ответ в Telegram. Следующий слой после controlled polling - live
+read-only запуск `/today` через `daily-morning-report --seller-v3`, но только
+после lock/allowlist/service-smoke.
 Команды `/prices`, `/ads`, `/search`, `/positions` подключать после появления
 соответствующих read-only task-runner команд и стандартных отчетов.
 

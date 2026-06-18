@@ -51,14 +51,18 @@
   возвращает текст Telegram-summary без write-операций.
 - `src/takterra_agent/bot/telegram_runner.py` - read-only Telegram Bot API
   adapter: загрузка токена из внешнего файла/env, `sendMessage`,
-  одноразовый `getUpdates` polling, state offset под `.sessions/telegram/`;
-  не запускает marketplace write-операции.
+  одноразовый `getUpdates` polling, controlled `poll-loop`, allowlist,
+  lock-file, state offset под `.sessions/telegram/`; не запускает marketplace
+  write-операции.
 - `bot preview` - CLI-команда локальной проверки Telegram MVP без подключения
   Telegram token и без отправки сообщений.
 - `bot send-preview` - CLI-команда отправки read-only preview-ответа в
   Telegram chat/topic через внешний token-file.
 - `bot poll-once` - CLI-команда одноразовой обработки входящих Telegram
   updates с allowlist `--allowed-chat-id`.
+- `bot poll-loop` - CLI-команда постоянного controlled polling; требует
+  allowlist через `--allowed-chat-id` или
+  `VITAL_SHEVRON_TELEGRAM_ALLOWED_CHAT_IDS`, использует lock-file.
 - `src/takterra_agent/safety/approvals.py` - approval/idempotency helpers:
   stable checksum, marker `data/approved/applied/*.applied.json`, проверка
   повторного apply по marker и `RunManifest` index, checksum action rows,
@@ -108,6 +112,9 @@
 - `deploy/systemd/user/vital-shevron-ozon-session-refresh.timer`
 - `deploy/systemd/user/vital-shevron-wb-session-refresh.service`
 - `deploy/systemd/user/vital-shevron-wb-session-refresh.timer`
+- `deploy/systemd/user/vital-shevron-telegram-bot.service` - шаблон
+  read-only Telegram polling service; включать только после runtime allowlist
+  `.sessions/telegram/vital_shevron_telegram_bot.env`.
 
 Ozon CDP port по умолчанию: `9544`.
 
@@ -209,6 +216,7 @@ Ozon CDP port по умолчанию: `9544`.
 - `.sessions/wb/` - WB token file, browser profile, storage state, keepalive
   logs. Не коммитить.
 - `.sessions/telegram/` - runtime state Telegram bot polling, включая offset.
-  Не коммитить. Токен предпочтительно хранить во внешнем secret-файле вне
-  проекта, например `/home/pavel/.secrets/vital_shevron_telegram_bot_token`.
+  Не коммитить. Здесь же runtime env с allowlist chat_id и lock-file. Токен
+  хранить во внешнем secret-файле вне проекта, например
+  `/home/pavel/.secrets/vital_shevron_telegram_bot_token`.
 - `tmp/auth/` - временные auth/cookie файлы. Не коммитить.

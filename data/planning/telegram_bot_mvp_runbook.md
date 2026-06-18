@@ -9,9 +9,9 @@ Read-only Telegram MVP - это первый безопасный слой бу�
 выполняет write-операции в Ozon/WB.
 
 Текущая реализация подключает безопасный read-only Telegram adapter поверх
-того же command layer. Adapter умеет отправить preview-ответ и один раз
-обработать входящие updates через Telegram Bot API, но не запускает
-marketplace write-операции и не содержит отдельного daemon/service.
+того же command layer. Adapter умеет отправить preview-ответ, один раз
+обработать входящие updates через Telegram Bot API и работать в controlled
+polling loop. Он не запускает marketplace write-операции.
 
 Токен бота не хранится в проекте. Если токен был отправлен в чат или попал в
 логи, считать его засвеченным и перевыпустить через BotFather перед
@@ -111,6 +111,47 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 State-файл хранит только offset polling и должен лежать под `.sessions/`, чтобы
 не попасть в git.
 
+## Controlled Polling
+
+Постоянный polling нельзя запускать без allowlist личного `chat_id`.
+
+Runtime env-файл:
+
+```text
+.sessions/telegram/vital_shevron_telegram_bot.env
+```
+
+Минимальное содержимое env-файла:
+
+```bash
+VITAL_SHEVRON_TELEGRAM_ALLOWED_CHAT_IDS=123456789
+```
+
+Файл должен иметь права `600` и не должен попадать в git.
+
+Ручной smoke test controlled loop:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m takterra_agent.cli bot poll-loop \
+  --allowed-chat-id 123456789 \
+  --max-iterations 1 \
+  --token-file /home/pavel/.secrets/vital_shevron_telegram_bot_token
+```
+
+Systemd user service template:
+
+```text
+deploy/systemd/user/vital-shevron-telegram-bot.service
+```
+
+Service должен включаться только после:
+
+- token-file создан вне проекта;
+- личный `chat_id` подтвержден через `poll-once`;
+- `.sessions/telegram/vital_shevron_telegram_bot.env` содержит allowlist;
+- `poll-loop --max-iterations 1` прошел без ошибок.
+
 ## Поддерживаемые команды
 
 - `/help` - список доступных read-only экранов.
@@ -129,6 +170,8 @@ State-файл хранит только offset polling и должен лежа
 - MVP не меняет цены, акции, ставки, карточки, фото, остатки или поставки.
 - MVP не запускает task-runner задачи из Telegram; он показывает только уже
   сохраненные runtime-данные.
+- Постоянный polling требует allowlist и lock-file; второй экземпляр polling
+  должен завершаться с ошибкой lock.
 - Неподдерживаемые команды возвращают `unsupported_command`.
 - Если runtime-данных нет, команда возвращает `no_runtime_data` и пишет:
   `я не могу это подтвердить`.
@@ -143,10 +186,10 @@ State-файл хранит только offset polling и должен лежа
 
 ## Следующий шаг
 
-1. Добавить отправку прикрепленных файлов из `artifacts`, если файл существует
+1. Зафиксировать личный `chat_id` владельца в runtime env-файле и включить
+   `vital-shevron-telegram-bot.service`.
+2. Добавить отправку прикрепленных файлов из `artifacts`, если файл существует
    и безопасен для отправки.
-2. Подготовить systemd user service/timer для read-only polling после
-   подтверждения token-file, chat id и topic id.
 3. Добавить read-only запуск задач из Telegram только после отдельного
    `WorkflowRunner` и safety policy: сначала `/status` и `/today`, без write.
 4. Write-кнопки проектировать только после `WorkflowRunner`, `SafetyGuard`,
