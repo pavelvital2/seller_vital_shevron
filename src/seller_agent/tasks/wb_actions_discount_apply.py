@@ -114,6 +114,62 @@ def _assert_no_drift(
     return drift
 
 
+def _build_partial_drift_payload(
+    *,
+    approved_payload: dict[str, Any],
+    fresh_payload: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    approved_by_signature = {
+        (int(row["nmID"]), str(row["price"]), int(row["discount"])): row
+        for row in approved_payload.get("data", [])
+    }
+    fresh_by_signature = {
+        (int(row["nmID"]), str(row["price"]), int(row["discount"])): row
+        for row in fresh_payload.get("data", [])
+    }
+    approved_set = set(approved_by_signature)
+    fresh_set = set(fresh_by_signature)
+    eligible = approved_set & fresh_set
+    added = fresh_set - approved_set
+    removed = approved_set - fresh_set
+    skipped_due_to_drift = [
+        {
+            "kind": "fresh_unapproved_price_or_discount",
+            "fresh": {"nmID": signature[0], "price": signature[1], "discount": signature[2]},
+            "row": fresh_by_signature[signature],
+        }
+        for signature in sorted(added, key=lambda item: item[0])
+    ] + [
+        {
+            "kind": "approved_payload_no_longer_matching_fresh",
+            "approved": {"nmID": signature[0], "price": signature[1], "discount": signature[2]},
+            "row": approved_by_signature[signature],
+        }
+        for signature in sorted(removed, key=lambda item: item[0])
+    ]
+    skipped_nm_ids = sorted(
+        {
+            int((item.get("fresh") or item.get("approved") or {}).get("nmID"))
+            for item in skipped_due_to_drift
+            if (item.get("fresh") or item.get("approved") or {}).get("nmID") is not None
+        }
+    )
+    drift = {
+        "mode": "partial_apply_unchanged_rows",
+        "approved_payload_rows": len(approved_set),
+        "fresh_payload_rows": len(fresh_set),
+        "eligible_payload_rows": len(eligible),
+        "added": sorted(added),
+        "removed": sorted(removed),
+        "skipped_due_to_drift_count": len(skipped_due_to_drift),
+        "skipped_due_to_drift_product_count": len(skipped_nm_ids),
+        "skipped_due_to_drift_nm_ids": skipped_nm_ids,
+        "skipped_due_to_drift": skipped_due_to_drift,
+    }
+    eligible_payload = {"data": [fresh_by_signature[signature] for signature in sorted(eligible)]}
+    return drift, eligible_payload
+
+
 def _wb_request_json(method: str, url: str, token: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
     data = None if body is None else json.dumps(body, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(url, method=method, data=data)
@@ -163,6 +219,8 @@ def _write_report(path: Path, result: dict[str, Any]) -> None:
         f"- payload rows submitted: `{result['applied']['payload_rows_count']}`",
         f"- HTTP status: `{result['applied']['response'].get('httpStatus')}`",
         f"- upload ID: `{result['applied'].get('upload_id')}`",
+        f"- skipped because of drift: `{result['drift'].get('skipped_due_to_drift_count', 0)}`",
+        f"- skipped products because of drift: `{result['drift'].get('skipped_due_to_drift_product_count', 0)}`",
         "",
         "## Verify",
         "",
@@ -222,15 +280,22 @@ def run_wb_actions_discount_apply(
     fresh_plan = run_wb_actions_discount_plan(credentials=credentials, data_dir=data_dir, scheme_text=scheme)
     fresh_csv = Path(fresh_plan["artifacts"]["csv"])
     fresh_payload, fresh_changed_rows = _payload_from_rows(_read_csv(fresh_csv))
-    drift = _assert_no_drift(approved_payload=approved_payload, fresh_payload=fresh_payload)
+    drift, upload_payload = _build_partial_drift_payload(
+        approved_payload=approved_payload,
+        fresh_payload=fresh_payload,
+    )
 
     write_json(processed_dir / "approved_payload.json", approved_payload)
     write_json(processed_dir / "fresh_payload.json", fresh_payload)
+    write_json(processed_dir / "upload_payload.json", upload_payload)
     write_json(processed_dir / "drift_check.json", drift)
+    write_json(processed_dir / "skipped_drift_rows.json", drift["skipped_due_to_drift"])
     _write_csv(approved_changed_rows, processed_dir / "approved_changed_rows.csv")
     _write_csv(fresh_changed_rows, processed_dir / "fresh_changed_rows.csv")
 
-    response = _wb_request_json("POST", WB_UPLOAD_URL, credentials.wb.token, fresh_payload)
+    response: dict[str, Any] = {"httpStatus": None, "data": None, "skipped": "no_eligible_rows"}
+    if upload_payload["data"]:
+        response = _wb_request_json("POST", WB_UPLOAD_URL, credentials.wb.token, upload_payload)
     write_json(raw_dir / "wb_upload_response.json", response)
     upload_id = ((response.get("data") or {}).get("data") or {}).get("id")
     polls: list[dict[str, Any]] = []
@@ -250,11 +315,13 @@ def run_wb_actions_discount_apply(
 
     upload_ok = bool(upload_id) and int(response.get("httpStatus") or 0) in range(200, 300)
     history_data = _latest_history_data(polls)
-    expected_rows = len(fresh_payload["data"])
+    expected_rows = len(upload_payload["data"])
     success_rows = int(history_data.get("successGoodsNumber") or 0)
     overall_rows = int(history_data.get("overAllGoodsNumber") or 0)
     if upload_ok and expected_rows and success_rows == expected_rows and overall_rows == expected_rows:
         verify_status = "ok"
+    elif expected_rows == 0:
+        verify_status = "no_rows_to_apply"
     elif upload_ok:
         verify_status = "submitted"
     else:
@@ -265,7 +332,9 @@ def run_wb_actions_discount_apply(
         "report": str(run_dir / "wb_actions_discount_apply_result.md"),
         "approved_payload": str(processed_dir / "approved_payload.json"),
         "fresh_payload": str(processed_dir / "fresh_payload.json"),
+        "upload_payload": str(processed_dir / "upload_payload.json"),
         "drift_check": str(processed_dir / "drift_check.json"),
+        "skipped_drift_rows": str(processed_dir / "skipped_drift_rows.json"),
         "approved_changed_rows": str(processed_dir / "approved_changed_rows.csv"),
         "fresh_changed_rows": str(processed_dir / "fresh_changed_rows.csv"),
         "upload_response": str(raw_dir / "wb_upload_response.json"),
@@ -274,11 +343,12 @@ def run_wb_actions_discount_apply(
         "run_manifest": str(run_dir / "manifest.json"),
         "apply_marker": str(apply_marker_for(data_dir=data_dir, approved_id=approved_id)),
     }
+    overall_status = "ok" if upload_ok and not drift["skipped_due_to_drift_count"] else "warning"
     result = {
         "run_id": run_id,
         "started_at": started_at.isoformat(timespec="seconds"),
         "mode": "apply",
-        "overall_status": "ok" if upload_ok else "warning",
+        "overall_status": overall_status,
         "approved_plan_run_id": approved_id,
         "approved_id": approved_id,
         "scheme": scheme,
@@ -294,7 +364,7 @@ def run_wb_actions_discount_apply(
         },
         "drift": drift,
         "applied": {
-            "payload_rows_count": len(fresh_payload["data"]),
+            "payload_rows_count": len(upload_payload["data"]),
             "response": response,
             "upload_id": upload_id,
         },

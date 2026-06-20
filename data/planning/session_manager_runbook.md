@@ -53,6 +53,13 @@ node scripts/sessions/ozon_session_keepalive_cdp.js
 PYTHONPATH=src python3 -m seller_agent.cli sessions status --marketplace ozon
 ```
 
+С 2026-06-20 Ozon CDP-сценарии Vital Shevron используют обязательный guard
+`scripts/lib/ozon_cdp_guard.js`. Перед `chromium.connectOverCDP` он проверяет,
+что `OZON_CDP_URL` указывает на локальный порт `9544`, а слушающий Chrome
+запущен с `--user-data-dir=/home/pavel/projects/seller_vital_shevron/.sessions/ozon/chrome-profile`.
+Если агент случайно передаст порт TAKTERRA `9444` или чужой профиль, сценарий
+должен завершиться с `OZON_CDP_CONTOUR_MISMATCH` до любых действий в ЛК.
+
 ## Восстановление Ozon-сессии
 
 Dry-run:
@@ -103,6 +110,30 @@ PYTHONPATH=src python3 -m seller_agent.cli sessions status --marketplace ozon
   `overall_status: ok`; `status_preflight_20260618T0649` вернул
   `overall_status: ok`.
 - Секреты, cookies, storage state и код входа в документы не записывались.
+
+### Проверенное восстановление 2026-06-20 для Ozon Messenger
+
+- Restore run: `restore_ozon_session_for_messenger_retry_20260620T0845`.
+- Результат интерактивного входа: `LOGIN_SUCCESS`, `expectedStoreFound: true`,
+  `stateExported: true`.
+- Restore завершился `warning`, потому что `systemd --user` units
+  `vital-shevron-ozon-*` не установлены. Для текущего legacy-контура это
+  штатно: после restore нужно вручную поднять keeper/watchdog.
+- После `sessions start --marketplace ozon` watchdog сразу запустил refresh, а
+  keeper уже держал Chrome profile
+  `.sessions/ozon/chrome-profile`. Поэтому refresh получил ошибку Chrome
+  `Failed to create a ProcessSingleton for your profile directory`: это
+  означает, что профиль Vital Shevron занят уже работающим процессом Vital
+  keeper. Это не ошибка магазина и не смешивание с TAKTERRA: у TAKTERRA должен
+  быть и был отдельный CDP-порт и отдельный профиль браузера.
+- Правильное восстановление после такой ситуации: подождать, пока keeper
+  начнет слушать `127.0.0.1:9544`, проверить `ps`/`ss`, что порт и
+  `user-data-dir` принадлежат Vital Shevron, затем выполнить
+  `node scripts/sessions/ozon_session_keepalive_cdp.js`.
+- Итоговая проверка:
+  `sessions_status_after_keepalive_messenger_retry_20260620T0849` вернул
+  `overall_status: ok`; `refresh.ok: true`; `keeper.status: ok`;
+  `watchdog.status: ok`; `cdp.status: ok`.
 
 Текущий рабочий контур может держаться legacy watchdog-процессом
 `scripts/sessions/start_ozon_session_watchdog.sh` с интервалом `1800` секунд.

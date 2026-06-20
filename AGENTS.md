@@ -62,6 +62,8 @@
 - `data/planning/revision_2026-06-13.md` - ревизия проекта после настройки
   Ozon/WB операций и apply WB promotion ставок.
 - `data/planning/recommendations_index.md` - реестр рекомендаций.
+- `data/planning/followups.md` - контрольные follow-up задачи, которые нельзя
+  потерять между сессиями агентов.
 - `data/planning/vital_shevron_bootstrap_plan.md` - план первичного запуска.
 - `data/planning/catalog_mapping_runbook.md` - работа с отдельными каталогами
   Ozon/WB, mapping и будущей унификацией артикулов.
@@ -129,20 +131,35 @@
   перехода Vital Shevron к управлению Ozon/WB через Telegram-бота.
 - `data/reference/takterra_development_docs/README.md` - read-only копия
   документов TAKTERRA по развитию проекта, архитектуре и боту.
-- `.agents/skills/marketplace-analytics/SKILL.md` - repo skill для read-only
-  аналитики Ozon/WB, SEO, parser-позиций, цен, рекламы и отчетов.
+- `.agents/skills/marketplace-analytics/SKILL.md` - короткий repo
+  router-skill для выбора профильного Ozon/WB skill и runbook.
+- `.agents/skills/marketplace-reviews-questions/SKILL.md` - отзывы,
+  вопросы, медиа, draft replies, approval/apply/verify.
+- `.agents/skills/marketplace-ozon-messenger/SKILL.md` - Ozon Messenger,
+  уведомления, вопросы покупателей, mark-read, хвосты и cleanup.
+- `.agents/skills/marketplace-supply-planning/SKILL.md` - остатки,
+  продажи, локализация, кластеры назначения, производство и поставки.
+- `.agents/skills/marketplace-search-query-research/SKILL.md` - поисковые
+  запросы Ozon/WB, выгрузки ЛК/API, parser-сравнение и SEO-спрос.
+- `.agents/skills/marketplace-action-monitoring/SKILL.md` - контроль акций
+  после apply, baseline, daily_by_product и решения keep/watch/remove.
 
 ## Shared Seller Skills
 
-Помимо проектного `.agents/skills/marketplace-analytics/SKILL.md`, агенты
-должны использовать общие user-level skills из `/home/pavel/.codex/skills`,
-если задача попадает в их область:
+Проектный `.agents/skills/marketplace-analytics/SKILL.md` является
+маршрутизатором, а не хранилищем всех правил. Для конкретных задач агенты
+должны выбирать самый узкий repo skill из `.agents/skills/` и профильный
+runbook в `data/planning/`.
+
+Помимо проектных repo skills, агенты должны использовать общие user-level
+skills из `/home/pavel/.codex/skills`, если задача попадает в их область:
 
 - `marketplace-sales-analytics` - продажи, маржа, остатки, поставки и сравнение периодов.
 - `marketplace-promotion-analytics` - реклама, продвижение, ставки, бюджеты, DRR/ROAS и dry-run рекомендаций.
 - `marketplace-seo-card-optimization` - SEO карточек, поисковый спрос, parser-позиции и видимость.
 - `marketplace-product-card-content` - контент карточек, фото, атрибуты, хештеги и задачи дизайнеру.
 - `marketplace-reporting` - отчеты владельцу в Telegram, Markdown, Excel/PDF и approval-сводки.
+- `html-report-artifacts` - HTML-отчеты, визуальные объяснения, таблицы сравнения, dashboards и review-артефакты.
 - `seller-api-safety` - обязательный safety-контур перед write-операциями.
 - `seller-runtime-diagnostics` - tmux, бот, topic bindings, Parser Data API и runtime проекта.
 
@@ -171,6 +188,12 @@
   пути через код проекта, логи, run reports, официальные docs, Hermes memory и
   малые smoke tests. После подтвержденного решения skill нужно обновить.
 
+Для сложных аналитических отчетов, catalog mapping, SEO-аудитов, сравнений
+карточек, визуального review, code-review explainers и планов с большими
+таблицами агент должен предлагать полный HTML-артефакт и короткую
+Telegram/Markdown-сводку. Постоянные Markdown-документы источника истины
+не заменять HTML-файлами.
+
 ## Источники опыта
 
 Использовать как read-only источники:
@@ -198,6 +221,16 @@
 
 После каждой успешной операции по магазинам нужно создать или обновить
 инструкцию по этой операции.
+
+Для ежедневных операций с входящими сущностями магазинов (уведомления,
+сообщения покупателей, отзывы, вопросы, pending approvals) после согласования
+владельца агент обязан довести цикл до состояния `apply -> verify -> cleanup`:
+отправить согласованные ответы, отметить согласованные уведомления/элементы
+обработанными, сохранить безопасное состояние закрытия без секретов и raw
+переписки, и проверить, что уже обработанные строки не появятся в следующем
+отчете как новые задачи. Если часть строк нельзя закрыть технически или
+бизнесово, их нужно вынести в отдельный backlog/ручной риск с причиной, а не
+смешивать с новым входящим потоком.
 
 Если при выполнении операции возникла внештатная ситуация и операция затем была
 успешно завершена, профильную инструкцию нужно дополнить описанием ситуации,
@@ -305,6 +338,26 @@ API, API не дает нужного метода, либо API-метод не
 При подготовке подключения к личным кабинетам Ozon/WB агент обязан сначала
 перечитать `AGENTS.md`, затем профильную инструкцию подключения или управления
 сессиями.
+
+Перед любым действием через ЛК/CDP агент обязан сверить, что подключен к
+правильному проектному контуру: рабочая папка, порт CDP, путь
+`user-data-dir`/профиля браузера и ожидаемый магазин должны соответствовать
+текущему проекту. Для Vital Shevron Ozon штатный CDP-порт `9544`, профиль:
+`.sessions/ozon/chrome-profile`. Если одновременно работает агент другого
+проекта, например TAKTERRA, нельзя использовать его CDP-порт или профиль
+браузера. При несоответствии порта, профиля или магазина операцию нужно
+остановить до восстановления правильного контура.
+У каждого проекта должен быть отдельный CDP-порт и отдельный профиль браузера:
+TAKTERRA и Vital Shevron не должны делить один `user-data-dir`. Ошибка Chrome
+`ProcessSingleton` внутри Vital Shevron означает попытку двух процессов Vital
+Shevron открыть один и тот же профиль одновременно; это не должно трактоваться
+как нормальное или допустимое разделение профиля с другим проектом.
+
+Ozon CDP-сценарии Vital Shevron обязаны использовать программный guard
+`scripts/lib/ozon_cdp_guard.js`: перед `chromium.connectOverCDP` проверять
+локальный порт `9544` и профиль
+`/home/pavel/projects/seller_vital_shevron/.sessions/ozon/chrome-profile`.
+Подключение к `9444` или профилю TAKTERRA должно падать до открытия ЛК.
 
 Подключение к ЛК должно проектироваться не как разовый ручной вход, а как
 контур с автоматическим refresh/keepalive по таймеру.

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ozon Messenger"
+  short_description: "Ozon chats, notifications and cleanup"
+  default_prompt: "Use $marketplace-ozon-messenger to triage or process Ozon buyer chats and notifications."

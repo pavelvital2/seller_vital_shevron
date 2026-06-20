@@ -16,11 +16,20 @@
 
 ## Agent Skills
 
-- `.agents/skills/marketplace-analytics/SKILL.md` - repo skill для read-only
-  аналитики Ozon/WB: SEO, parser-позиции, поисковые запросы, цены,
-  продвижение, отзывы/вопросы и повторяемые отчеты.
-- `.agents/skills/marketplace-analytics/agents/openai.yaml` - интерфейсные
-  метаданные skill.
+- `.agents/skills/marketplace-analytics/SKILL.md` - короткий repo
+  router-skill для выбора профильного Ozon/WB skill и runbook.
+- `.agents/skills/marketplace-reviews-questions/SKILL.md` - отзывы,
+  вопросы, медиа, draft replies, approval/apply/verify.
+- `.agents/skills/marketplace-ozon-messenger/SKILL.md` - Ozon Messenger,
+  уведомления, вопросы покупателей, mark-read, хвосты и cleanup.
+- `.agents/skills/marketplace-supply-planning/SKILL.md` - остатки,
+  продажи, локализация, кластеры назначения, производство и поставки.
+- `.agents/skills/marketplace-search-query-research/SKILL.md` - поисковые
+  запросы Ozon/WB, выгрузки ЛК/API, parser-сравнение и SEO-спрос.
+- `.agents/skills/marketplace-action-monitoring/SKILL.md` - контроль акций
+  после apply, baseline, daily_by_product и решения keep/watch/remove.
+- `.agents/skills/*/agents/openai.yaml` - интерфейсные метаданные repo
+  skills.
 
 ## Git
 
@@ -109,9 +118,20 @@
   согласованных ставок WB promotion через Promotion API с fresh report,
   drift-check и verify.
 - `scripts/` - JS/Bash helpers для ЛК, сессий, отзывов/вопросов и операций.
+- `scripts/lib/ozon_cdp_guard.js` - обязательный guard для Ozon LK/CDP
+  сценариев: до `chromium.connectOverCDP` проверяет локальный порт `9544` и
+  Chrome `--user-data-dir` Vital Shevron, чтобы не подключиться к TAKTERRA или
+  другому проекту.
+- `scripts/reviews/ozon_review_media_detail_cdp.js` - read-only helper для
+  получения фото/видео Ozon-отзывов через LK/CDP `/api/v2/review/detail`;
+  сохраняет redacted detail и медиа без raw buyer/order/chat fields.
 - `scripts/research/ozon_messenger_page_probe_cdp.js` - read-only probe
   страницы Ozon Messenger через CDP: сохраняет только redacted HTTP/websocket
   shape и UI summary без текстов сообщений, cookies и auth headers.
+- `scripts/messenger/ozon_send_messages_cdp.js` - LK/CDP fallback для
+  отправки уже согласованных Ozon Messenger ответов из approved package;
+  использовать только после safety-цепочки и проверять результат через Seller
+  API `/v3/chat/history`.
 - `tests/` - тесты переносимого каркаса.
 
 ## Deploy
@@ -167,6 +187,8 @@ Ozon CDP port по умолчанию: `9544`.
 - `data/planning/fresh_agent_handoff_2026-06-12.md` - исторический handoff.
 - `data/planning/revision_2026-06-13.md`
 - `data/planning/recommendations_index.md`
+- `data/planning/followups.md` - контрольные follow-up задачи, которые нельзя
+  потерять между сессиями агентов.
 - `data/planning/vital_shevron_bootstrap_plan.md`
 - `data/planning/catalog_mapping_runbook.md`
 - `data/planning/seller_sku_rules.md`

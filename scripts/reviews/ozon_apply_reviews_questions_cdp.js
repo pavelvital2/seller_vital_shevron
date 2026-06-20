@@ -5,10 +5,13 @@ const fs = require('fs');
 const path = require('path');
 
 const { chromium } = require('../lib/playwright');
+const { assertOzonCdpContour } = require('../lib/ozon_cdp_guard');
 
 const projectRoot = path.resolve(__dirname, '..', '..');
 const cdpUrl = process.env.OZON_CDP_URL || 'http://127.0.0.1:9544';
 const expectedStore = process.env.OZON_EXPECTED_STORE || 'Vital Shevron';
+const expectedCdpPort = 9544;
+const expectedProfileDir = path.join(projectRoot, '.sessions', 'ozon', 'chrome-profile');
 const companyType = 'seller';
 
 function parseArgs(argv) {
@@ -82,7 +85,6 @@ function loadCompanyId() {
   return readFirstLine(firstEnv(
     'VITAL_SHEVRON_OZON_SELLER_CREDENTIALS_FILE',
     'SELLER_OZON_SELLER_CREDENTIALS_FILE',
-    'TAKTERRA_OZON_SELLER_CREDENTIALS_FILE',
   ));
 }
 
@@ -218,6 +220,12 @@ async function fetchCounter(page, companyId) {
       return;
     }
 
+    result.contourGuard = assertOzonCdpContour({
+      cdpUrl,
+      expectedPort: expectedCdpPort,
+      expectedProfileDir,
+      expectedStore,
+    });
     const browser = await chromium.connectOverCDP(cdpUrl, { timeout: 10000 });
     const context = browser.contexts()[0];
     if (!context) throw new Error('No browser context found in CDP session');

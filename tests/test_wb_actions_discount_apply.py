@@ -2,6 +2,7 @@ import pytest
 
 from seller_agent.tasks.wb_actions_discount_apply import (
     _assert_no_drift,
+    _build_partial_drift_payload,
     _latest_history_data,
     _payload_from_rows,
 )
@@ -54,6 +55,32 @@ def test_assert_no_drift_raises_on_changed_discount() -> None:
 
     with pytest.raises(RuntimeError, match="drift-check failed"):
         _assert_no_drift(approved_payload=approved, fresh_payload=fresh)
+
+
+def test_build_partial_drift_payload_uploads_only_unchanged_rows() -> None:
+    approved = {
+        "data": [
+            {"nmID": 101, "price": 1100, "discount": 55},
+            {"nmID": 102, "price": 1200, "discount": 55},
+        ]
+    }
+    fresh = {
+        "data": [
+            {"nmID": 101, "price": 1100, "discount": 55},
+            {"nmID": 102, "price": 1200, "discount": 56},
+        ]
+    }
+
+    drift, upload_payload = _build_partial_drift_payload(
+        approved_payload=approved,
+        fresh_payload=fresh,
+    )
+
+    assert upload_payload == {"data": [{"nmID": 101, "price": 1100, "discount": 55}]}
+    assert drift["mode"] == "partial_apply_unchanged_rows"
+    assert drift["skipped_due_to_drift_nm_ids"] == [102]
+    assert drift["skipped_due_to_drift_product_count"] == 1
+    assert drift["skipped_due_to_drift_count"] == 2
 
 
 def test_latest_history_data_returns_last_non_empty_poll() -> None:

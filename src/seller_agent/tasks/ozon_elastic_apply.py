@@ -99,6 +99,15 @@ def _row_signature(row: dict[str, str], *, include_price: bool) -> tuple[str, st
     )
 
 
+def _signature_dict(signature: tuple[str, str, str, str]) -> dict[str, str]:
+    return {
+        "planned_action": signature[0],
+        "product_id": signature[1],
+        "offer_id": signature[2],
+        "calculated_action_price": signature[3],
+    }
+
+
 def _assert_no_drift(
     *,
     approved_rows: list[dict[str, str]],
@@ -137,6 +146,107 @@ def _assert_no_drift(
     ):
         raise RuntimeError("Ozon Elastic drift-check failed")
     return drift
+
+
+def _build_partial_drift_plan(
+    *,
+    approved_rows: list[dict[str, str]],
+    fresh_rows: list[dict[str, str]],
+    approved_summary: dict[str, Any],
+    fresh_summary: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, str]], list[dict[str, str]]]:
+    if str(approved_summary.get("action_id")) != str(fresh_summary.get("action_id")):
+        raise RuntimeError(
+            f"Ozon Elastic action drift: approved {approved_summary.get('action_id')}, "
+            f"fresh {fresh_summary.get('action_id')}"
+        )
+
+    approved_activate, approved_deactivate = _action_rows(approved_rows)
+    fresh_activate, fresh_deactivate = _action_rows(fresh_rows)
+    approved_activate_by_signature = {
+        _row_signature(row, include_price=True): row for row in approved_activate
+    }
+    fresh_activate_by_signature = {_row_signature(row, include_price=True): row for row in fresh_activate}
+    approved_deactivate_by_signature = {
+        _row_signature(row, include_price=False): row for row in approved_deactivate
+    }
+    fresh_deactivate_by_signature = {
+        _row_signature(row, include_price=False): row for row in fresh_deactivate
+    }
+    approved_activate_set = set(approved_activate_by_signature)
+    approved_deactivate_set = set(approved_deactivate_by_signature)
+    fresh_activate_set = set(fresh_activate_by_signature)
+    fresh_deactivate_set = set(fresh_deactivate_by_signature)
+
+    eligible_activate_signatures = approved_activate_set & fresh_activate_set
+    eligible_deactivate_signatures = approved_deactivate_set & fresh_deactivate_set
+    activate_rows = [
+        fresh_activate_by_signature[signature]
+        for signature in sorted(eligible_activate_signatures, key=lambda item: item[1])
+    ]
+    deactivate_rows = [
+        fresh_deactivate_by_signature[signature]
+        for signature in sorted(eligible_deactivate_signatures, key=lambda item: item[1])
+    ]
+    activate_added = fresh_activate_set - approved_activate_set
+    activate_removed = approved_activate_set - fresh_activate_set
+    deactivate_added = fresh_deactivate_set - approved_deactivate_set
+    deactivate_removed = approved_deactivate_set - fresh_deactivate_set
+    skipped_due_to_drift = [
+        {
+            "kind": "fresh_unapproved_activate_or_price",
+            "fresh": _signature_dict(signature),
+            "row": fresh_activate_by_signature[signature],
+        }
+        for signature in sorted(activate_added, key=lambda item: item[1])
+    ] + [
+        {
+            "kind": "approved_activate_no_longer_matching_fresh",
+            "approved": _signature_dict(signature),
+            "row": approved_activate_by_signature[signature],
+        }
+        for signature in sorted(activate_removed, key=lambda item: item[1])
+    ] + [
+        {
+            "kind": "fresh_unapproved_deactivate",
+            "fresh": _signature_dict(signature),
+            "row": fresh_deactivate_by_signature[signature],
+        }
+        for signature in sorted(deactivate_added, key=lambda item: item[1])
+    ] + [
+        {
+            "kind": "approved_deactivate_no_longer_matching_fresh",
+            "approved": _signature_dict(signature),
+            "row": approved_deactivate_by_signature[signature],
+        }
+        for signature in sorted(deactivate_removed, key=lambda item: item[1])
+    ]
+    skipped_product_ids = sorted(
+        {
+            str((item.get("fresh") or item.get("approved") or {}).get("product_id") or "")
+            for item in skipped_due_to_drift
+            if str((item.get("fresh") or item.get("approved") or {}).get("product_id") or "")
+        }
+    )
+
+    drift = {
+        "mode": "partial_apply_unchanged_rows",
+        "approved_activate_count": len(approved_activate_set),
+        "fresh_activate_count": len(fresh_activate_set),
+        "approved_deactivate_count": len(approved_deactivate_set),
+        "fresh_deactivate_count": len(fresh_deactivate_set),
+        "eligible_activate_count": len(eligible_activate_signatures),
+        "eligible_deactivate_count": len(eligible_deactivate_signatures),
+        "activate_added": sorted(activate_added),
+        "activate_removed": sorted(activate_removed),
+        "deactivate_added": sorted(deactivate_added),
+        "deactivate_removed": sorted(deactivate_removed),
+        "skipped_due_to_drift_count": len(skipped_due_to_drift),
+        "skipped_due_to_drift_product_count": len(skipped_product_ids),
+        "skipped_due_to_drift_product_ids": skipped_product_ids,
+        "skipped_due_to_drift": skipped_due_to_drift,
+    }
+    return drift, activate_rows, deactivate_rows
 
 
 def _verify_ozon_elastic(
@@ -194,6 +304,8 @@ def _write_report(path: Path, result: dict[str, Any]) -> None:
         "",
         f"- activate/update rows: `{result['applied']['activate_rows_count']}`",
         f"- deactivate rows: `{result['applied']['deactivate_rows_count']}`",
+        f"- skipped because of drift: `{result['drift'].get('skipped_due_to_drift_count', 0)}`",
+        f"- skipped products because of drift: `{result['drift'].get('skipped_due_to_drift_product_count', 0)}`",
         "",
         "## Verify",
         "",
@@ -241,15 +353,15 @@ def run_ozon_elastic_apply(
 
     fresh_plan = run_ozon_elastic_plan(credentials=credentials, data_dir=data_dir)
     fresh_rows = _read_csv(Path(fresh_plan["artifacts"]["csv"]))
-    drift = _assert_no_drift(
+    drift, activate_rows, deactivate_rows = _build_partial_drift_plan(
         approved_rows=approved_rows,
         fresh_rows=fresh_rows,
         approved_summary=approved_summary.get("summary", {}),
         fresh_summary=fresh_plan["summary"],
     )
     write_json(processed_dir / "drift_check.json", drift)
+    write_json(processed_dir / "skipped_drift_rows.json", drift["skipped_due_to_drift"])
 
-    activate_rows, deactivate_rows = _action_rows(fresh_rows)
     write_json(processed_dir / "activate_rows.json", activate_rows)
     write_json(processed_dir / "deactivate_rows.json", deactivate_rows)
 
@@ -292,12 +404,17 @@ def run_ozon_elastic_apply(
         deactivate_rows=deactivate_rows,
         raw_dir=ensure_dir(raw_dir / "verify"),
     )
-    overall_status = "ok" if verify["status"] == "ok" else "warning"
+    overall_status = (
+        "ok"
+        if verify["status"] == "ok" and not drift["skipped_due_to_drift_count"]
+        else "warning"
+    )
     artifacts = {
         "run_dir": str(run_dir),
         "summary": str(run_dir / "summary.json"),
         "report": str(run_dir / "ozon_elastic_apply_result.md"),
         "drift_check": str(processed_dir / "drift_check.json"),
+        "skipped_drift_rows": str(processed_dir / "skipped_drift_rows.json"),
         "activate_rows": str(processed_dir / "activate_rows.json"),
         "deactivate_rows": str(processed_dir / "deactivate_rows.json"),
         "activate_response": str(raw_dir / "ozon_activate_response.json"),

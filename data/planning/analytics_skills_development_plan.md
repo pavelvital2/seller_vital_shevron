@@ -4,9 +4,10 @@
 
 ## Краткий вывод
 
-Сейчас проекту нужен легкий repo skill для повторяемой аналитики Ozon/WB, а не
-отдельный Codex plugin или multi-agent runtime. Skill фиксирует правила
-анализа, источники и формат отчетов без установки новых инструментов.
+Сейчас проекту нужен набор легких repo skills для повторяемых Ozon/WB задач, а
+не один большой `marketplace-analytics` и не отдельный Codex plugin или
+multi-agent runtime. `marketplace-analytics` должен быть router-skill, а
+детальные правила должны жить в узких skills и профильных runbook.
 
 Plugin, Agents SDK, tracing и отдельные MCP-интеграции имеют смысл только после
 стабилизации CLI-задач, `RunManifest`, `TaskRegistry`, source contracts и
@@ -15,17 +16,24 @@ Plugin, Agents SDK, tracing и отдельные MCP-интеграции им�
 
 ## Что сделано сейчас
 
-- Создан repo skill:
+- Создан первоначальный repo skill, затем 2026-06-19 он раздроблен на router и
+  узкие skills:
 
 ```text
 .agents/skills/marketplace-analytics/SKILL.md
+.agents/skills/marketplace-reviews-questions/SKILL.md
+.agents/skills/marketplace-ozon-messenger/SKILL.md
+.agents/skills/marketplace-supply-planning/SKILL.md
+.agents/skills/marketplace-search-query-research/SKILL.md
+.agents/skills/marketplace-action-monitoring/SKILL.md
 ```
 
-- Назначение skill: read-only аналитика маркетплейсов, SEO-аудит карточек,
-  parser-позиции, поисковые запросы, цены/маржинальность, эффективность
-  продвижения, отзывы/вопросы и повторяемые отчеты.
-- Skill не выполняет write-операции в магазинах и не хранит секреты.
-- Skill ссылается на действующие runbook-и проекта и safety-правила
+- Назначение `marketplace-analytics`: короткий router для выбора профильного
+  skill/runbook.
+- Назначение узких skills: reviews/questions, Ozon Messenger, supply planning,
+  search-query research и action monitoring.
+- Skills не выполняют write-операции в магазинах и не хранят секреты.
+- Skills ссылаются на действующие runbook-и проекта и safety-правила
   `AGENTS.md`.
 
 ## Что не делать сейчас
@@ -41,14 +49,20 @@ Plugin, Agents SDK, tracing и отдельные MCP-интеграции им�
 
 ## Этап 1. Repo skill и ручная аналитика
 
-Статус: выполнено частично.
+Статус: выполнено частично; 2026-06-19 выполнено дробление mega-skill на
+router + узкие repo skills.
 
 Цель: дать fresh-агенту короткую точку входа для аналитики Ozon/WB без
 повторного восстановления правил из длинной истории чата.
 
 Что есть:
 
-- `.agents/skills/marketplace-analytics/SKILL.md`;
+- `.agents/skills/marketplace-analytics/SKILL.md` как router;
+- `.agents/skills/marketplace-reviews-questions/SKILL.md`;
+- `.agents/skills/marketplace-ozon-messenger/SKILL.md`;
+- `.agents/skills/marketplace-supply-planning/SKILL.md`;
+- `.agents/skills/marketplace-search-query-research/SKILL.md`;
+- `.agents/skills/marketplace-action-monitoring/SKILL.md`;
 - `data/planning/seo_audit_runbook.md`;
 - `data/planning/search_queries_runbook.md`;
 - `data/planning/ozon_parser_positions_runbook.md`;
@@ -60,19 +74,19 @@ Plugin, Agents SDK, tracing и отдельные MCP-интеграции им�
 
 Следующие шаги:
 
-1. Использовать skill в следующих SEO/parser/pricing/ads аналитических задачах.
-2. После каждого реального анализа дополнять skill только теми правилами,
-   которые повторяются и помогают fresh-агенту.
-3. В каждом итоговом отчете по задаче с этим skill отдельно отмечать, найдено
-   ли полезное улучшение для skill. Если улучшение есть, агент должен
-   предложить владельцу конкретную правку.
-4. Не превращать skill в архив отчетов: конкретные результаты хранить в
+1. Использовать самый узкий skill, а `marketplace-analytics` только как router.
+2. После каждого реального анализа дополнять профильный runbook; узкий skill
+   обновлять только повторяемыми правилами, source routes, recovery-сценариями
+   или критериями качества.
+3. Не возвращать все детали обратно в router-skill.
+4. Не превращать skills в архив отчетов: конкретные результаты хранить в
    `data/runs/` или профильных permanent-документах.
 
 Критерий готовности:
 
-- Fresh-агент может открыть `AGENTS.md`, затем skill и профильный runbook, после
-  чего понимает, какие источники собрать и какой отчет подготовить.
+- Fresh-агент может открыть `AGENTS.md`, затем router или узкий skill и
+  профильный runbook, после чего понимает, какие источники собрать и какой
+  отчет подготовить.
 
 ## Этап 2. CLI-команды для аналитики
 
