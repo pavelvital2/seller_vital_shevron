@@ -110,13 +110,18 @@ Smoke-проверка 2026-06-21 на текущих локальных дан�
 ozon_catalog_rows: 548
 wb_catalog_rows: 431
 mapping_rows: 269
-confirmed_mapping_rows: 31
-unified_products: 948
-confirmed_products: 31
-ozon_only_products: 517
-wb_only_products: 400
+confirmed_mapping_rows: 269
+unified_products: 710
+confirmed_products: 269
+ozon_only_products: 279
+wb_only_products: 162
 issue_count: 0
 ```
+
+Важное правило статусов: для внутреннего unified catalog подтвержденными
+считать не только ровно `owner_confirmed`, но и все owner-approved batch/status
+варианты вида `owner_confirmed_*` и `owner_corrected_*`. Эти статусы появляются
+после пакетного согласования владельцем и не являются черновиком.
 
 ## Правила работы до унификации
 

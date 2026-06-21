@@ -86,6 +86,25 @@ def test_build_unified_products_reports_duplicate_confirmed_mapping_values() -> 
     assert summary["issue_count"] == 3
 
 
+def test_build_unified_products_treats_owner_batch_statuses_as_confirmed() -> None:
+    products, issues, summary = build_unified_products(
+        ozon_rows=[{"offer_id": "oz-1", "title": "Ozon"}],
+        wb_rows=[{"vendor_code": "wb-1", "title": "WB"}],
+        mapping_rows=[
+            {
+                "review_status": "owner_confirmed_name_first_batch1",
+                "internal_sku": "chev_nr_svo_text0001",
+                "ozon_offer_id": "oz-1",
+                "wb_vendor_code": "wb-1",
+            }
+        ],
+    )
+
+    assert issues == []
+    assert summary["confirmed_mapping_rows"] == 1
+    assert products[0].mapping_status == "confirmed"
+
+
 def test_task_registry_contains_unified_catalog_builder() -> None:
     task = get_task_definition("build-unified-catalog")
 

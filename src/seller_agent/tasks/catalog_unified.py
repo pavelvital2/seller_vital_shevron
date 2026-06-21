@@ -102,7 +102,9 @@ def _mapping_row_status(row: dict[str, str]) -> str:
 
 def _is_confirmed_mapping(row: dict[str, str]) -> bool:
     status = _mapping_row_status(row)
-    return status in {"confirmed", "owner_confirmed", "approved", "да", "yes", "true", "1"}
+    if status.startswith(("owner_confirmed", "owner_corrected")):
+        return True
+    return status in {"confirmed", "approved", "да", "yes", "true", "1"}
 
 
 def _mapped_ozon_offer_ids(mapping_rows: list[dict[str, str]]) -> set[str]:
