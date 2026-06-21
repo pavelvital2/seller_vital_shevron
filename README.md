@@ -51,6 +51,7 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli bot
 
 ```bash
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli fetch-catalog
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli build-unified-catalog
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli daily-morning-report
 ```
 

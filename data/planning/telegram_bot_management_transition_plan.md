@@ -340,6 +340,18 @@ data/catalog/unified/products.csv
 data/catalog/unified/products.json
 ```
 
+Штатная read-only команда:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli build-unified-catalog
+```
+
+Команда добавлена 2026-06-21 как отдельный слой `catalog-build-unified` в
+`TaskRegistry`. Она берет confirmed mapping и обработанные Ozon/WB каталоги,
+строит внутренний общий каталог, пишет `RunManifest` и issues-report, но не
+переименовывает seller SKU на площадках.
+
 Минимальные поля общего каталога:
 
 ```text

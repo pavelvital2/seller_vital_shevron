@@ -183,6 +183,20 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         telegram_button_label="/catalog",
     ),
     RegisteredTask(
+        name="catalog-build-unified",
+        command="build-unified-catalog",
+        title="Build unified catalog",
+        description=(
+            "Build internal product-level catalog from confirmed Ozon/WB mapping "
+            "and processed marketplace catalogs."
+        ),
+        mode="read_only",
+        risk="low",
+        marketplaces=("ozon", "wb"),
+        runbook_path="data/planning/catalog_mapping_runbook.md",
+        requires_mapping=True,
+    ),
+    RegisteredTask(
         name="status-preflight",
         command="status-preflight",
         title="Status preflight",

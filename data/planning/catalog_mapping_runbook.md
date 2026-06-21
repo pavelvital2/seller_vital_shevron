@@ -17,6 +17,8 @@ data/catalog/wb/processed/wb_catalog.json
 data/catalog/wb/processed/wb_catalog.csv
 data/catalog/mapping/ozon_wb_product_mapping.csv
 data/catalog/mapping/ozon_wb_product_mapping_review.md
+data/catalog/unified/products.json
+data/catalog/unified/products.csv
 data/catalog/unified/future_seller_sku_plan.csv
 ```
 
@@ -36,6 +38,85 @@ PYTHONPATH=src python3 -m seller_agent.cli fetch-catalog
 - отдельный Ozon catalog;
 - отдельный WB catalog;
 - legacy `master_catalog` для совместимости старых сценариев.
+
+## Сборка внутреннего общего каталога
+
+После owner review confirmed mapping общий product-level каталог собирается
+отдельной read-only командой:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli build-unified-catalog
+```
+
+Входы по умолчанию:
+
+```text
+data/catalog/mapping/ozon_wb_internal_sku_confirmed.csv
+data/catalog/ozon/processed/ozon_catalog.csv
+data/catalog/wb/processed/wb_catalog.csv
+```
+
+Выходы:
+
+```text
+data/catalog/unified/products.json
+data/catalog/unified/products.csv
+data/runs/<date>/<run_id>/unified_catalog_report.md
+data/runs/<date>/<run_id>/unified_catalog_issues.json
+```
+
+`products.csv/json` - внутренний слой проекта. Он не меняет Ozon `offer_id` и
+WB `vendorCode`, не является разрешением на переименование артикулов продавца
+и не должен использоваться для marketplace write без проверки native IDs.
+
+Минимальные поля общего каталога:
+
+```text
+internal_product_id
+internal_sku
+product_name
+product_group
+pack_qty
+cost_total
+cost_per_unit
+ozon_offer_id
+ozon_product_id
+ozon_sku
+wb_vendor_code
+wb_nm_id
+mapping_status
+active_ozon
+active_wb
+notes
+```
+
+Правила сборки:
+
+- в `confirmed` попадают только строки confirmed/approved mapping;
+- товары из Ozon/WB catalog, которых нет в confirmed mapping, остаются
+  `ozon_only` или `wb_only`, а не считаются ошибкой;
+- дубли `internal_sku`, `ozon_offer_id`, `wb_vendor_code` в confirmed mapping
+  попадают в `unified_catalog_issues.json`;
+- ссылки mapping на отсутствующие строки локальных каталогов попадают в issues;
+- `pack_qty` берется из `kitN` в `internal_sku`, иначе равен `1`;
+- текущая базовая себестоимость для расчета `cost_total` - `85` рублей за
+  единицу/штуку по зафиксированному правилу владельца; при изменении
+  себестоимости нужно обновить расчетный слой отдельно.
+
+Smoke-проверка 2026-06-21 на текущих локальных данных:
+
+```text
+ozon_catalog_rows: 548
+wb_catalog_rows: 431
+mapping_rows: 269
+confirmed_mapping_rows: 31
+unified_products: 948
+confirmed_products: 31
+ozon_only_products: 517
+wb_only_products: 400
+issue_count: 0
+```
 
 ## Правила работы до унификации
 

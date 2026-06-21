@@ -1,6 +1,6 @@
 # TaskRegistry Runbook
 
-Дата актуализации: 2026-06-18
+Дата актуализации: 2026-06-21
 
 ## Итог
 
@@ -92,6 +92,7 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 - `tasks`;
 - `approvals`;
 - `fetch-catalog`;
+- `build-unified-catalog`;
 - `status-preflight`;
 - `daily-morning-report`;
 - `sessions`;
@@ -112,6 +113,18 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 - `reviews-questions`;
 - `apply-reviews-questions`;
 - `prepare-reviews-questions-approved`.
+
+`build-unified-catalog`:
+
+- task name: `catalog-build-unified`;
+- mode: `read_only`;
+- risk: `low`;
+- marketplaces: `ozon`, `wb`;
+- requires_mapping: `true`;
+- credentials/LK/confirmation не требуются;
+- runbook: `data/planning/catalog_mapping_runbook.md`;
+- назначение: собрать внутренний `data/catalog/unified/products.csv/json` из
+  confirmed mapping и локальных processed каталогов Ozon/WB.
 
 ## Следующий шаг
 

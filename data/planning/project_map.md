@@ -1,6 +1,6 @@
 # Vital Shevron Project Map
 
-Дата: 2026-06-18
+Дата: 2026-06-21
 
 ```text
 /home/pavel/projects/seller_vital_shevron
@@ -57,6 +57,10 @@
   marketplace, runbook, требования к credentials/LK/mapping/confirmation и
   Telegram-label для будущего бота.
 - `tasks list|show` - CLI-команды просмотра `TaskRegistry`.
+- `src/seller_agent/tasks/catalog_unified.py` - read-only сборка внутреннего
+  общего product-level каталога из confirmed Ozon/WB mapping и обработанных
+  Ozon/WB каталогов; команда `build-unified-catalog` пишет
+  `data/catalog/unified/products.csv/json`, issues-report и `RunManifest`.
 - `src/seller_agent/bot/dispatcher.py` - thin layer над `TaskRegistry` для
   будущего Telegram-бота.
 - `src/seller_agent/bot/commands.py` - read-only Telegram MVP command layer:
@@ -154,7 +158,8 @@ Ozon CDP port по умолчанию: `9544`.
 - `data/catalog/wb/raw/` - raw WB API snapshots, не коммитить.
 - `data/catalog/wb/processed/` - обработанный WB catalog, не коммитить.
 - `data/catalog/mapping/` - mapping Ozon/WB товаров.
-- `data/catalog/unified/` - будущий план унификации seller SKU.
+- `data/catalog/unified/` - внутренний product-level каталог
+  `products.csv/json` и будущие планы унификации seller SKU; не коммитить.
 - `data/runs/` - runtime reports, не коммитить.
 - `data/runs/index.jsonl` - runtime-индекс `RunManifest`, не коммитить.
 - `data/pending/` - pending packages перед approval, не коммитить.

@@ -20,6 +20,7 @@ from seller_agent.config import load_credentials
 from seller_agent.core.run_manifest import find_run, latest_run, list_runs
 from seller_agent.tasks.approvals import run_approvals_close, run_approvals_status
 from seller_agent.tasks.catalog_fetch import run_catalog_fetch
+from seller_agent.tasks.catalog_unified import run_build_unified_catalog
 from seller_agent.tasks.actions_apply import run_actions_apply
 from seller_agent.tasks.daily_morning_report import run_daily_morning_report
 from seller_agent.tasks.ozon_cpc_bids_apply import run_ozon_cpc_bids_apply
@@ -284,6 +285,41 @@ def build_parser() -> argparse.ArgumentParser:
         "--run-id",
         default=None,
         help="Optional stable run id.",
+    )
+
+    build_unified_catalog = subparsers.add_parser(
+        "build-unified-catalog",
+        help="Build read-only internal product-level catalog from confirmed Ozon/WB mapping.",
+    )
+    build_unified_catalog.add_argument(
+        "--data-dir",
+        default="data",
+        help="Project data directory.",
+    )
+    build_unified_catalog.add_argument(
+        "--run-id",
+        default=None,
+        help="Optional stable run id.",
+    )
+    build_unified_catalog.add_argument(
+        "--mapping-path",
+        default=None,
+        help="Confirmed mapping CSV. Defaults to data/catalog/mapping/ozon_wb_internal_sku_confirmed.csv.",
+    )
+    build_unified_catalog.add_argument(
+        "--ozon-catalog-path",
+        default=None,
+        help="Ozon processed catalog CSV. Defaults to data/catalog/ozon/processed/ozon_catalog.csv.",
+    )
+    build_unified_catalog.add_argument(
+        "--wb-catalog-path",
+        default=None,
+        help="WB processed catalog CSV. Defaults to data/catalog/wb/processed/wb_catalog.csv.",
+    )
+    build_unified_catalog.add_argument(
+        "--output-dir",
+        default=None,
+        help="Unified catalog output directory. Defaults to data/catalog/unified.",
     )
 
     status_preflight = subparsers.add_parser(
@@ -1008,6 +1044,18 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if not result["errors"] else 2
+
+    if args.command == "build-unified-catalog":
+        result = run_build_unified_catalog(
+            data_dir=Path(args.data_dir),
+            mapping_path=Path(args.mapping_path) if args.mapping_path else None,
+            ozon_catalog_path=Path(args.ozon_catalog_path) if args.ozon_catalog_path else None,
+            wb_catalog_path=Path(args.wb_catalog_path) if args.wb_catalog_path else None,
+            output_dir=Path(args.output_dir) if args.output_dir else None,
+            run_id=args.run_id,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
 
     if args.command == "plan-wb-card-create":
         result = run_wb_card_create_plan(
