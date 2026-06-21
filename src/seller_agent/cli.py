@@ -20,6 +20,7 @@ from seller_agent.config import load_credentials
 from seller_agent.core.run_manifest import find_run, latest_run, list_runs
 from seller_agent.tasks.approvals import run_approvals_close, run_approvals_status
 from seller_agent.tasks.catalog_fetch import run_catalog_fetch
+from seller_agent.tasks.catalog_internal_sku_plan import run_internal_sku_plan
 from seller_agent.tasks.catalog_unified import run_build_unified_catalog
 from seller_agent.tasks.actions_apply import run_actions_apply
 from seller_agent.tasks.daily_morning_report import run_daily_morning_report
@@ -320,6 +321,31 @@ def build_parser() -> argparse.ArgumentParser:
         "--output-dir",
         default=None,
         help="Unified catalog output directory. Defaults to data/catalog/unified.",
+    )
+
+    internal_sku_plan = subparsers.add_parser(
+        "plan-internal-skus",
+        help="Build read-only internal SKU proposal plan for Ozon-only and WB-only products.",
+    )
+    internal_sku_plan.add_argument(
+        "--data-dir",
+        default="data",
+        help="Project data directory.",
+    )
+    internal_sku_plan.add_argument(
+        "--run-id",
+        default=None,
+        help="Optional stable run id.",
+    )
+    internal_sku_plan.add_argument(
+        "--products-path",
+        default=None,
+        help="Unified products CSV. Defaults to data/catalog/unified/products.csv.",
+    )
+    internal_sku_plan.add_argument(
+        "--output-dir",
+        default=None,
+        help="Plan output directory. Defaults to data/catalog/unified.",
     )
 
     status_preflight = subparsers.add_parser(
@@ -1051,6 +1077,16 @@ def main(argv: list[str] | None = None) -> int:
             mapping_path=Path(args.mapping_path) if args.mapping_path else None,
             ozon_catalog_path=Path(args.ozon_catalog_path) if args.ozon_catalog_path else None,
             wb_catalog_path=Path(args.wb_catalog_path) if args.wb_catalog_path else None,
+            output_dir=Path(args.output_dir) if args.output_dir else None,
+            run_id=args.run_id,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
+
+    if args.command == "plan-internal-skus":
+        result = run_internal_sku_plan(
+            data_dir=Path(args.data_dir),
+            products_path=Path(args.products_path) if args.products_path else None,
             output_dir=Path(args.output_dir) if args.output_dir else None,
             run_id=args.run_id,
         )

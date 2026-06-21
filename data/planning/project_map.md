@@ -61,6 +61,10 @@
   общего product-level каталога из confirmed Ozon/WB mapping и обработанных
   Ozon/WB каталогов; команда `build-unified-catalog` пишет
   `data/catalog/unified/products.csv/json`, issues-report и `RunManifest`.
+- `src/seller_agent/tasks/catalog_internal_sku_plan.py` - read-only план
+  присвоения внутренних `internal_sku` товарам `ozon_only`/`wb_only` из
+  unified catalog; команда `plan-internal-skus` формирует review CSV/JSON,
+  не меняет Ozon `offer_id` и WB `vendorCode`.
 - `src/seller_agent/bot/dispatcher.py` - thin layer над `TaskRegistry` для
   будущего Telegram-бота.
 - `src/seller_agent/bot/commands.py` - read-only Telegram MVP command layer:
@@ -159,7 +163,8 @@ Ozon CDP port по умолчанию: `9544`.
 - `data/catalog/wb/processed/` - обработанный WB catalog, не коммитить.
 - `data/catalog/mapping/` - mapping Ozon/WB товаров.
 - `data/catalog/unified/` - внутренний product-level каталог
-  `products.csv/json` и будущие планы унификации seller SKU; не коммитить.
+  `products.csv/json`, планы внутренних артикулов marketplace-only товаров и
+  будущие планы унификации seller SKU; не коммитить.
 - `data/runs/` - runtime reports, не коммитить.
 - `data/runs/index.jsonl` - runtime-индекс `RunManifest`, не коммитить.
 - `data/pending/` - pending packages перед approval, не коммитить.

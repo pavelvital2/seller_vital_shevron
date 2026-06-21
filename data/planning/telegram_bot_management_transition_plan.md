@@ -352,6 +352,20 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 строит внутренний общий каталог, пишет `RunManifest` и issues-report, но не
 переименовывает seller SKU на площадках.
 
+6A. Для товаров, которые остались `ozon_only` или `wb_only`, построить
+read-only план внутренних артикулов:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli plan-internal-skus
+```
+
+Команда `catalog-internal-sku-plan` формирует
+`data/catalog/unified/internal_sku_assignment_plan.csv/json` и run report. Это
+только review-план: реальные `offer_id` Ozon и `vendorCode` WB не меняются,
+а `auto_candidate` строки все равно требуют owner review перед записью в
+постоянный mapping/unified слой.
+
 Минимальные поля общего каталога:
 
 ```text

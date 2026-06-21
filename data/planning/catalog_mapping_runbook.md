@@ -123,6 +123,72 @@ issue_count: 0
 варианты вида `owner_confirmed_*` и `owner_corrected_*`. Эти статусы появляются
 после пакетного согласования владельцем и не являются черновиком.
 
+## План внутренних артикулов для Ozon-only/WB-only
+
+После сборки `data/catalog/unified/products.csv` marketplace-only товарам нужно
+присвоить нормальные внутренние `internal_sku`, но без изменения реальных
+артикулов продавца на Ozon/WB.
+
+Штатная read-only команда:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli plan-internal-skus
+```
+
+Вход:
+
+```text
+data/catalog/unified/products.csv
+```
+
+Выходы:
+
+```text
+data/catalog/unified/internal_sku_assignment_plan.csv
+data/catalog/unified/internal_sku_assignment_plan.json
+data/runs/<date>/<run_id>/internal_sku_assignment_report.md
+```
+
+План не является apply. Он только предлагает `internal_sku` для строк со
+статусами `ozon_only` и `wb_only`.
+
+Статусы строк плана:
+
+- `auto_candidate` - правило смогло уверенно предложить внутренний артикул,
+  но строка все равно требует owner review перед записью;
+- `needs_owner_review` - артикул предложен, но есть риск: неизвестно место
+  ношения, не указано количество в комплекте, найдено совпадение названия с
+  уже подтвержденным товаром или другая неоднозначность;
+- `unsupported_product_type` - текущая схема `chev/nash/loop` не покрывает
+  товар. Нельзя насильно присваивать такому товару шевронный артикул;
+- `conflict` - предложенный артикул конфликтует с уже занятым.
+
+Правила безопасности:
+
+- если название marketplace-only товара совпадает с уже confirmed товаром,
+  строка уходит в `needs_owner_review`, даже если SKU можно предложить;
+- если товар не похож на шеврон, нашивку или петлицу, он получает
+  `unsupported_product_type`;
+- для комплектов с неизвестным количеством не делать auto-решение;
+- для товаров без понятного места ношения не делать auto-решение;
+- предложенные `internal_sku` проверяются на конфликт с уже существующими
+  `internal_sku` и между собой.
+
+Smoke-проверка 2026-06-21 на текущем `products.csv`:
+
+```text
+input_products: 710
+marketplace_only_products: 441
+ozon_only_products: 279
+wb_only_products: 162
+auto_candidate_rows: 97
+needs_owner_review_rows: 293
+unsupported_product_type_rows: 51
+conflict_rows: 0
+proposed_internal_skus: 379
+```
+
 ## Правила работы до унификации
 
 - Ozon-only сценарии используют `offer_id`, `product_id`, `sku`.

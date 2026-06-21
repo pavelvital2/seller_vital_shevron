@@ -63,6 +63,7 @@ data/runs/index.jsonl
 
 - `catalog-fetch`: `mode=read_only`, `risk=low`;
 - `catalog-build-unified`: `mode=read_only`, `risk=low`;
+- `catalog-internal-sku-plan`: `mode=read_only`, `risk=low`;
 - `wb-promotion-report`: `mode=read_only`, `risk=low`;
 - `ozon-elastic-plan`: `mode=dry_run`, `risk=normal`;
 - `ozon-elastic-apply`: `mode=apply`, `risk=high`;

@@ -93,6 +93,7 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 - `approvals`;
 - `fetch-catalog`;
 - `build-unified-catalog`;
+- `plan-internal-skus`;
 - `status-preflight`;
 - `daily-morning-report`;
 - `sessions`;
@@ -125,6 +126,18 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 - runbook: `data/planning/catalog_mapping_runbook.md`;
 - назначение: собрать внутренний `data/catalog/unified/products.csv/json` из
   confirmed mapping и локальных processed каталогов Ozon/WB.
+
+`plan-internal-skus`:
+
+- task name: `catalog-internal-sku-plan`;
+- mode: `read_only`;
+- risk: `low`;
+- marketplaces: `ozon`, `wb`;
+- requires_mapping: `true`;
+- credentials/LK/confirmation не требуются;
+- runbook: `data/planning/catalog_mapping_runbook.md`;
+- назначение: построить review-план внутренних `internal_sku` для
+  `ozon_only`/`wb_only` товаров без изменения артикулов продавца на Ozon/WB.
 
 ## Следующий шаг
 

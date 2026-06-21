@@ -197,6 +197,20 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_mapping=True,
     ),
     RegisteredTask(
+        name="catalog-internal-sku-plan",
+        command="plan-internal-skus",
+        title="Plan internal SKUs",
+        description=(
+            "Build read-only internal SKU proposal plan for Ozon-only and WB-only "
+            "products from unified catalog."
+        ),
+        mode="read_only",
+        risk="low",
+        marketplaces=("ozon", "wb"),
+        runbook_path="data/planning/catalog_mapping_runbook.md",
+        requires_mapping=True,
+    ),
+    RegisteredTask(
         name="status-preflight",
         command="status-preflight",
         title="Status preflight",
