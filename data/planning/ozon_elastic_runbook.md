@@ -134,6 +134,21 @@ Baseline продаж для контроля результативности:
   цены `Супербустинга`. Эти акции нужно продолжать контролировать как разные
   механики Ozon с разными `action_id`.
 
+Проверка после корректировки Ozon Elastic 2026-06-21:
+
+- проверочный run:
+  `ozon_superboosting_verify_after_elastic_20260621T170803`;
+- режим: read-only/verify, изменений в Ozon не выполнялось;
+- проверялся `Супербустинг`, `action_id=3876484`, после apply Ozon Elastic
+  `ozon_elastic_apply_20260621T170628`;
+- ожидаемых товаров: `91`;
+- активных товаров в `Супербустинг`: `91`;
+- пропавших ожидаемых товаров: `0`;
+- лишних активных товаров: `0`;
+- расхождений по action price: `0`;
+- вывод: корректировка `Эластичного бустинга` 2026-06-21 не изменила состав
+  товаров и цены `Супербустинга`.
+
 ## Формат предварительного отчета владельцу
 
 Telegram-вывод строить по общему стандарту
@@ -289,6 +304,28 @@ Elastic меняет финансовые условия продажи. Partial
   `data/runs/2026-06-20/ozon_elastic_apply_20260620T074653/ozon_elastic_apply_result.md`.
 
 Повторный apply по `ozon_elastic_plan_20260620T073712` не выполнять:
+idempotency marker сохранен в `data/approved/applied/`.
+
+## Штатный apply 2026-06-21
+
+Подтвержденный сценарий:
+
+- approved dry-run: `ozon_elastic_plan_20260621T165916`;
+- apply: `ozon_elastic_apply_20260621T170628`;
+- fresh preflight: `status_preflight_20260621T170628`, статус `ok`;
+- fresh dry-run перед записью: `ozon_elastic_plan_20260621T170708`;
+- drift-check: `partial_apply_unchanged_rows`, skipped/drift `0`;
+- применено: `46` строк activate/update и `2` строки deactivate;
+- Ozon API rejected: `0`;
+- verify: `ok`, расхождений по ценам `0`, снятых строк, оставшихся в акции,
+  `0`;
+- после apply отдельно проверен `Супербустинг`:
+  `ozon_superboosting_verify_after_elastic_20260621T170803`, активных товаров
+  `91/91`, расхождений по action price `0`;
+- отчет результата:
+  `data/runs/2026-06-21/ozon_elastic_apply_20260621T170628/ozon_elastic_apply_result.md`.
+
+Повторный apply по `ozon_elastic_plan_20260621T165916` не выполнять:
 idempotency marker сохранен в `data/approved/applied/`.
 
 ## Штатный apply 2026-06-16

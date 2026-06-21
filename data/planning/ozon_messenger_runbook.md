@@ -377,6 +377,28 @@ approved package.
   `sessions_status_after_keepalive_messenger_retry_20260620T0849` вернул
   `overall_status: ok`.
 
+Подтвержденный apply 2026-06-21:
+
+- После owner approval по run `ozon_messenger_triage_20260621T172053`
+  выполнен apply `ozon_messenger_apply_20260621T173056`.
+- Официальный `/v1/chat/send/message` для ответа покупателю снова вернул
+  `HTTP 403`: `method is allowed starting from the premium plus subscription`;
+  это штатно переводит отправку ответа на LK/CDP fallback.
+- `scripts/messenger/ozon_send_messages_cdp.js` отправил 1 согласованный ответ
+  покупателю через CDP-контур Vital Shevron `127.0.0.1:9544`; результат
+  `sent_ok=1`, `skipped=0`, `blocker=""`.
+- 3 информационных уведомления Ozon отмечены прочитанными через
+  `/v2/chat/read` с payload `{"chat_id": "...", "from_message_id": ...}`.
+- Verify через `/v3/chat/history` подтвердил: последнее сообщение в
+  покупательском чате имеет `user.type = Seller`, текст совпадает с approved
+  package, непрочитанных сообщений покупателя нет.
+- Полный обход `/v3/chat/list` после apply показал `0` строк с
+  `unread_count > 0` и `0` фактически непрочитанных сообщений в историях; общий
+  `total_unread_count` при этом остался `1`, поэтому этот общий счетчик
+  считать нестрогим и сверять по строкам/историям.
+- После apply выполнен `ozon_session_keepalive_cdp.js`; контур Vital Shevron
+  подтвержден, `stateExported=true`, `needsLogin=false`.
+
 Важное ограничение LK-страницы Messenger: общий `document.body.innerText`
 содержит не только открытый диалог, но и список соседних чатов. Поэтому нельзя
 определять блокировку или статус целевого чата поиском фраз вроде

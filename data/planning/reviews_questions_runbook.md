@@ -60,6 +60,20 @@ data/approved/<approved_id>/skipped_actions.json
 data/approved/<approved_id>/APPROVED_PACKAGE.md
 ```
 
+Apply выполнять только после явного согласования владельца и только из
+approved-пакета:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli apply-reviews-questions \
+  --approved-path data/approved/<approved_id>/approved_apply_plan.json \
+  --confirmed-by-user
+```
+
+Если запустить apply без `--confirmed-by-user`, guard должен завершить команду
+с блокером `Apply requires --confirmed-by-user`. Это штатная защита, после
+проверки согласования нужно повторить команду с флагом.
+
 `apply-reviews-questions` проверяет `actions_checksum` до внешних write-
 операций. Если approved JSON был изменен после создания, apply должен
 завершиться ошибкой checksum mismatch.
@@ -216,6 +230,32 @@ NODE_PATH=/home/Codex/agent-tools/node/node_modules \
   Нельзя автоматически отмечать его просмотренным в рамках старого approval.
 
 ## Проверенные операции
+
+### Штатный apply 2026-06-21
+
+- Pending-пакет:
+  `data/pending/reviews_questions_20260621T165153_pending`.
+- Approved-пакет:
+  `data/approved/reviews_questions_20260621T165153_pending_approved/approved_apply_plan.json`.
+- Apply: `reviews_questions_apply_20260621T165647`.
+- Перед apply Ozon-сессия была восстановлена через штатный
+  `restore-ozon-session`; CDP guard подтвердил порт `9544` и профиль Vital
+  Shevron.
+- Результат apply: WB ответы `0/0`, WB вопросы `0/0`, Ozon публичные ответы
+  `5/5`, Ozon отметки просмотренным `47/47`.
+- Счетчик Ozon перед/после: `NOT_VIEWED 52 -> 0`, `PROCESSED 2613 -> 2618`,
+  `VIEWED 3956 -> 4003`.
+- Контрольный read-only: `reviews_questions_20260621T165709`.
+- Verify: `items_count=0`, `actions_count=0`; WB Feedbacks API вернул `0`
+  отзывов/вопросов к обработке, Ozon LK/CDP fallback вернул `0` отзывов и `0`
+  вопросов к обработке.
+- Ограничение источника: официальный Ozon Review API `/v1/review/count` и
+  `/v1/review/list` вернул `HTTP 403: not available with existing
+  subscription`, поэтому Ozon проверен через LK/CDP fallback.
+- Медиа: в согласованном пакете не было фото или видео.
+- Нулевой pending контрольного verify
+  `reviews_questions_20260621T165709_pending` закрыт как `no_actions_verify`,
+  чтобы он не висел в статусах на согласование.
 
 ### Штатный apply 2026-06-20
 
