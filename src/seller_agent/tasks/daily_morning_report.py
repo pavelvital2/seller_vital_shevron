@@ -185,11 +185,66 @@ def _catalog_section(preflight: dict[str, Any] | None) -> dict[str, Any]:
     return catalog if isinstance(catalog, dict) else {}
 
 
+def _unified_catalog_rows(data_dir: Path) -> list[dict[str, Any]]:
+    rows = _safe_read_json(data_dir / "catalog" / "unified" / "products.json")
+    if not isinstance(rows, list):
+        return []
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def _unified_catalog_section(data_dir: Path) -> dict[str, Any]:
+    path = data_dir / "catalog" / "unified" / "products.json"
+    if not path.exists():
+        return {
+            "status": "missing",
+            "path": str(path),
+            "error": "products.json missing",
+        }
+
+    rows = _unified_catalog_rows(data_dir)
+    if not rows:
+        return {
+            "status": "error",
+            "path": str(path),
+            "error": "unified catalog is empty or not a list",
+        }
+
+    mapping_counts = Counter(str(row.get("mapping_status") or "unknown").strip() or "unknown" for row in rows)
+    active_ozon = sum(1 for row in rows if _truthy(row.get("active_ozon")))
+    active_wb = sum(1 for row in rows if _truthy(row.get("active_wb")))
+    with_internal_sku = sum(1 for row in rows if str(row.get("internal_sku") or "").strip())
+    stat = path.stat()
+    return {
+        "status": "ok",
+        "path": str(path),
+        "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+        "products": len(rows),
+        "with_internal_sku": with_internal_sku,
+        "confirmed_products": mapping_counts.get("confirmed", 0),
+        "ozon_only_products": mapping_counts.get("ozon_only", 0),
+        "wb_only_products": mapping_counts.get("wb_only", 0),
+        "mapping_status_counts": dict(sorted(mapping_counts.items())),
+        "active_ozon_products": active_ozon,
+        "active_wb_products": active_wb,
+        "both_marketplaces_products": sum(
+            1 for row in rows if _truthy(row.get("active_ozon")) and _truthy(row.get("active_wb"))
+        ),
+    }
+
+
 def _master_catalog_rows(data_dir: Path) -> list[dict[str, Any]]:
     rows = _safe_read_json(data_dir / "catalog" / "processed" / "master_catalog.json")
     if not isinstance(rows, list):
         return []
     return [row for row in rows if isinstance(row, dict)]
+
+
+def _catalog_title(row: dict[str, Any]) -> str:
+    return str(row.get("title") or row.get("name") or row.get("product_name") or "").strip()
+
+
+def _catalog_internal_sku(row: dict[str, Any]) -> str:
+    return str(row.get("internal_sku") or row.get("master_sku") or row.get("internal_product_id") or "").strip()
 
 
 def _first_number(source: dict[str, Any], keys: tuple[str, ...]) -> float:
@@ -349,6 +404,7 @@ def _summarize_ozon_stocks(
     low_stock_threshold: int = 3,
 ) -> dict[str, Any]:
     product_to_catalog = {str(row.get("ozon_product_id")): row for row in catalog_rows if row.get("ozon_product_id")}
+    offer_to_catalog = {str(row.get("ozon_offer_id")): row for row in catalog_rows if row.get("ozon_offer_id")}
     low_stock_sample: list[dict[str, Any]] = []
     out_of_stock_count = 0
     low_stock_count = 0
@@ -365,11 +421,12 @@ def _summarize_ozon_stocks(
             out_of_stock_count += 1
         elif present <= low_stock_threshold:
             low_stock_count += 1
-            catalog_row = product_to_catalog.get(product_id, {})
+            catalog_row = product_to_catalog.get(product_id) or offer_to_catalog.get(offer_id) or {}
             low_stock_sample.append(
                 {
-                    "sku": offer_id or catalog_row.get("master_sku") or product_id,
-                    "title": catalog_row.get("title", ""),
+                    "sku": offer_id or catalog_row.get("ozon_offer_id") or catalog_row.get("master_sku") or product_id,
+                    "internal_sku": _catalog_internal_sku(catalog_row),
+                    "title": _catalog_title(catalog_row),
                     "present": int(present),
                 }
             )
@@ -748,23 +805,28 @@ def _summarize_wb_stocks(
         if str(row.get("wb_vendor_code") or "").strip()
     }
     title_by_sku = {
-        str(row.get("wb_vendor_code") or "").strip(): str(row.get("title") or row.get("name") or "").strip()
+        str(row.get("wb_vendor_code") or "").strip(): _catalog_title(row)
+        for row in catalog_rows
+        if str(row.get("wb_vendor_code") or "").strip()
+    }
+    internal_by_sku = {
+        str(row.get("wb_vendor_code") or "").strip(): _catalog_internal_sku(row)
         for row in catalog_rows
         if str(row.get("wb_vendor_code") or "").strip()
     }
     possible_missing = sorted(master_wb_codes - set(qty_by_sku))
     zero_stock_rows = [
-        {"sku": sku, "title": title_by_sku.get(sku, ""), "quantity": int(qty)}
+        {"sku": sku, "internal_sku": internal_by_sku.get(sku, ""), "title": title_by_sku.get(sku, ""), "quantity": int(qty)}
         for sku, qty in sorted(qty_by_sku.items(), key=lambda item: (item[1], item[0]))
         if sku in master_wb_codes and qty <= 0
     ]
     low_stock_sample = [
-        {"sku": sku, "title": title_by_sku.get(sku, ""), "quantity": int(qty)}
+        {"sku": sku, "internal_sku": internal_by_sku.get(sku, ""), "title": title_by_sku.get(sku, ""), "quantity": int(qty)}
         for sku, qty in sorted(qty_by_sku.items(), key=lambda item: (item[1], item[0]))
         if sku in master_wb_codes and 0 < qty <= low_stock_threshold
     ][:10]
     missing_sample = [
-        {"sku": sku, "title": title_by_sku.get(sku, "")}
+        {"sku": sku, "internal_sku": internal_by_sku.get(sku, ""), "title": title_by_sku.get(sku, "")}
         for sku in possible_missing[:10]
     ]
     return {
@@ -998,10 +1060,12 @@ def _collect_business_snapshot(
         "yesterday": (report_day - timedelta(days=1)).isoformat(),
         "today": report_day.isoformat(),
     }
-    catalog_rows = _master_catalog_rows(data_dir)
+    unified_rows = _unified_catalog_rows(data_dir)
+    catalog_rows = unified_rows if unified_rows else _master_catalog_rows(data_dir)
     business: dict[str, Any] = {
         "periods": periods,
         "catalog_rows": len(catalog_rows),
+        "catalog_source": "unified_catalog" if unified_rows else "master_catalog",
         "ozon": {},
         "wb": {},
     }
@@ -1471,6 +1535,7 @@ def _write_report(path: Path, result: dict[str, Any]) -> None:
     ensure_dir(path.parent)
     health = result["project_health"]
     catalog = result["catalog"]
+    unified_catalog = result.get("unified_catalog", {})
     actions = result["actions"]
     sessions = result["sessions"]
     lines = [
@@ -1503,6 +1568,21 @@ def _write_report(path: Path, result: dict[str, Any]) -> None:
                 lines.append(f"- `{key}`: `{catalog[key]}`")
     else:
         lines.append("- catalog summary missing")
+    if unified_catalog:
+        lines.extend(["", "### Единый Каталог", ""])
+        for key in (
+            "status",
+            "products",
+            "with_internal_sku",
+            "confirmed_products",
+            "ozon_only_products",
+            "wb_only_products",
+            "active_ozon_products",
+            "active_wb_products",
+            "modified_at",
+        ):
+            if key in unified_catalog:
+                lines.append(f"- `{key}`: `{unified_catalog[key]}`")
 
     lines.extend(["", "## Операции Маркетплейсов", ""])
     last_apply = actions.get("last_apply_summary", {})
@@ -1613,6 +1693,7 @@ def _write_seller_v2_report(path: Path, result: dict[str, Any]) -> None:
     actions = result["actions"]
     health = result["project_health"]
     catalog = result["catalog"]
+    unified_catalog = result.get("unified_catalog", {})
 
     ozon_orders = ozon.get("orders", {})
     wb_orders = wb.get("orders", {})
@@ -1712,6 +1793,13 @@ def _write_seller_v2_report(path: Path, result: dict[str, Any]) -> None:
         f"matched {_format_int(catalog.get('matched_rows'))}, "
         f"Ozon-only {_format_int(catalog.get('ozon_only_rows'))}, WB-only {_format_int(catalog.get('wb_only_rows'))}."
     )
+    lines.append(
+        f"- Единый каталог: товаров {_format_int(unified_catalog.get('products'))}, "
+        f"confirmed {_format_int(unified_catalog.get('confirmed_products'))}, "
+        f"Ozon-only {_format_int(unified_catalog.get('ozon_only_products'))}, "
+        f"WB-only {_format_int(unified_catalog.get('wb_only_products'))}; "
+        f"источник `{unified_catalog.get('path', 'не подтверждено')}`."
+    )
     lines.append(f"- Business status: `{business.get('business_status')}`.")
 
     lines.extend(["", "## Артефакты", ""])
@@ -1767,10 +1855,14 @@ def _expense_breakdown_lines(label: str, section: dict[str, Any], keys: list[str
 def _sample_sku_title(row: Any) -> str:
     if isinstance(row, dict):
         sku = str(row.get("sku") or "").strip()
+        internal_sku = str(row.get("internal_sku") or "").strip()
         title = str(row.get("title") or "").strip()
+        sku_label = f"`{sku}`"
+        if internal_sku and internal_sku != sku:
+            sku_label += f" / `{internal_sku}`"
         if title:
-            return f"`{sku}` - {title}"
-        return f"`{sku}`"
+            return f"{sku_label} - {title}"
+        return sku_label
     return f"`{row}`"
 
 
@@ -1840,6 +1932,7 @@ def _write_seller_v3_report(path: Path, result: dict[str, Any]) -> None:
     wb = business.get("wb", {})
     periods = business.get("periods", {})
     health = result["project_health"]
+    unified_catalog = result.get("unified_catalog", {})
     actions_v3 = result.get("actions_v3", {})
     supplies_v3 = result.get("supplies_v3", {})
 
@@ -1898,6 +1991,20 @@ def _write_seller_v3_report(path: Path, result: dict[str, Any]) -> None:
         f"- WB API: `{health.get('wb_api')}`",
         f"- Ozon ЛК: `{(health.get('ozon_refresh') or {}).get('status', 'not_checked')}`",
         f"- WB ЛК: `{(health.get('wb_refresh') or {}).get('status', 'not_checked')}`",
+        "",
+        "## Единый Каталог",
+        "",
+        "| Метрика | Значение |",
+        "| --- | ---: |",
+        f"| Статус | {unified_catalog.get('status', 'не подтверждено')} |",
+        f"| Товаров всего | {_metric_int(unified_catalog.get('products'))} |",
+        f"| С внутренним артикулом | {_metric_int(unified_catalog.get('with_internal_sku'))} |",
+        f"| Связанные Ozon+WB | {_metric_int(unified_catalog.get('confirmed_products'))} |",
+        f"| Только Ozon | {_metric_int(unified_catalog.get('ozon_only_products'))} |",
+        f"| Только WB | {_metric_int(unified_catalog.get('wb_only_products'))} |",
+        f"| Активны на Ozon | {_metric_int(unified_catalog.get('active_ozon_products'))} |",
+        f"| Активны на WB | {_metric_int(unified_catalog.get('active_wb_products'))} |",
+        f"| Обновлен | {unified_catalog.get('modified_at', 'не подтверждено')} |",
         "",
         "## Заказы, Выкупы, Отмены За Период",
         "",
@@ -2042,6 +2149,7 @@ def run_daily_morning_report(
     preflight = _latest_preflight(credentials=credentials, data_dir=data_dir, refresh_preflight=refresh_preflight)
     sessions = combined_session_status()
     catalog = _catalog_section(preflight)
+    unified_catalog = _unified_catalog_section(data_dir)
     pending_packages = _pending_packages(data_dir)
     recommendations = _recommendations_summary(data_dir)
     actions = _actions_section(data_dir)
@@ -2082,6 +2190,13 @@ def run_daily_morning_report(
         executive_summary = [
             f"Период отчета: {periods.get('yesterday')} 00:00-23:59 MSK.",
             f"Заказы за период: {_orders_line('Ozon', ozon_orders, 'yesterday')}; {_orders_line('WB', wb_orders, 'yesterday')}.",
+            (
+                "Единый каталог: "
+                f"{unified_catalog.get('products', 'н/д')} товаров, "
+                f"confirmed {unified_catalog.get('confirmed_products', 'н/д')}, "
+                f"Ozon-only {unified_catalog.get('ozon_only_products', 'н/д')}, "
+                f"WB-only {unified_catalog.get('wb_only_products', 'н/д')}."
+            ),
             "V3 уже показывает Ozon/WB рядом; неподключенные источники отмечены как `не подтверждено`.",
         ]
     elif seller_v2:
@@ -2092,6 +2207,7 @@ def run_daily_morning_report(
             f"Заказы вчера: {_orders_line('Ozon', ozon_orders, 'yesterday')}; {_orders_line('WB', wb_orders, 'yesterday')}.",
             f"Заказы сегодня: {_orders_line('Ozon', ozon_orders, 'today')}; {_orders_line('WB', wb_orders, 'today')}.",
             f"Каталог: {catalog.get('rows', 'unknown')} строк, matched {catalog.get('matched_rows', 'unknown')}.",
+            f"Единый каталог: {unified_catalog.get('products', 'unknown')} товаров, confirmed {unified_catalog.get('confirmed_products', 'unknown')}.",
         ]
     else:
         executive_summary = [
@@ -2099,6 +2215,7 @@ def run_daily_morning_report(
             f"Preflight: {preflight_status}.",
             f"Сессии: {sessions['overall_status']}.",
             f"Каталог: {catalog.get('rows', 'unknown')} строк, matched {catalog.get('matched_rows', 'unknown')}.",
+            f"Единый каталог: {unified_catalog.get('products', 'unknown')} товаров, confirmed {unified_catalog.get('confirmed_products', 'unknown')}.",
             f"Открытые рекомендации: {len(recommendations.get('open_items', []))}.",
         ]
         if actions.get("last_apply_summary"):
@@ -2125,6 +2242,7 @@ def run_daily_morning_report(
         "business": business,
         "project_health": project_health,
         "catalog": catalog,
+        "unified_catalog": unified_catalog,
         "actions": actions,
         "actions_v3": actions_v3,
         "supplies_v3": supplies_v3,

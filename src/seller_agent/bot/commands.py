@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import csv
 from dataclasses import asdict, dataclass, field
+import json
 from pathlib import Path
 from typing import Any
 
@@ -53,7 +55,7 @@ def handle_telegram_command(
     live_status: bool = False,
     credentials: AppCredentials | None = None,
 ) -> TelegramCommandResult:
-    command = _normalize_command(message)
+    command, argument = _parse_command(message)
     if command == "/help":
         return _help()
     if command == "/status":
@@ -86,12 +88,14 @@ def handle_telegram_command(
             mode_label="dry-run/read-only",
         )
     if command == "/catalog":
+        if argument:
+            return _catalog_search(argument, data_dir=data_dir)
         return _latest_run_command(
             command=command,
             title="Каталог",
-            task="catalog-fetch",
+            task="catalog-build-unified",
             data_dir=data_dir,
-            next_step="Если нужен свежий каталог, запустить read-only `fetch-catalog`.",
+            next_step="Если нужен свежий единый каталог, запустить read-only `build-unified-catalog`.",
         )
     if command == "/runs":
         return _runs(data_dir=data_dir)
@@ -131,6 +135,7 @@ def _help() -> TelegramCommandResult:
             "Ограничения:",
             "- `/status` собирает свежий read-only preflight, если включен live status mode.",
             "- `/today` собирает свежий read-only отчет, если включен live mode.",
+            "- `/catalog <запрос>` ищет товар в unified catalog по internal_sku, Ozon/WB ID, barcode или названию.",
             "- Остальные команды показывают последние runtime-данные и статусы.",
             "- Изменения в Ozon/WB через Telegram не выполняются.",
         ]
@@ -227,6 +232,7 @@ def _daily_report_chat_text(result: dict[str, Any]) -> str:
     actions = result.get("actions_v3") if isinstance(result.get("actions_v3"), dict) else {}
     ozon_actions = _dict_value(actions, "ozon")
     wb_actions = _dict_value(actions, "wb")
+    unified_catalog = _dict_value(result, "unified_catalog")
 
     ozon_orders_day = _nested(ozon, "orders", "yesterday")
     wb_orders_day = _nested(wb, "orders", "yesterday")
@@ -257,6 +263,9 @@ def _daily_report_chat_text(result: dict[str, Any]) -> str:
         "Остатки:",
         f"- Ozon: всего `{_int(ozon_stocks.get('present_total'))}` шт., нулевой остаток `{_int(ozon_stocks.get('out_of_stock_count'))}` товаров.",
         f"- WB: всего `{_int(wb_stocks.get('quantity_total'))}` шт., нулевой остаток `{_int(wb_stocks.get('zero_stock_count'))}` товаров.",
+        "",
+        "Каталог:",
+        f"- Unified: товаров `{_int(unified_catalog.get('products'))}`, связанных Ozon+WB `{_int(unified_catalog.get('confirmed_products'))}`, только Ozon `{_int(unified_catalog.get('ozon_only_products'))}`, только WB `{_int(unified_catalog.get('wb_only_products'))}`.",
         "",
         "Акции:",
         f"- Ozon: активные `{_int(ozon_actions.get('active_actions'))}`, товаров участвует `{_int(ozon_actions.get('products_in_actions'))}`, не участвует `{_int(ozon_actions.get('products_not_in_actions'))}`.",
@@ -376,12 +385,269 @@ def _latest_run_command(
         lines.append(f"- есть pending package: `{run['pending_id']}`")
     if run.get("approved_id"):
         lines.append(f"- есть approved package: `{run['approved_id']}`")
+    if task == "catalog-build-unified":
+        catalog_summary = _catalog_build_summary(run)
+        if catalog_summary:
+            lines.extend(
+                [
+                    f"- товаров в unified catalog: `{_int(catalog_summary.get('unified_products'))}`",
+                    f"- связанных Ozon+WB: `{_int(catalog_summary.get('confirmed_products'))}`",
+                    f"- только Ozon: `{_int(catalog_summary.get('ozon_only_products'))}`",
+                    f"- только WB: `{_int(catalog_summary.get('wb_only_products'))}`",
+                    f"- замечаний сборки: `{_int(catalog_summary.get('issue_count'))}`",
+                ]
+            )
     lines.extend(["", "Следующий шаг:", next_step])
     if artifacts:
         lines.extend(["", "Файлы:"])
         for key, value in sorted(artifacts.items()):
             lines.append(f"- `{key}`: `{value}`")
     return TelegramCommandResult(command=command, ok=True, text="\n".join(lines), artifacts=artifacts)
+
+
+def _catalog_build_summary(run: dict[str, Any]) -> dict[str, Any]:
+    artifacts = _safe_artifacts(run)
+    summary_path = artifacts.get("summary")
+    if not summary_path:
+        return {}
+    try:
+        summary = json.loads(Path(summary_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(summary, dict):
+        return {}
+    catalog_summary = summary.get("summary")
+    return catalog_summary if isinstance(catalog_summary, dict) else {}
+
+
+def _catalog_search(query: str, *, data_dir: Path) -> TelegramCommandResult:
+    products_path = data_dir / "catalog" / "unified" / "products.json"
+    products = _read_json_list(products_path)
+    if not products:
+        return TelegramCommandResult(
+            command="/catalog",
+            ok=False,
+            blocked_reason="unified_catalog_missing",
+            text=(
+                "Каталог\n\n"
+                "Итог: я не могу это подтвердить - unified catalog не найден или пуст.\n\n"
+                f"Источник: `{products_path}`\n\n"
+                "Следующий шаг:\n"
+                "Запустить read-only `build-unified-catalog`, затем повторить `/catalog <запрос>`.\n\n"
+                "Изменений в Ozon/WB не выполнял."
+            ),
+        )
+
+    ozon_by_offer = _index_csv(data_dir / "catalog" / "ozon" / "processed" / "ozon_catalog.csv", "offer_id")
+    wb_by_vendor = _index_csv(data_dir / "catalog" / "wb" / "processed" / "wb_catalog.csv", "vendor_code")
+    matches = _catalog_matches(
+        query=query,
+        products=[_enrich_catalog_row(row, ozon_by_offer=ozon_by_offer, wb_by_vendor=wb_by_vendor) for row in products],
+    )
+
+    if not matches:
+        return TelegramCommandResult(
+            command="/catalog",
+            ok=False,
+            blocked_reason="catalog_item_not_found",
+            text=(
+                "Каталог\n\n"
+                f"Итог: по запросу `{query}` товар в unified catalog не найден.\n\n"
+                "Где искал: internal_sku, internal_product_id, название, Ozon offer_id/product_id/sku/barcode, "
+                "WB vendorCode/nmID/barcode.\n\n"
+                "Следующий шаг:\n"
+                "Проверить написание артикула или обновить read-only `build-unified-catalog`.\n\n"
+                "Изменений в Ozon/WB не выполнял."
+            ),
+            artifacts={"products_json": str(products_path)},
+        )
+
+    if len(matches) == 1:
+        text = _catalog_product_card(query=query, row=matches[0]["row"], products_path=products_path)
+    else:
+        text = _catalog_search_results(query=query, matches=matches, products_path=products_path)
+    return TelegramCommandResult(
+        command="/catalog",
+        ok=True,
+        text=text,
+        artifacts={"products_json": str(products_path)},
+    )
+
+
+def _read_json_list(path: Path) -> list[dict[str, Any]]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    return [row for row in data if isinstance(row, dict)]
+
+
+def _index_csv(path: Path, key: str) -> dict[str, dict[str, str]]:
+    result: dict[str, dict[str, str]] = {}
+    try:
+        with path.open(encoding="utf-8-sig", newline="") as handle:
+            for row in csv.DictReader(handle):
+                value = str(row.get(key) or "").strip()
+                if value and value not in result:
+                    result[value] = {str(k): str(v or "").strip() for k, v in row.items()}
+    except (OSError, csv.Error):
+        return {}
+    return result
+
+
+def _enrich_catalog_row(
+    row: dict[str, Any],
+    *,
+    ozon_by_offer: dict[str, dict[str, str]],
+    wb_by_vendor: dict[str, dict[str, str]],
+) -> dict[str, Any]:
+    enriched = dict(row)
+    ozon = ozon_by_offer.get(str(row.get("ozon_offer_id") or "").strip(), {})
+    wb = wb_by_vendor.get(str(row.get("wb_vendor_code") or "").strip(), {})
+    if ozon:
+        enriched["ozon_barcode"] = ozon.get("barcode", "")
+        enriched["ozon_status"] = ozon.get("status", "")
+    if wb:
+        enriched["wb_barcode"] = wb.get("barcode", "")
+        enriched["wb_status"] = wb.get("status", "")
+        enriched["wb_subject"] = wb.get("subject", "")
+    return enriched
+
+
+def _catalog_matches(query: str, products: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized_query = _normalize_search_text(query)
+    if not normalized_query:
+        return []
+    rows: list[dict[str, Any]] = []
+    for row in products:
+        score = _catalog_match_score(normalized_query, row)
+        if score <= 0:
+            continue
+        rows.append({"score": score, "row": row})
+    return sorted(
+        rows,
+        key=lambda item: (
+            -int(item["score"]),
+            str(item["row"].get("internal_sku") or item["row"].get("internal_product_id") or ""),
+        ),
+    )
+
+
+def _catalog_match_score(query: str, row: dict[str, Any]) -> int:
+    exact_fields = (
+        "internal_sku",
+        "internal_product_id",
+        "ozon_offer_id",
+        "ozon_product_id",
+        "ozon_sku",
+        "ozon_barcode",
+        "wb_vendor_code",
+        "wb_nm_id",
+        "wb_barcode",
+    )
+    for field in exact_fields:
+        value = _normalize_search_text(row.get(field))
+        if value and value == query:
+            return 100
+    for field in exact_fields:
+        value = _normalize_search_text(row.get(field))
+        if value and value.startswith(query):
+            return 85
+    title = _normalize_search_text(row.get("product_name"))
+    if title == query:
+        return 80
+    if title and query in title:
+        return 60
+    for field in exact_fields:
+        value = _normalize_search_text(row.get(field))
+        if value and query in value:
+            return 50
+    return 0
+
+
+def _normalize_search_text(value: Any) -> str:
+    return " ".join(str(value or "").strip().lower().replace("ё", "е").split())
+
+
+def _catalog_product_card(*, query: str, row: dict[str, Any], products_path: Path) -> str:
+    title = str(row.get("product_name") or "без названия").strip()
+    internal_sku = str(row.get("internal_sku") or row.get("internal_product_id") or "нет").strip()
+    notes = _truncate(str(row.get("notes") or "").strip(), 180)
+    lines = [
+        "Каталог",
+        "",
+        f"Итог: по запросу `{query}` найден 1 товар.",
+        "",
+        f"Название: {title}",
+        f"Внутренний артикул: `{internal_sku}`",
+        f"Статус связи: `{row.get('mapping_status') or 'н/д'}`",
+        f"Группа: `{row.get('product_group') or 'н/д'}`, комплектность: `{row.get('pack_qty') or 'н/д'}`",
+        f"Себестоимость: `{row.get('cost_total') or 'н/д'}` ₽ всего, `{row.get('cost_per_unit') or 'н/д'}` ₽ за единицу.",
+        "",
+        "Ozon:",
+        f"- offer_id: `{row.get('ozon_offer_id') or 'нет'}`",
+        f"- product_id: `{row.get('ozon_product_id') or 'нет'}`",
+        f"- sku: `{row.get('ozon_sku') or 'нет'}`",
+        f"- barcode: `{row.get('ozon_barcode') or 'нет данных'}`",
+        f"- active/status: `{row.get('active_ozon') or 'н/д'}` / `{row.get('ozon_status') or 'н/д'}`",
+        "",
+        "WB:",
+        f"- vendorCode: `{row.get('wb_vendor_code') or 'нет'}`",
+        f"- nmID: `{row.get('wb_nm_id') or 'нет'}`",
+        f"- barcode: `{row.get('wb_barcode') or 'нет данных'}`",
+        f"- active/status: `{row.get('active_wb') or 'н/д'}` / `{row.get('wb_status') or 'н/д'}`",
+    ]
+    if row.get("wb_subject"):
+        lines.append(f"- subject: `{row.get('wb_subject')}`")
+    if notes:
+        lines.extend(["", f"Примечание: {notes}"])
+    lines.extend(
+        [
+            "",
+            f"Источник: `{products_path}`",
+            "",
+            "Изменений в Ozon/WB не выполнял.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _catalog_search_results(*, query: str, matches: list[dict[str, Any]], products_path: Path) -> str:
+    lines = [
+        "Каталог",
+        "",
+        f"Итог: по запросу `{query}` найдено `{len(matches)}` товаров, показываю первые `{min(len(matches), 5)}`.",
+        "",
+        "Совпадения:",
+    ]
+    for item in matches[:5]:
+        row = item["row"]
+        internal_sku = row.get("internal_sku") or row.get("internal_product_id") or "нет"
+        title = _truncate(str(row.get("product_name") or "без названия"), 90)
+        lines.append(
+            f"- `{internal_sku}` - {title}; "
+            f"Ozon `{row.get('ozon_offer_id') or 'нет'}`, WB `{row.get('wb_vendor_code') or 'нет'}`."
+        )
+    if len(matches) > 5:
+        lines.append(f"- ... еще `{len(matches) - 5}`")
+    lines.extend(
+        [
+            "",
+            "Для точной карточки отправь `/catalog <internal_sku>` или точный Ozon/WB артикул.",
+            f"Источник: `{products_path}`",
+            "",
+            "Изменений в Ozon/WB не выполнял.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _truncate(value: str, limit: int) -> str:
+    if len(value) <= limit:
+        return value
+    return value[: max(0, limit - 1)].rstrip() + "…"
 
 
 def _approvals(*, data_dir: Path) -> TelegramCommandResult:
@@ -539,8 +805,10 @@ def _check_issues(checks: dict[str, Any]) -> list[str]:
     return issues
 
 
-def _normalize_command(message: str) -> str:
-    command = str(message or "").strip().split(maxsplit=1)[0].lower()
+def _parse_command(message: str) -> tuple[str, str]:
+    text = str(message or "").strip()
+    raw_command, _, argument = text.partition(" ")
+    command = raw_command.lower()
     if "@" in command:
         command = command.split("@", 1)[0]
-    return command or "/help"
+    return command or "/help", argument.strip()

@@ -456,19 +456,72 @@ data/runs/2026-06-13/wb_margin_expense_audit_20260613T074813/
   `145 ₽ + 25 ₽` по current API tariff, но недостаточна по фактической
   экономике последних 30 дней.
 
-## Следующий технический шаг
+## Read-only `pricing-status`
 
-Создать read-only отчет `pricing-status`, который по Ozon и WB показывает:
+Статус: базовый слой реализован 2026-06-24.
 
-- идентификаторы товара в native marketplace формате;
-- базовую цену;
-- цену со скидкой;
-- цену по акции, если применимо;
-- минимальную цену, если она доступна;
-- себестоимость, если она будет подключена во внутренней таблице;
-- предупреждения: пустая минимальная цена, Ozon min-price refresh нужен,
-  текущая WB цена ниже минимальной, товар участвует в акции без маржинального
-  лимита.
+Команда:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli pricing-status
+```
+
+Назначение: собрать read-only статус цен и готовности маржинального анализа по
+Ozon/WB на базе `data/catalog/unified/products.csv` и локальных price snapshots.
+
+Что показывает:
+
+- внутренние `internal_product_id`/`internal_sku` и native marketplace IDs;
+- себестоимость из unified catalog: `cost_total`, `pack_qty`;
+- Ozon `price`, `old_price`, `min_price`, `marketing_seller_price`, если
+  найден локальный snapshot;
+- WB базовую цену, скидку и скидочную цену, если найден локальный snapshot;
+- целевые внутренние net-пороги по сценариям владельца:
+  `profit_85_ads_20` и `profit_60_ads_25`, умноженные на `pack_qty`;
+- warning-коды: нет себестоимости, нет price snapshot, пустая/неподтвержденная
+  минимальная цена, цена ниже себестоимости, цена ниже целевого net-порога.
+
+Входы:
+
+```text
+data/catalog/unified/products.csv
+--ozon-prices-json <path>  # необязательно
+--wb-prices-json <path>    # необязательно
+```
+
+Если пути к price snapshots не указаны, команда пытается найти последние
+локальные snapshots в `data/runs/`:
+
+- Ozon: результаты `ozon_min_price_*`, где есть `price`, `old_price`,
+  `min_price`, `marketing_seller_price`;
+- WB: текущий goods/prices snapshot из SEO/акций, где есть `vendorCode`,
+  `price`, `discount`, `discountedPrice`.
+
+Выходы:
+
+```text
+data/pricing/pricing_status.csv
+data/pricing/pricing_status.json
+data/runs/<date>/pricing_status_<timestamp>/pricing_status_report.md
+```
+
+`data/pricing/` - runtime/derived output и не коммитится.
+
+Ограничения текущего слоя:
+
+- это не write-операция и не меняет цены/минимальные цены;
+- цена по акции подключается следующим этапом из отчетов Ozon Elastic/Superboosting
+  и WB actions;
+- WB минимальная цена отмечается как неподтвержденная, если источник snapshot
+  не содержит отдельное поле `min_price`/`minPrice`;
+- целевые net-пороги не заменяют расчет настоящей минимальной цены продажи:
+  для нее нужно добавить комиссии, логистику, хранение, возвраты, рекламу и
+  другие расходы маркетплейсов по финансовым источникам.
 
 Telegram-вывод отчетов по ценам, маржинальности, марже и расходам строить по
 общему стандарту `data/planning/chat_report_templates.md`.
+
+Следующий технический шаг: подключить к `pricing-status` актуальные API-снапшоты
+Ozon `/v5/product/info/prices`, WB goods/prices API, цены по акциям и
+финансовую модель FBO/FBW по фактическим расходам.

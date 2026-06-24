@@ -70,6 +70,32 @@ data/runs/<date>/<run_id>/unified_catalog_issues.json
 WB `vendorCode`, не является разрешением на переименование артикулов продавца
 и не должен использоваться для marketplace write без проверки native IDs.
 
+## Использование в отчетах и боте
+
+С 2026-06-24 `daily-morning-report --seller-v3` читает
+`data/catalog/unified/products.json`, если файл существует, и выводит:
+
+- общее количество unified products;
+- количество товаров с внутренним `internal_sku`;
+- связанные Ozon+WB товары;
+- товары только на Ozon и только на WB;
+- активные товары по Ozon/WB;
+- internal SKU в товарных примерах остатков, если он есть в unified catalog.
+
+Telegram `/catalog` показывает последний `catalog-build-unified` из
+`data/runs/index.jsonl` и ключевые цифры из безопасного `summary` artifact.
+Если нужен свежий каталог, сначала выполнить `build-unified-catalog`.
+
+Telegram `/catalog <запрос>` ищет по `data/catalog/unified/products.json` и
+возвращает карточку товара или короткий список совпадений. Поддержанные ключи:
+`internal_sku`, `internal_product_id`, название, Ozon `offer_id`,
+`product_id`, `sku`, Ozon barcode, WB `vendorCode`, `nmID`, WB barcode.
+Barcode подтягивается из `data/catalog/ozon/processed/ozon_catalog.csv` и
+`data/catalog/wb/processed/wb_catalog.csv`, если файлы доступны.
+
+Это read-only слой: он не переименовывает Ozon `offer_id`, WB `vendorCode` и
+не выполняет cross-marketplace write-операции.
+
 Минимальные поля общего каталога:
 
 ```text

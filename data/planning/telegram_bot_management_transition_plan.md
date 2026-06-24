@@ -576,7 +576,7 @@ runtime-отчет. Write-операций нет.
 | --- | --- |
 | `/status` | `status-preflight` |
 | `/today` | `daily-morning-report --seller-v2` |
-| `/catalog` | `fetch-catalog` summary/latest |
+| `/catalog` | `catalog-build-unified` summary/latest; `/catalog <запрос>` локальный поиск по unified catalog |
 | `/reviews` | `reviews-questions --marketplace all` |
 | `/approvals` | `approvals status` |
 | `/runs` | latest RunManifest по Telegram-задачам |

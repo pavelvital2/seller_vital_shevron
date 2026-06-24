@@ -179,8 +179,6 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         marketplaces=("ozon", "wb"),
         runbook_path="data/planning/catalog_mapping_runbook.md",
         requires_credentials=True,
-        telegram_enabled=True,
-        telegram_button_label="/catalog",
     ),
     RegisteredTask(
         name="catalog-build-unified",
@@ -195,6 +193,8 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         marketplaces=("ozon", "wb"),
         runbook_path="data/planning/catalog_mapping_runbook.md",
         requires_mapping=True,
+        telegram_enabled=True,
+        telegram_button_label="/catalog",
     ),
     RegisteredTask(
         name="catalog-internal-sku-plan",
@@ -208,6 +208,20 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         risk="low",
         marketplaces=("ozon", "wb"),
         runbook_path="data/planning/catalog_mapping_runbook.md",
+        requires_mapping=True,
+    ),
+    RegisteredTask(
+        name="pricing-status",
+        command="pricing-status",
+        title="Pricing status",
+        description=(
+            "Build read-only Ozon/WB price and margin-readiness report from "
+            "unified catalog and local price snapshots."
+        ),
+        mode="read_only",
+        risk="low",
+        marketplaces=("ozon", "wb"),
+        runbook_path="data/planning/pricing_runbook.md",
         requires_mapping=True,
     ),
     RegisteredTask(

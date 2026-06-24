@@ -169,7 +169,14 @@ Service должен включаться только после:
   `daily-morning-report` из `data/runs/index.jsonl`.
 - `/reviews` - последний `reviews-questions` из `data/runs/index.jsonl`.
 - `/approvals` - текущий обзор `approvals status`.
-- `/catalog` - последний `catalog-fetch` из `data/runs/index.jsonl`.
+- `/catalog` - последний `catalog-build-unified` из `data/runs/index.jsonl`;
+  Telegram-summary показывает ключевые цифры unified catalog из безопасного
+  `summary` artifact.
+- `/catalog <запрос>` - read-only поиск товара в
+  `data/catalog/unified/products.json` по `internal_sku`,
+  `internal_product_id`, названию, Ozon `offer_id/product_id/sku/barcode`,
+  WB `vendorCode/nmID/barcode`; barcode подтягивается из processed Ozon/WB
+  catalog CSV, если эти файлы есть.
 - `/runs` - краткий список последних runtime-статусов по Telegram-задачам.
 
 ## Прикрепление файлов

@@ -1,6 +1,6 @@
 # TaskRegistry Runbook
 
-Дата актуализации: 2026-06-21
+Дата актуализации: 2026-06-24
 
 ## Итог
 
@@ -78,6 +78,16 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 - Write-задачи не должны запускаться будущим Telegram-ботом напрямую: бот
   может показывать статус, risks, rows и создавать approved package, но apply
   остается отдельным подтверждаемым действием.
+
+## Важные read-only задачи
+
+- `build-unified-catalog` - собирает внутренний product-level catalog из
+  confirmed mapping и marketplace catalogs.
+- `plan-internal-skus` - готовит owner-review план внутренних артикулов для
+  `ozon_only`/`wb_only` товаров.
+- `pricing-status` - строит read-only статус цен и готовности маржинального
+  анализа по unified catalog и локальным Ozon/WB price snapshots. Требует
+  mapping как слой нормализации, но не меняет цены и не обращается к write API.
 - `requires_mapping: true` означает, что задача не должна переходить к
   cross-marketplace write без подтвержденного mapping.
 - `requires_lk: true` означает, что перед запуском нужно проверить профильную
@@ -123,6 +133,10 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 - marketplaces: `ozon`, `wb`;
 - requires_mapping: `true`;
 - credentials/LK/confirmation не требуются;
+- Telegram: `/catalog` показывает последний `catalog-build-unified` из
+  `RunManifest` и ключевые цифры из `summary` artifact; `/catalog <запрос>`
+  ищет товар в unified catalog по internal/Ozon/WB идентификаторам, barcode и
+  названию;
 - runbook: `data/planning/catalog_mapping_runbook.md`;
 - назначение: собрать внутренний `data/catalog/unified/products.csv/json` из
   confirmed mapping и локальных processed каталогов Ozon/WB.

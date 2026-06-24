@@ -152,6 +152,12 @@ def test_bot_today_live_mode_builds_fresh_report(
             "ozon": {"active_actions": 1, "products_in_actions": 50, "products_not_in_actions": 5},
             "wb": {"active_actions": 2, "products_in_actions": 60, "products_not_in_actions": 6},
         },
+        "unified_catalog": {
+            "products": 710,
+            "confirmed_products": 269,
+            "ozon_only_products": 279,
+            "wb_only_products": 162,
+        },
         "executive_summary": ["Период отчета: 2026-06-17 00:00-23:59 MSK."],
         "artifacts": {
             "report": str(tmp_path / "daily_morning_report_v3.md"),
@@ -190,6 +196,7 @@ def test_bot_today_live_mode_builds_fresh_report(
     assert "daily_morning_report_v3_test" in live_result.text
     assert "Ozon: заказы `10`" in live_result.text
     assert "WB: заказы `12`" in live_result.text
+    assert "Unified: товаров `710`" in live_result.text
     assert live_result.artifacts["report"].endswith("daily_morning_report_v3.md")
     assert workflow_calls[0]["init"]["data_dir"] == tmp_path
     assert workflow_calls[1] == {
@@ -228,6 +235,145 @@ def test_bot_approvals_summarizes_open_packages(tmp_path: Path) -> None:
     assert "Согласования" in result.text
     assert "`approved`: `2`" in result.text
     assert "reviews_questions_test_approved" in result.text
+
+
+def test_bot_catalog_uses_unified_catalog_manifest(tmp_path: Path) -> None:
+    run_dir = tmp_path / "runs" / "2026-06-18" / "catalog_build_unified_test"
+    summary_path = run_dir / "summary.json"
+    _write_json(
+        summary_path,
+        {
+            "run_id": "catalog_build_unified_test",
+            "started_at": "2026-06-18T10:00:00",
+            "overall_status": "ok",
+            "summary": {
+                "unified_products": 710,
+                "confirmed_products": 269,
+                "ozon_only_products": 279,
+                "wb_only_products": 162,
+                "issue_count": 0,
+            },
+            "artifacts": {"summary": str(summary_path), "report": str(run_dir / "unified_catalog_report.md")},
+        },
+    )
+    manifest = manifest_from_summary(
+        summary=json.loads(summary_path.read_text(encoding="utf-8")),
+        task="catalog-build-unified",
+        mode="read_only",
+        risk="low",
+        marketplaces=["ozon", "wb"],
+    )
+    write_run_manifest(data_dir=tmp_path, run_dir=run_dir, manifest=manifest)
+
+    result = dispatch_message("/catalog", data_dir=tmp_path)
+
+    assert result.ok is True
+    assert "последний запуск `catalog-build-unified`" in result.text
+    assert "товаров в unified catalog: `710`" in result.text
+    assert "связанных Ozon+WB: `269`" in result.text
+    assert result.artifacts["summary"] == str(summary_path)
+
+
+def test_bot_catalog_search_finds_product_by_ozon_offer_and_enriches_barcodes(tmp_path: Path) -> None:
+    _write_json(
+        tmp_path / "catalog" / "unified" / "products.json",
+        [
+            {
+                "internal_product_id": "chev_nr_svo_pict0001",
+                "internal_sku": "chev_nr_svo_pict0001",
+                "product_name": "Шеврон СВО Вспомни свои корни",
+                "product_group": "chev",
+                "pack_qty": "1",
+                "cost_total": "85",
+                "cost_per_unit": "85",
+                "ozon_offer_id": "pict0152",
+                "ozon_product_id": "2729922386",
+                "ozon_sku": "2864486048",
+                "wb_vendor_code": "svopict0028_pict0152",
+                "wb_nm_id": "605088924",
+                "mapping_status": "confirmed",
+                "active_ozon": "true",
+                "active_wb": "true",
+            }
+        ],
+    )
+    _write_text(
+        tmp_path / "catalog" / "ozon" / "processed" / "ozon_catalog.csv",
+        "barcode,offer_id,product_id,sku,status,title\n"
+        "OZN2864486048,pict0152,2729922386,2864486048,Продается,Шеврон СВО\n",
+    )
+    _write_text(
+        tmp_path / "catalog" / "wb" / "processed" / "wb_catalog.csv",
+        "barcode,brand,nm_id,status,subject,title,vendor_code\n"
+        "2043894180777,,605088924,present,Декор,Шеврон СВО,svopict0028_pict0152\n",
+    )
+
+    result = dispatch_message("/catalog pict0152", data_dir=tmp_path)
+
+    assert result.ok is True
+    assert "найден 1 товар" in result.text
+    assert "chev_nr_svo_pict0001" in result.text
+    assert "OZN2864486048" in result.text
+    assert "2043894180777" in result.text
+    assert "Изменений в Ozon/WB не выполнял" in result.text
+
+
+def test_bot_catalog_search_finds_product_by_wb_barcode(tmp_path: Path) -> None:
+    _write_json(
+        tmp_path / "catalog" / "unified" / "products.json",
+        [
+            {
+                "internal_product_id": "wb:wb-only-1",
+                "product_name": "Шеврон только WB",
+                "wb_vendor_code": "wb-only-1",
+                "wb_nm_id": "1001",
+                "mapping_status": "wb_only",
+                "active_ozon": "false",
+                "active_wb": "true",
+            }
+        ],
+    )
+    _write_text(
+        tmp_path / "catalog" / "wb" / "processed" / "wb_catalog.csv",
+        "barcode,brand,nm_id,status,subject,title,vendor_code\n"
+        "7777777777777,,1001,present,Декор,Шеврон только WB,wb-only-1\n",
+    )
+
+    result = dispatch_message("/catalog 7777777777777", data_dir=tmp_path)
+
+    assert result.ok is True
+    assert "wb:wb-only-1" in result.text
+    assert "7777777777777" in result.text
+
+
+def test_bot_catalog_search_returns_short_list_for_title_matches(tmp_path: Path) -> None:
+    _write_json(
+        tmp_path / "catalog" / "unified" / "products.json",
+        [
+            {
+                "internal_product_id": "chev_nr_svo_text0001",
+                "internal_sku": "chev_nr_svo_text0001",
+                "product_name": "Шеврон СВО текст",
+                "ozon_offer_id": "svo-text",
+                "mapping_status": "ozon_only",
+            },
+            {
+                "internal_product_id": "chev_nr_svo_pict0001",
+                "internal_sku": "chev_nr_svo_pict0001",
+                "product_name": "Шеврон СВО картинка",
+                "wb_vendor_code": "svo-pict",
+                "mapping_status": "wb_only",
+            },
+        ],
+    )
+
+    result = dispatch_message("/catalog шеврон сво", data_dir=tmp_path)
+
+    assert result.ok is True
+    assert "найдено `2` товаров" in result.text
+    assert "chev_nr_svo_pict0001" in result.text
+    assert "chev_nr_svo_text0001" in result.text
+    assert "Для точной карточки" in result.text
 
 
 def test_bot_rejects_unsupported_write_like_command() -> None:
@@ -503,3 +649,8 @@ def test_cli_bot_poll_loop_requires_allowlist(tmp_path: Path, capsys: pytest.Cap
 def _write_json(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")

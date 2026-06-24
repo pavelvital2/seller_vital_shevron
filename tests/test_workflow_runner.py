@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import fcntl
 from pathlib import Path
 
@@ -102,3 +103,45 @@ def test_workflow_runner_sanitizes_handler_errors(tmp_path: Path) -> None:
     assert "token" not in result.error
     assert "client_secret" not in result.error
     assert "<redacted>" in result.error
+
+
+def test_workflow_runner_runs_pricing_status_default_handler(tmp_path: Path) -> None:
+    products_path = tmp_path / "products.csv"
+    with products_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "internal_product_id",
+                "internal_sku",
+                "product_name",
+                "mapping_status",
+                "pack_qty",
+                "cost_total",
+                "active_ozon",
+                "active_wb",
+            ],
+        )
+        writer.writeheader()
+        writer.writerow(
+            {
+                "internal_product_id": "chev_nr_svo_pict0001",
+                "internal_sku": "chev_nr_svo_pict0001",
+                "product_name": "Шеврон СВО",
+                "mapping_status": "confirmed",
+                "pack_qty": "1",
+                "cost_total": "85",
+                "active_ozon": "false",
+                "active_wb": "false",
+            }
+        )
+
+    runner = WorkflowRunner(data_dir=tmp_path / "data", lock_dir=tmp_path / "locks")
+    result = runner.run_read_only(
+        "pricing-status",
+        inputs={"products_path": str(products_path), "run_id": "pricing_status_workflow_test"},
+    )
+
+    assert result.ok is True
+    assert result.task == "pricing-status"
+    assert result.summary["summary"]["rows"] == 1
+    assert result.artifacts["status_csv"].endswith("pricing_status.csv")

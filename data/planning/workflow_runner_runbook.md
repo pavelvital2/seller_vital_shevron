@@ -1,6 +1,6 @@
 # WorkflowRunner Runbook
 
-Дата актуализации: 2026-06-18
+Дата актуализации: 2026-06-24
 
 ## Итог
 
@@ -11,6 +11,7 @@ task-runner. Он нужен, чтобы бот и будущие timers зап�
 Первый MVP поддерживает только read-only задачи:
 
 - `daily-morning-report`;
+- `pricing-status`;
 - `status-preflight`.
 
 Write-операции через `WorkflowRunner` не включены.
@@ -74,6 +75,7 @@ Runtime locks лежат вне git:
 
 ```text
 .sessions/workflows/daily-morning-report.lock
+.sessions/workflows/pricing-status.lock
 .sessions/workflows/status-preflight.lock
 ```
 
@@ -109,7 +111,11 @@ Handler добавляется только для задачи, которая 
 - текстовый Telegram-summary формируется в bot command layer;
 - файл полного отчета прикрепляется adapter-ом только из безопасного
   `artifacts.report`;
-- `/catalog`, `/reviews` пока читают последний runtime из `data/runs/index.jsonl`.
+- `/catalog` читает последний `catalog-build-unified` из
+  `data/runs/index.jsonl` и показывает ключевые цифры unified catalog;
+  `/catalog <запрос>` работает локально по unified catalog и processed catalog
+  CSV без запуска marketplace API;
+  `/reviews` пока читает последний runtime из `data/runs/index.jsonl`.
 
 ## Проверка
 

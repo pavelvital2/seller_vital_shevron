@@ -28,6 +28,7 @@ from seller_agent.tasks.ozon_cpc_bids_apply import run_ozon_cpc_bids_apply
 from seller_agent.tasks.ozon_elastic_apply import run_ozon_elastic_apply
 from seller_agent.tasks.ozon_cpc_optimization_plan import CpcOptimizationThresholds, run_ozon_cpc_optimization_plan
 from seller_agent.tasks.ozon_elastic_plan import run_ozon_elastic_plan
+from seller_agent.tasks.pricing_status import run_pricing_status
 from seller_agent.tasks.reviews_questions import (
     run_reviews_questions,
     run_reviews_questions_apply,
@@ -346,6 +347,41 @@ def build_parser() -> argparse.ArgumentParser:
         "--output-dir",
         default=None,
         help="Plan output directory. Defaults to data/catalog/unified.",
+    )
+
+    pricing_status = subparsers.add_parser(
+        "pricing-status",
+        help="Build read-only Ozon/WB pricing and margin-readiness status from local snapshots.",
+    )
+    pricing_status.add_argument(
+        "--data-dir",
+        default="data",
+        help="Project data directory.",
+    )
+    pricing_status.add_argument(
+        "--run-id",
+        default=None,
+        help="Optional stable run id.",
+    )
+    pricing_status.add_argument(
+        "--products-path",
+        default=None,
+        help="Unified products CSV. Defaults to data/catalog/unified/products.csv.",
+    )
+    pricing_status.add_argument(
+        "--ozon-prices-json",
+        default=None,
+        help="Optional Ozon prices JSON snapshot, for example product/info/prices output.",
+    )
+    pricing_status.add_argument(
+        "--wb-prices-json",
+        default=None,
+        help="Optional WB goods/prices JSON snapshot.",
+    )
+    pricing_status.add_argument(
+        "--output-dir",
+        default=None,
+        help="Pricing status output directory. Defaults to data/pricing.",
     )
 
     status_preflight = subparsers.add_parser(
@@ -1087,6 +1123,18 @@ def main(argv: list[str] | None = None) -> int:
         result = run_internal_sku_plan(
             data_dir=Path(args.data_dir),
             products_path=Path(args.products_path) if args.products_path else None,
+            output_dir=Path(args.output_dir) if args.output_dir else None,
+            run_id=args.run_id,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
+
+    if args.command == "pricing-status":
+        result = run_pricing_status(
+            data_dir=Path(args.data_dir),
+            products_path=Path(args.products_path) if args.products_path else None,
+            ozon_prices_path=Path(args.ozon_prices_json) if args.ozon_prices_json else None,
+            wb_prices_path=Path(args.wb_prices_json) if args.wb_prices_json else None,
             output_dir=Path(args.output_dir) if args.output_dir else None,
             run_id=args.run_id,
         )

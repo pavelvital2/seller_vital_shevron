@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 from seller_agent.config import AppCredentials, load_credentials
 from seller_agent.tasks.daily_morning_report import run_daily_morning_report
+from seller_agent.tasks.pricing_status import run_pricing_status
 from seller_agent.tasks.registry import RegisteredTask, TaskRegistry, default_task_registry
 from seller_agent.tasks.status_preflight import run_status_preflight
 
@@ -174,6 +175,7 @@ class _WorkflowLock:
 def default_workflow_handlers() -> dict[str, WorkflowHandler]:
     return {
         "daily-morning-report": _daily_morning_report_handler,
+        "pricing-status": _pricing_status_handler,
         "status-preflight": _status_preflight_handler,
     }
 
@@ -212,6 +214,22 @@ def _status_preflight_handler(
     )
 
 
+def _pricing_status_handler(
+    task: RegisteredTask,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    return run_pricing_status(
+        data_dir=data_dir,
+        products_path=_optional_path(inputs.get("products_path")),
+        ozon_prices_path=_optional_path(inputs.get("ozon_prices_path")),
+        wb_prices_path=_optional_path(inputs.get("wb_prices_path")),
+        output_dir=_optional_path(inputs.get("output_dir")),
+        run_id=_optional_str(inputs.get("run_id")),
+    )
+
+
 def _safe_artifacts(summary: dict[str, Any]) -> dict[str, str]:
     artifacts = summary.get("artifacts")
     if not isinstance(artifacts, dict):
@@ -240,6 +258,11 @@ def _optional_str(value: Any) -> str | None:
     if value in (None, ""):
         return None
     return str(value)
+
+
+def _optional_path(value: Any) -> Path | None:
+    text = _optional_str(value)
+    return Path(text) if text else None
 
 
 def _bool_input(inputs: dict[str, Any], key: str, default: bool) -> bool:

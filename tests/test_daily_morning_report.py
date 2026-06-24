@@ -171,6 +171,46 @@ def test_daily_morning_report_seller_v2_uses_business_adapters(tmp_path: Path, m
             }
         ],
     )
+    _write_json(
+        tmp_path / "catalog" / "unified" / "products.json",
+        [
+            {
+                "internal_product_id": "chev_nr_svo_text0001",
+                "internal_sku": "chev_nr_svo_text0001",
+                "product_name": "Unified product",
+                "product_group": "chev",
+                "pack_qty": "1",
+                "cost_total": "85",
+                "cost_per_unit": "85",
+                "ozon_offer_id": "sku-1",
+                "ozon_product_id": "101",
+                "ozon_sku": "901",
+                "wb_vendor_code": "sku-1",
+                "wb_nm_id": "201",
+                "mapping_status": "confirmed",
+                "active_ozon": "true",
+                "active_wb": "true",
+                "notes": "",
+            },
+            {
+                "internal_product_id": "ozon:sku-2",
+                "product_name": "Ozon only",
+                "ozon_offer_id": "sku-2",
+                "ozon_product_id": "102",
+                "mapping_status": "ozon_only",
+                "active_ozon": "true",
+                "active_wb": "false",
+            },
+            {
+                "internal_product_id": "wb:sku-3",
+                "product_name": "WB only",
+                "wb_vendor_code": "sku-3",
+                "mapping_status": "wb_only",
+                "active_ozon": "false",
+                "active_wb": "true",
+            },
+        ],
+    )
 
     class FakeOzonAdapter:
         def __init__(self, credentials):
@@ -310,6 +350,46 @@ def test_daily_morning_report_seller_v3_uses_new_template(tmp_path: Path, monkey
                 "ozon_product_id": "101",
                 "wb_vendor_code": "sku-1",
             }
+        ],
+    )
+    _write_json(
+        tmp_path / "catalog" / "unified" / "products.json",
+        [
+            {
+                "internal_product_id": "chev_nr_svo_text0001",
+                "internal_sku": "chev_nr_svo_text0001",
+                "product_name": "Unified product",
+                "product_group": "chev",
+                "pack_qty": "1",
+                "cost_total": "85",
+                "cost_per_unit": "85",
+                "ozon_offer_id": "sku-1",
+                "ozon_product_id": "101",
+                "ozon_sku": "901",
+                "wb_vendor_code": "sku-1",
+                "wb_nm_id": "201",
+                "mapping_status": "confirmed",
+                "active_ozon": "true",
+                "active_wb": "true",
+                "notes": "",
+            },
+            {
+                "internal_product_id": "ozon:sku-2",
+                "product_name": "Ozon only",
+                "ozon_offer_id": "sku-2",
+                "ozon_product_id": "102",
+                "mapping_status": "ozon_only",
+                "active_ozon": "true",
+                "active_wb": "false",
+            },
+            {
+                "internal_product_id": "wb:sku-3",
+                "product_name": "WB only",
+                "wb_vendor_code": "sku-3",
+                "mapping_status": "wb_only",
+                "active_ozon": "false",
+                "active_wb": "true",
+            },
         ],
     )
     _write_json(
@@ -482,6 +562,13 @@ def test_daily_morning_report_seller_v3_uses_new_template(tmp_path: Path, monkey
     )
 
     assert result["report_version"] == "seller_v3"
+    assert result["unified_catalog"]["products"] == 3
+    assert result["unified_catalog"]["confirmed_products"] == 1
+    assert result["unified_catalog"]["ozon_only_products"] == 1
+    assert result["unified_catalog"]["wb_only_products"] == 1
+    assert result["business"]["catalog_source"] == "unified_catalog"
+    assert result["business"]["ozon"]["stocks"]["low_stock_sample"][0]["internal_sku"] == "chev_nr_svo_text0001"
+    assert result["business"]["wb"]["stocks"]["low_stock_sample"][0]["internal_sku"] == "chev_nr_svo_text0001"
     assert result["actions_v3"]["ozon"]["products_not_in_actions"] == 2
     assert result["business"]["ozon"]["finance_buyouts"]["buyout_units"] == 1
     assert result["business"]["ozon"]["finance_expenses"]["total_expenses"] == 350.0
@@ -491,6 +578,8 @@ def test_daily_morning_report_seller_v3_uses_new_template(tmp_path: Path, monkey
     assert result["business"]["wb"]["communications"]["unanswered_questions"] == 5
     report_text = Path(result["artifacts"]["report"]).read_text(encoding="utf-8")
     assert "Период данных:" in report_text
+    assert "Единый Каталог" in report_text
+    assert "| Товаров всего | 3 |" in report_text
     assert "Заказы, Выкупы, Отмены За Период" in report_text
     assert "Деньги И Расходы За Период" in report_text
     assert "| Выкупы, шт. | 1 | 1 |" in report_text
@@ -499,6 +588,6 @@ def test_daily_morning_report_seller_v3_uses_new_template(tmp_path: Path, monkey
     assert "| Отзывы за период 00:00-23:59 | 1 | 2 |" in report_text
     assert "| Товаров участвует | 8 | 7 |" in report_text
     assert "| Товаров участвует | 8 | 7 |" in report_text
-    assert "| WB-артикулы без строки в источнике остатков | - | 0 |" in report_text
+    assert "| WB-артикулы без строки в источнике остатков | - | 1 |" in report_text
     assert "пакеты на согласование" in report_text
     assert "| Есть текущие поставки | не подтверждено | не подтверждено |" in report_text

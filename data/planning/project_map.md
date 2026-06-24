@@ -65,13 +65,19 @@
   присвоения внутренних `internal_sku` товарам `ozon_only`/`wb_only` из
   unified catalog; команда `plan-internal-skus` формирует review CSV/JSON,
   не меняет Ozon `offer_id` и WB `vendorCode`.
+- `src/seller_agent/tasks/pricing_status.py` - read-only статус цен и
+  готовности маржинального анализа: соединяет unified catalog с локальными
+  Ozon/WB price snapshots, выводит себестоимость, доступные цены, целевые
+  net-пороги и warning-коды; команда `pricing-status` пишет runtime artifacts
+  в `data/pricing/` и `data/runs/`.
 - `src/seller_agent/bot/dispatcher.py` - thin layer над `TaskRegistry` для
   будущего Telegram-бота.
 - `src/seller_agent/bot/commands.py` - read-only Telegram MVP command layer:
   `/help`, `/status`, `/today`, `/reviews`, `/approvals`, `/catalog`, `/runs`;
-  возвращает текст Telegram-summary без write-операций; `/today` и `/status`
-  могут запускать свежие read-only задачи через `WorkflowRunner`, если
-  включены `--live-today`/`--live-status`.
+  возвращает текст Telegram-summary без write-операций; `/catalog` показывает
+  последний `catalog-build-unified`, `/catalog <запрос>` ищет карточку товара
+  в unified catalog, а `/today` и `/status` могут запускать свежие read-only
+  задачи через `WorkflowRunner`, если включены `--live-today`/`--live-status`.
 - `src/seller_agent/bot/telegram_runner.py` - read-only Telegram Bot API
   adapter: загрузка токена из внешнего файла/env, `sendMessage`,
   безопасный `sendDocument` для `artifacts.report`, одноразовый `getUpdates`
