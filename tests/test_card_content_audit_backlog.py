@@ -71,6 +71,10 @@ def test_build_card_content_audit_backlog_enriches_business_signals() -> None:
                 {
                     "offer_id": "oz-1",
                     "fbo_present": "8",
+                },
+                {
+                    "vendorCode": "wb-1",
+                    "wb_stock": "3",
                 }
             ],
             "parser": [
@@ -112,7 +116,9 @@ def test_build_card_content_audit_backlog_enriches_business_signals() -> None:
     assert summary["business_priority_now_rows"] == 1
     assert rows[0].sales_units_30d == "4"
     assert rows[0].sales_revenue_30d == "1200"
-    assert rows[0].stock_total == "8"
+    assert rows[0].stock_total == "11"
+    assert rows[0].ozon_stock_total == "8"
+    assert rows[0].wb_stock_total == "3"
     assert rows[0].parser_best_position == "12"
     assert rows[0].parser_visible_queries == "5"
     assert rows[0].business_priority == "now"

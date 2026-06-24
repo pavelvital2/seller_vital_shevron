@@ -31,6 +31,9 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   -m seller_agent.cli build-content-master
 
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli collect-card-signals
+
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   -m seller_agent.cli card-content-audit-backlog
 ```
 
@@ -39,10 +42,45 @@ read-only сигналами продаж, остатков и parser-видим
 
 ```bash
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli collect-card-signals \
+  --period-days 30
+
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   -m seller_agent.cli card-content-audit-backlog \
-  --sales-signals-csv data/path/to/sales_signals.csv \
-  --stock-signals-csv data/path/to/stock_signals.csv \
-  --parser-signals-csv data/path/to/parser_visibility.csv
+  --sales-signals-csv data/catalog/content/signals/sales_signals.csv \
+  --stock-signals-csv data/catalog/content/signals/stock_signals.csv \
+  --parser-signals-csv data/catalog/content/signals/parser_signals.csv
+```
+
+`collect-card-signals` пишет:
+
+```text
+data/catalog/content/signals/sales_signals.csv
+data/catalog/content/signals/stock_signals.csv
+data/catalog/content/signals/parser_signals.csv
+data/catalog/content/signals/all_signals.csv
+data/runs/<date>/<run_id>/card_content_signals_report.md
+```
+
+Источники `collect-card-signals`:
+
+- Ozon stocks: Seller API `/v4/product/info/stocks`;
+- Ozon sales signal: Seller API `/v2/posting/fbo/list`, non-cancelled FBO
+  products за период. Это сигнал заказов/отгрузок для приоритизации, а не
+  финальный финансовый отчет по выкупам;
+- WB stocks: Statistics API `/api/v1/supplier/stocks`;
+- WB sales signal: Statistics API `/api/v1/supplier/sales`, возвраты по
+  `saleID` с префиксом `R` исключаются;
+- parser visibility: latest производные CSV из прошлых parser/SEO runs,
+  без копирования raw parser datasets в проект.
+
+Если нужно проверить только parser-слой без обращения к API и без риска
+лимитов, использовать:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli collect-card-signals \
+  --skip-api
 ```
 
 Каждый аргумент можно передавать несколько раз. Команда распознает ключи
@@ -137,6 +175,30 @@ business_priority_now_rows: 13
 
 Продажи в этом smoke не подмешивались: полного нормализованного файла
 `sales-by-product` за 30 дней на момент проверки не было подтверждено.
+
+Smoke 2026-06-24 после `collect-card-signals --period-days 30`:
+
+```text
+card_content_signals_full_20260624:
+sales_signal_rows: 399
+stock_signal_rows: 798
+parser_signal_rows: 482
+all_signal_rows: 1679
+errors: none
+
+card_content_backlog_full_signals_fixed_20260624:
+backlog_rows: 710
+high_priority_rows: 520
+normal_priority_rows: 184
+sales_positive_rows: 382
+stock_signal_rows: 586
+parser_visible_rows: 409
+business_priority_now_rows: 384
+```
+
+Важно: `stock_total` в backlog считается как сумма `ozon_stock_total` и
+`wb_stock_total` по связанному товару. Если передан только общий fallback
+`stock_total` без площадочных полей, используется fallback-значение.
 
 ## Обязательный порядок перед рекомендациями
 

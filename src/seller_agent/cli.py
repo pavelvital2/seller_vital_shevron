@@ -20,6 +20,7 @@ from seller_agent.config import load_credentials
 from seller_agent.core.run_manifest import find_run, latest_run, list_runs
 from seller_agent.tasks.approvals import run_approvals_close, run_approvals_status
 from seller_agent.tasks.card_content_audit_backlog import run_card_content_audit_backlog
+from seller_agent.tasks.card_content_signals import run_collect_card_signals
 from seller_agent.tasks.card_content_snapshot import run_card_content_snapshot
 from seller_agent.tasks.catalog_fetch import run_catalog_fetch
 from seller_agent.tasks.catalog_content_master import run_catalog_content_master
@@ -480,6 +481,60 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         help="Optional parser visibility signal CSV. Can be passed multiple times.",
+    )
+
+    card_signals = subparsers.add_parser(
+        "collect-card-signals",
+        help="Collect read-only sales, stock and parser signals for card content backlog.",
+    )
+    card_signals.add_argument(
+        "--data-dir",
+        default="data",
+        help="Project data directory.",
+    )
+    card_signals.add_argument(
+        "--run-id",
+        default=None,
+        help="Optional stable run id.",
+    )
+    card_signals.add_argument(
+        "--content-master-path",
+        default=None,
+        help="Content master CSV. Defaults to data/catalog/content/content_master.csv.",
+    )
+    card_signals.add_argument(
+        "--output-dir",
+        default=None,
+        help="Signals output directory. Defaults to data/catalog/content/signals.",
+    )
+    card_signals.add_argument(
+        "--marketplace",
+        choices=("all", "ozon", "wb"),
+        default="all",
+        help="Marketplace API scope.",
+    )
+    card_signals.add_argument(
+        "--period-days",
+        type=int,
+        default=30,
+        help="Sales signal period ending yesterday, default 30 days.",
+    )
+    card_signals.add_argument(
+        "--skip-api",
+        action="store_true",
+        help="Do not call Ozon/WB APIs; collect only parser signals from local derived CSV.",
+    )
+    card_signals.add_argument(
+        "--parser-source",
+        choices=("latest", "none"),
+        default="latest",
+        help="Parser source mode for derived local parser CSV.",
+    )
+    card_signals.add_argument(
+        "--parser-csv",
+        action="append",
+        default=[],
+        help="Explicit parser-derived CSV to normalize. Can be passed multiple times.",
     )
 
     pricing_status = subparsers.add_parser(
@@ -1320,6 +1375,22 @@ def main(argv: list[str] | None = None) -> int:
             sales_signals_paths=[Path(path) for path in args.sales_signals_csv],
             stock_signals_paths=[Path(path) for path in args.stock_signals_csv],
             parser_signals_paths=[Path(path) for path in args.parser_signals_csv],
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
+
+    if args.command == "collect-card-signals":
+        result = run_collect_card_signals(
+            credentials=None if args.skip_api else load_credentials(),
+            data_dir=Path(args.data_dir),
+            content_master_path=Path(args.content_master_path) if args.content_master_path else None,
+            output_dir=Path(args.output_dir) if args.output_dir else None,
+            run_id=args.run_id,
+            marketplace=args.marketplace,
+            period_days=args.period_days,
+            skip_api=args.skip_api,
+            parser_source=args.parser_source,
+            parser_paths=[Path(path) for path in args.parser_csv],
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["overall_status"] in {"ok", "warning"} else 2

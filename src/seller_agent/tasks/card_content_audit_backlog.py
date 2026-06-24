@@ -251,13 +251,17 @@ def _lookup_signals(row: dict[str, str], signal_index: dict[str, Any] | None) ->
         item_ids.update(by_key.get(key, set()))
     items: list[dict[str, Any]] = signal_index.get("items", [])
     result: dict[str, Any] = {}
+    fallback_stock_total = 0.0
+    has_fallback_stock = False
     for item_id in item_ids:
         item = items[item_id]
         for field in ("sales_units_30d", "sales_revenue_30d"):
             if field in item:
                 result[field] = result.get(field, 0.0) + item[field]
+        if "stock_total" in item and "ozon_stock_total" not in item and "wb_stock_total" not in item:
+            fallback_stock_total += item["stock_total"]
+            has_fallback_stock = True
         for field in (
-            "stock_total",
             "ozon_stock_total",
             "wb_stock_total",
             "parser_visible_queries",
@@ -269,6 +273,11 @@ def _lookup_signals(row: dict[str, str], signal_index: dict[str, Any] | None) ->
         if "parser_best_position" in item:
             current = result.get("parser_best_position")
             result["parser_best_position"] = item["parser_best_position"] if current is None else min(current, item["parser_best_position"])
+    marketplace_stock_total = result.get("ozon_stock_total", 0.0) + result.get("wb_stock_total", 0.0)
+    if marketplace_stock_total or "ozon_stock_total" in result or "wb_stock_total" in result:
+        result["stock_total"] = marketplace_stock_total
+    elif has_fallback_stock:
+        result["stock_total"] = fallback_stock_total
     return result
 
 

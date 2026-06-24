@@ -81,6 +81,11 @@
   следующий шаг; optional CSV-сигналы продаж, остатков и parser-видимости
   повышают точность приоритета; команда `card-content-audit-backlog` пишет
   `data/catalog/content/card_content_audit_backlog.csv/json` и `RunManifest`.
+- `src/seller_agent/tasks/card_content_signals.py` - read-only collector
+  нормализованных сигналов для карточного backlog: Ozon/WB продажи за период,
+  текущие остатки и latest parser-видимость; команда `collect-card-signals`
+  пишет `data/catalog/content/signals/*.csv` и runtime raw/summary в
+  `data/runs/<date>/<run_id>/`.
 - `src/seller_agent/tasks/pricing_status.py` - read-only статус цен и
   готовности маржинального анализа: соединяет unified catalog с локальными или
   fresh API Ozon/WB price snapshots, Ozon Elastic dry-run и WB actions dry-run,

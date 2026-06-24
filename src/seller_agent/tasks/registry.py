@@ -255,6 +255,21 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_mapping=True,
     ),
     RegisteredTask(
+        name="card-content-signals",
+        command="collect-card-signals",
+        title="Collect card content signals",
+        description=(
+            "Collect read-only normalized sales, stock and parser visibility CSV signals "
+            "for card content audit backlog."
+        ),
+        mode="read_only",
+        risk="low",
+        marketplaces=("ozon", "wb"),
+        runbook_path="data/planning/product_card_work_runbook.md",
+        requires_credentials=True,
+        requires_mapping=True,
+    ),
+    RegisteredTask(
         name="pricing-status",
         command="pricing-status",
         title="Pricing status",

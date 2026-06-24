@@ -100,6 +100,12 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   и следующий шаг. Optional `--sales-signals-csv`, `--stock-signals-csv`,
   `--parser-signals-csv` добавляют продажи, остатки и parser-видимость для
   бизнес-приоритизации. Это не финальная рекомендация по карточке и не apply.
+- `collect-card-signals` - собирает read-only нормализованные CSV-сигналы
+  продаж, остатков и latest parser-видимости для `card-content-audit-backlog`.
+  Пишет `data/catalog/content/signals/sales_signals.csv`,
+  `stock_signals.csv`, `parser_signals.csv`, `all_signals.csv` и runtime
+  report. Опция `--skip-api` оставляет только локальный parser-слой без
+  обращений к Ozon/WB API.
 - `pricing-status` - строит read-only статус цен и готовности маржинального
   анализа по unified catalog и локальным или fresh API Ozon/WB price snapshots.
   Опция `--refresh-api` обращается только к read-only price endpoints и
@@ -124,6 +130,7 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 - `plan-internal-skus`;
 - `build-content-master`;
 - `fetch-card-content`;
+- `collect-card-signals`;
 - `card-content-audit-backlog`;
 - `status-preflight`;
 - `daily-morning-report`;
