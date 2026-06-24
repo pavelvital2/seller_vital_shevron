@@ -18,6 +18,39 @@ read-only -> dry-run -> review -> approved -> apply -> verify -> result
 До явного подтверждения владельца разрешены только чтение, анализ, draft и
 dry-run.
 
+## Единый content master
+
+Для подготовки массовой работы над единым представлением товаров на Ozon и WB
+использовать read-only команду:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli build-content-master
+```
+
+Команда строит:
+
+```text
+data/catalog/content/content_master.csv
+data/catalog/content/content_audit.csv
+data/runs/<date>/<run_id>/catalog_content_master_report.md
+```
+
+Content master нужен как очередь и контрольный слой перед покарточной SEO
+работой:
+
+- `title_alignment_status` показывает, совпадают ли текущие названия Ozon/WB;
+- `marketplace_presence` отделяет `ozon_only`, `wb_only` и товары на обеих
+  площадках;
+- `transfer_direction` показывает кандидатов на перенос на вторую площадку;
+- `content_review_priority` и `next_content_step` помогают выбрать следующий
+  товар для аудита.
+
+Ограничение: content master не заменяет покарточный аудит. В нем нет полного
+описания, всех характеристик, хештегов/тегов и фото. Перед рекомендациями по
+карточке агент все равно обязан подтянуть текущий карточный контент и
+посмотреть все фото по правилам ниже.
+
 ## Обязательный порядок перед рекомендациями
 
 Перед тем как предлагать варианты изменения карточки, агент обязан:

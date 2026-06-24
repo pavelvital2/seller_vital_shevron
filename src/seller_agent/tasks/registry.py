@@ -211,6 +211,20 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_mapping=True,
     ),
     RegisteredTask(
+        name="catalog-content-master",
+        command="build-content-master",
+        title="Build content master",
+        description=(
+            "Build read-only unified content master and card-work audit from "
+            "unified catalog, processed Ozon/WB catalogs and optional pricing status."
+        ),
+        mode="read_only",
+        risk="low",
+        marketplaces=("ozon", "wb"),
+        runbook_path="data/planning/product_card_work_runbook.md",
+        requires_mapping=True,
+    ),
+    RegisteredTask(
         name="pricing-status",
         command="pricing-status",
         title="Pricing status",

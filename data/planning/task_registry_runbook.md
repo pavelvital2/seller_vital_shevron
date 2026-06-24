@@ -85,6 +85,11 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   confirmed mapping и marketplace catalogs.
 - `plan-internal-skus` - готовит owner-review план внутренних артикулов для
   `ozon_only`/`wb_only` товаров.
+- `build-content-master` - строит read-only единый контентный слой и аудит
+  карточной работы по unified catalog, processed Ozon/WB catalogs и optional
+  `pricing-status`. Команда пишет generated artifacts в
+  `data/catalog/content/` и `data/runs/`, не меняет карточки, фото, цены,
+  остатки или seller SKU.
 - `pricing-status` - строит read-only статус цен и готовности маржинального
   анализа по unified catalog и локальным или fresh API Ozon/WB price snapshots.
   Опция `--refresh-api` обращается только к read-only price endpoints и
@@ -107,6 +112,7 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 - `fetch-catalog`;
 - `build-unified-catalog`;
 - `plan-internal-skus`;
+- `build-content-master`;
 - `status-preflight`;
 - `daily-morning-report`;
 - `sessions`;

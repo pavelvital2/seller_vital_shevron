@@ -20,6 +20,10 @@ data/catalog/mapping/ozon_wb_product_mapping_review.md
 data/catalog/unified/products.json
 data/catalog/unified/products.csv
 data/catalog/unified/future_seller_sku_plan.csv
+data/catalog/content/content_master.json
+data/catalog/content/content_master.csv
+data/catalog/content/content_audit.json
+data/catalog/content/content_audit.csv
 ```
 
 Файлы mapping и unified plan считаются рабочими бизнес-данными и по умолчанию
@@ -95,6 +99,66 @@ Barcode подтягивается из `data/catalog/ozon/processed/ozon_catalo
 
 Это read-only слой: он не переименовывает Ozon `offer_id`, WB `vendorCode` и
 не выполняет cross-marketplace write-операции.
+
+## Единый контентный слой
+
+После сборки `data/catalog/unified/products.csv` можно собрать read-only
+content master:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli build-content-master
+```
+
+Входы по умолчанию:
+
+```text
+data/catalog/unified/products.csv
+data/catalog/ozon/processed/ozon_catalog.csv
+data/catalog/wb/processed/wb_catalog.csv
+data/pricing/pricing_status.csv
+```
+
+`data/pricing/pricing_status.csv` является optional: если его нет, команда
+строит контентный слой без action-price полей.
+
+Выходы:
+
+```text
+data/catalog/content/content_master.csv
+data/catalog/content/content_master.json
+data/catalog/content/content_audit.csv
+data/catalog/content/content_audit.json
+data/runs/<date>/<run_id>/catalog_content_master_report.md
+```
+
+Назначение content master:
+
+- держать рядом текущие Ozon/WB названия одного внутреннего товара;
+- показывать `title_alignment_status`, `marketplace_presence`,
+  `transfer_direction`, `content_review_priority` и `next_content_step`;
+- отделять товары, которые есть только на одной площадке, от подтвержденных
+  Ozon+WB товаров;
+- подготавливать очередь для будущего unified SEO/content draft.
+
+Ограничение: этот слой пока не содержит полные описания, характеристики,
+хештеги/теги и фото. Перед рекомендациями по конкретной карточке нужно
+подтянуть полный snapshot карточки и выполнить фото-аудит по
+`product_card_work_runbook.md`.
+
+Smoke-проверка 2026-06-24 на текущих локальных данных:
+
+```text
+input_products: 710
+content_master_rows: 710
+confirmed_rows: 269
+ozon_only_rows: 279
+wb_only_rows: 162
+both_marketplaces_rows: 269
+title_mismatch_rows: 205
+missing_cost_rows: 441
+audit_rows: 1087
+```
 
 Минимальные поля общего каталога:
 

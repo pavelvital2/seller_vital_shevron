@@ -21,6 +21,8 @@ data/catalog/mapping/*
 !data/catalog/mapping/README.md
 data/catalog/unified/*
 !data/catalog/unified/README.md
+data/catalog/content/*
+!data/catalog/content/README.md
 data/runs/*
 data/pending/*
 data/approved/*

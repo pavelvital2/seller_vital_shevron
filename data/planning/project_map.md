@@ -65,6 +65,12 @@
   присвоения внутренних `internal_sku` товарам `ozon_only`/`wb_only` из
   unified catalog; команда `plan-internal-skus` формирует review CSV/JSON,
   не меняет Ozon `offer_id` и WB `vendorCode`.
+- `src/seller_agent/tasks/catalog_content_master.py` - read-only сборка
+  единого контентного слоя поверх unified catalog, processed Ozon/WB catalogs
+  и optional `pricing-status`; команда `build-content-master` пишет
+  `data/catalog/content/content_master.csv/json`,
+  `data/catalog/content/content_audit.csv/json` и `RunManifest`, не меняет
+  карточки Ozon/WB.
 - `src/seller_agent/tasks/pricing_status.py` - read-only статус цен и
   готовности маржинального анализа: соединяет unified catalog с локальными или
   fresh API Ozon/WB price snapshots, Ozon Elastic dry-run и WB actions dry-run,
@@ -175,6 +181,9 @@ Ozon CDP port по умолчанию: `9544`.
 - `data/catalog/unified/` - внутренний product-level каталог
   `products.csv/json`, планы внутренних артикулов marketplace-only товаров и
   будущие планы унификации seller SKU; не коммитить.
+- `data/catalog/content/` - generated read-only content master и content audit
+  для будущей унификации названий, описаний, характеристик, фото и SEO;
+  не коммитить, кроме `README.md`.
 - `data/runs/` - runtime reports, не коммитить.
 - `data/runs/index.jsonl` - runtime-индекс `RunManifest`, не коммитить.
 - `data/pending/` - pending packages перед approval, не коммитить.

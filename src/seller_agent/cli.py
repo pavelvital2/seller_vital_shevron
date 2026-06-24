@@ -20,6 +20,7 @@ from seller_agent.config import load_credentials
 from seller_agent.core.run_manifest import find_run, latest_run, list_runs
 from seller_agent.tasks.approvals import run_approvals_close, run_approvals_status
 from seller_agent.tasks.catalog_fetch import run_catalog_fetch
+from seller_agent.tasks.catalog_content_master import run_catalog_content_master
 from seller_agent.tasks.catalog_internal_sku_plan import run_internal_sku_plan
 from seller_agent.tasks.catalog_unified import run_build_unified_catalog
 from seller_agent.tasks.actions_apply import run_actions_apply
@@ -347,6 +348,46 @@ def build_parser() -> argparse.ArgumentParser:
         "--output-dir",
         default=None,
         help="Plan output directory. Defaults to data/catalog/unified.",
+    )
+
+    content_master = subparsers.add_parser(
+        "build-content-master",
+        help="Build read-only unified content master and card-work audit from local catalogs.",
+    )
+    content_master.add_argument(
+        "--data-dir",
+        default="data",
+        help="Project data directory.",
+    )
+    content_master.add_argument(
+        "--run-id",
+        default=None,
+        help="Optional stable run id.",
+    )
+    content_master.add_argument(
+        "--products-path",
+        default=None,
+        help="Unified products CSV. Defaults to data/catalog/unified/products.csv.",
+    )
+    content_master.add_argument(
+        "--ozon-catalog-path",
+        default=None,
+        help="Ozon processed catalog CSV. Defaults to data/catalog/ozon/processed/ozon_catalog.csv.",
+    )
+    content_master.add_argument(
+        "--wb-catalog-path",
+        default=None,
+        help="WB processed catalog CSV. Defaults to data/catalog/wb/processed/wb_catalog.csv.",
+    )
+    content_master.add_argument(
+        "--pricing-status-path",
+        default=None,
+        help="Optional pricing status CSV. Defaults to data/pricing/pricing_status.csv if present.",
+    )
+    content_master.add_argument(
+        "--output-dir",
+        default=None,
+        help="Content master output directory. Defaults to data/catalog/content.",
     )
 
     pricing_status = subparsers.add_parser(
@@ -1144,6 +1185,19 @@ def main(argv: list[str] | None = None) -> int:
         result = run_internal_sku_plan(
             data_dir=Path(args.data_dir),
             products_path=Path(args.products_path) if args.products_path else None,
+            output_dir=Path(args.output_dir) if args.output_dir else None,
+            run_id=args.run_id,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
+
+    if args.command == "build-content-master":
+        result = run_catalog_content_master(
+            data_dir=Path(args.data_dir),
+            products_path=Path(args.products_path) if args.products_path else None,
+            ozon_catalog_path=Path(args.ozon_catalog_path) if args.ozon_catalog_path else None,
+            wb_catalog_path=Path(args.wb_catalog_path) if args.wb_catalog_path else None,
+            pricing_status_path=Path(args.pricing_status_path) if args.pricing_status_path else None,
             output_dir=Path(args.output_dir) if args.output_dir else None,
             run_id=args.run_id,
         )
