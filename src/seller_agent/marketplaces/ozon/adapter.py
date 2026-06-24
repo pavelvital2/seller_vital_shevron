@@ -121,6 +121,25 @@ class OzonSellerAdapter:
 
         return items
 
+    def fetch_product_descriptions(
+        self,
+        offer_ids: list[str],
+    ) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        normalized_ids = [item for item in offer_ids if str(item).strip()]
+
+        for offer_id in normalized_ids:
+            data = self.post("/v1/product/info/description", {"offer_id": str(offer_id)})
+            result = data.get("result") if isinstance(data, dict) else {}
+            if isinstance(result, dict):
+                result.setdefault("offer_id", str(offer_id))
+                items.append(result)
+            elif isinstance(data, dict):
+                data.setdefault("offer_id", str(offer_id))
+                items.append(data)
+
+        return items
+
     def fetch_product_info_prices(
         self,
         *,

@@ -21,16 +21,20 @@ dry-run.
 ## Единый content master
 
 Для подготовки массовой работы над единым представлением товаров на Ozon и WB
-использовать read-only команду:
+использовать read-only команды:
 
 ```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli fetch-card-content
+
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   -m seller_agent.cli build-content-master
 ```
 
-Команда строит:
+Команды строят:
 
 ```text
+data/catalog/content/card_content_index.csv
 data/catalog/content/content_master.csv
 data/catalog/content/content_audit.csv
 data/runs/<date>/<run_id>/catalog_content_master_report.md
@@ -42,14 +46,19 @@ Content master нужен как очередь и контрольный сло
 - `title_alignment_status` показывает, совпадают ли текущие названия Ozon/WB;
 - `marketplace_presence` отделяет `ozon_only`, `wb_only` и товары на обеих
   площадках;
+- `full_snapshot_status` показывает, найден ли read-only snapshot карточного
+  контента по Ozon/WB;
+- `ozon_photo_count`/`wb_photo_count`, `*_description_present`,
+  `*_attribute_count`, `ozon_hashtags`/`wb_tags` помогают выбрать карточку для
+  полноценного аудита;
 - `transfer_direction` показывает кандидатов на перенос на вторую площадку;
 - `content_review_priority` и `next_content_step` помогают выбрать следующий
   товар для аудита.
 
-Ограничение: content master не заменяет покарточный аудит. В нем нет полного
-описания, всех характеристик, хештегов/тегов и фото. Перед рекомендациями по
-карточке агент все равно обязан подтянуть текущий карточный контент и
-посмотреть все фото по правилам ниже.
+Ограничение: `fetch-card-content` считает фото по данным API, но не смотрит
+изображения глазами. Content master не заменяет покарточный аудит. Перед
+рекомендациями по карточке агент все равно обязан открыть все фото, описать
+их и сделать коллаж по правилам ниже.
 
 ## Обязательный порядок перед рекомендациями
 

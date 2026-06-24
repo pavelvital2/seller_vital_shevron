@@ -87,9 +87,14 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   `ozon_only`/`wb_only` товаров.
 - `build-content-master` - строит read-only единый контентный слой и аудит
   карточной работы по unified catalog, processed Ozon/WB catalogs и optional
-  `pricing-status`. Команда пишет generated artifacts в
+  `pricing-status`/`card_content_index`. Команда пишет generated artifacts в
   `data/catalog/content/` и `data/runs/`, не меняет карточки, фото, цены,
   остатки или seller SKU.
+- `fetch-card-content` - читает Ozon `/v4/product/info/attributes` и
+  `/v1/product/info/description`, WB `/content/v2/get/cards/list`, сохраняет
+  raw runtime snapshots и производный `card_content_index.csv/json` для
+  content master и будущих SEO-аудитов. Это не визуальный фото-аудит и не
+  write-операция.
 - `pricing-status` - строит read-only статус цен и готовности маржинального
   анализа по unified catalog и локальным или fresh API Ozon/WB price snapshots.
   Опция `--refresh-api` обращается только к read-only price endpoints и
@@ -113,6 +118,7 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 - `build-unified-catalog`;
 - `plan-internal-skus`;
 - `build-content-master`;
+- `fetch-card-content`;
 - `status-preflight`;
 - `daily-morning-report`;
 - `sessions`;

@@ -24,6 +24,8 @@ data/catalog/content/content_master.json
 data/catalog/content/content_master.csv
 data/catalog/content/content_audit.json
 data/catalog/content/content_audit.csv
+data/catalog/content/card_content_index.json
+data/catalog/content/card_content_index.csv
 ```
 
 Файлы mapping и unified plan считаются рабочими бизнес-данными и по умолчанию
@@ -103,9 +105,12 @@ Barcode подтягивается из `data/catalog/ozon/processed/ozon_catalo
 ## Единый контентный слой
 
 После сборки `data/catalog/unified/products.csv` можно собрать read-only
-content master:
+card content snapshot и content master:
 
 ```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli fetch-card-content
+
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   -m seller_agent.cli build-content-master
 ```
@@ -117,10 +122,13 @@ data/catalog/unified/products.csv
 data/catalog/ozon/processed/ozon_catalog.csv
 data/catalog/wb/processed/wb_catalog.csv
 data/pricing/pricing_status.csv
+data/catalog/content/card_content_index.csv
 ```
 
-`data/pricing/pricing_status.csv` является optional: если его нет, команда
-строит контентный слой без action-price полей.
+`data/pricing/pricing_status.csv` и
+`data/catalog/content/card_content_index.csv` являются optional: если их нет,
+команда строит контентный слой без action-price и без полей карточного
+snapshot.
 
 Выходы:
 
@@ -132,19 +140,31 @@ data/catalog/content/content_audit.json
 data/runs/<date>/<run_id>/catalog_content_master_report.md
 ```
 
+`fetch-card-content` дополнительно пишет:
+
+```text
+data/catalog/content/card_content_index.csv
+data/catalog/content/card_content_index.json
+data/catalog/content/ozon_card_content.json
+data/catalog/content/wb_card_content.json
+data/runs/<date>/<run_id>/raw/
+```
+
 Назначение content master:
 
 - держать рядом текущие Ozon/WB названия одного внутреннего товара;
 - показывать `title_alignment_status`, `marketplace_presence`,
-  `transfer_direction`, `content_review_priority` и `next_content_step`;
+  `full_snapshot_status`, `transfer_direction`, `content_review_priority` и
+  `next_content_step`;
+- подхватывать счетчики фото, наличие описания, количество характеристик,
+  Ozon-хештеги и WB-теги из `card_content_index`;
 - отделять товары, которые есть только на одной площадке, от подтвержденных
   Ozon+WB товаров;
 - подготавливать очередь для будущего unified SEO/content draft.
 
-Ограничение: этот слой пока не содержит полные описания, характеристики,
-хештеги/теги и фото. Перед рекомендациями по конкретной карточке нужно
-подтянуть полный snapshot карточки и выполнить фото-аудит по
-`product_card_work_runbook.md`.
+Ограничение: `card_content_index` содержит производные поля и raw snapshot, но
+не заменяет визуальный просмотр фото. Перед рекомендациями по конкретной
+карточке нужно выполнить фото-аудит по `product_card_work_runbook.md`.
 
 Smoke-проверка 2026-06-24 на текущих локальных данных:
 
@@ -158,6 +178,24 @@ both_marketplaces_rows: 269
 title_mismatch_rows: 205
 missing_cost_rows: 441
 audit_rows: 1087
+```
+
+Smoke-проверка `fetch-card-content` 2026-06-24 на 3 товарах через реальные
+read-only API:
+
+```text
+products: 3
+content_index_rows: 6
+ozon_rows: 3
+wb_rows: 3
+found_rows: 6
+missing_rows: 0
+description_present_rows: 6
+photo_lt5_rows: 0
+ozon_attributes: 3
+ozon_descriptions: 3
+wb_cards: 431
+errors: none
 ```
 
 Минимальные поля общего каталога:

@@ -225,6 +225,21 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_mapping=True,
     ),
     RegisteredTask(
+        name="card-content-snapshot",
+        command="fetch-card-content",
+        title="Fetch card content snapshots",
+        description=(
+            "Fetch read-only Ozon/WB card content snapshots: descriptions, "
+            "attributes, dimensions, photos count and tags for content master and SEO audits."
+        ),
+        mode="read_only",
+        risk="low",
+        marketplaces=("ozon", "wb"),
+        runbook_path="data/planning/product_card_work_runbook.md",
+        requires_credentials=True,
+        requires_mapping=True,
+    ),
+    RegisteredTask(
         name="pricing-status",
         command="pricing-status",
         title="Pricing status",

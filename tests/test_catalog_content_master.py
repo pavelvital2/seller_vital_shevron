@@ -55,6 +55,27 @@ def test_build_content_master_flags_title_mismatch_and_marketplace_only() -> Non
                 "wb_action_price": "341",
             }
         ],
+        card_content_rows=[
+            {
+                "marketplace": "ozon",
+                "internal_product_id": "chev_nr_svo_pict0001",
+                "description_present": "true",
+                "description_length": "120",
+                "photo_count": "5",
+                "attribute_count": "12",
+                "hashtags_or_tags": "#шеврон #патч",
+                "raw_snapshot_status": "found",
+            },
+            {
+                "marketplace": "wb",
+                "internal_product_id": "chev_nr_svo_pict0001",
+                "description_present": "true",
+                "description_length": "95",
+                "photo_count": "4",
+                "attribute_count": "8",
+                "raw_snapshot_status": "found",
+            },
+        ],
     )
 
     by_id = {row.internal_product_id: row for row in rows}
@@ -64,6 +85,9 @@ def test_build_content_master_flags_title_mismatch_and_marketplace_only() -> Non
     assert summary["missing_cost_rows"] == 1
     assert by_id["chev_nr_svo_pict0001"].title_alignment_status == "mismatch"
     assert by_id["chev_nr_svo_pict0001"].ozon_action_price == "433"
+    assert by_id["chev_nr_svo_pict0001"].full_snapshot_status == "both_found"
+    assert by_id["chev_nr_svo_pict0001"].photo_audit_status == "photo_count_lt5_not_inspected"
+    assert by_id["chev_nr_svo_pict0001"].ozon_hashtags == "#шеврон #патч"
     assert by_id["ozon:only1"].transfer_direction == "create_on_wb_candidate"
     assert {row["issue"] for row in audit_rows} == {"title_mismatch", "marketplace_only", "missing_cost"}
 
@@ -94,6 +118,23 @@ def test_content_master_cli_writes_artifacts(tmp_path: Path, capsys) -> None:
     )
     _write_csv(ozon_path, [{"offer_id": "oz-1", "status": "visible", "title": "Шеврон СВО"}])
     _write_csv(wb_path, [{"vendor_code": "wb-1", "status": "present", "title": "Патч СВО"}])
+    _write_csv(
+        data_dir / "catalog" / "content" / "card_content_index.csv",
+        [
+            {
+                "marketplace": "ozon",
+                "internal_product_id": "chev_nr_svo_pict0001",
+                "photo_count": "5",
+                "raw_snapshot_status": "found",
+            },
+            {
+                "marketplace": "wb",
+                "internal_product_id": "chev_nr_svo_pict0001",
+                "photo_count": "5",
+                "raw_snapshot_status": "found",
+            },
+        ],
+    )
 
     assert main(
         [
@@ -109,6 +150,7 @@ def test_content_master_cli_writes_artifacts(tmp_path: Path, capsys) -> None:
     assert result["run_id"] == "content_master_test"
     assert result["summary"]["content_master_rows"] == 1
     assert result["summary"]["title_mismatch_rows"] == 1
+    assert result["summary"]["full_snapshot_found_rows"] == 1
     assert Path(result["artifacts"]["content_master_csv"]).exists()
     assert Path(result["artifacts"]["content_audit_csv"]).exists()
     assert Path(result["artifacts"]["report"]).exists()

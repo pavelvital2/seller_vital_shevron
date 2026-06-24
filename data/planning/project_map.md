@@ -67,10 +67,15 @@
   не меняет Ozon `offer_id` и WB `vendorCode`.
 - `src/seller_agent/tasks/catalog_content_master.py` - read-only сборка
   единого контентного слоя поверх unified catalog, processed Ozon/WB catalogs
-  и optional `pricing-status`; команда `build-content-master` пишет
-  `data/catalog/content/content_master.csv/json`,
+  optional `pricing-status` и optional card content index; команда
+  `build-content-master` пишет `data/catalog/content/content_master.csv/json`,
   `data/catalog/content/content_audit.csv/json` и `RunManifest`, не меняет
   карточки Ozon/WB.
+- `src/seller_agent/tasks/card_content_snapshot.py` - read-only snapshot
+  карточного контента Ozon/WB: описания, характеристики, габариты, счетчик
+  фото и хештеги/теги; команда `fetch-card-content` пишет
+  `data/catalog/content/card_content_index.csv/json`, generated snapshots и
+  raw runtime artifacts в `data/runs/<date>/<run_id>/raw/`.
 - `src/seller_agent/tasks/pricing_status.py` - read-only статус цен и
   готовности маржинального анализа: соединяет unified catalog с локальными или
   fresh API Ozon/WB price snapshots, Ozon Elastic dry-run и WB actions dry-run,
@@ -183,7 +188,8 @@ Ozon CDP port по умолчанию: `9544`.
   будущие планы унификации seller SKU; не коммитить.
 - `data/catalog/content/` - generated read-only content master и content audit
   для будущей унификации названий, описаний, характеристик, фото и SEO;
-  не коммитить, кроме `README.md`.
+  содержит `content_master.*`, `content_audit.*`, `card_content_index.*` и
+  generated card snapshots; не коммитить, кроме `README.md`.
 - `data/runs/` - runtime reports, не коммитить.
 - `data/runs/index.jsonl` - runtime-индекс `RunManifest`, не коммитить.
 - `data/pending/` - pending packages перед approval, не коммитить.

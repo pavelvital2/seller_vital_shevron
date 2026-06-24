@@ -17,6 +17,7 @@ DEFAULT_UNIFIED_PRODUCTS_PATH = Path("catalog/unified/products.csv")
 DEFAULT_OZON_CATALOG_PATH = Path("catalog/ozon/processed/ozon_catalog.csv")
 DEFAULT_WB_CATALOG_PATH = Path("catalog/wb/processed/wb_catalog.csv")
 DEFAULT_PRICING_STATUS_PATH = Path("pricing/pricing_status.csv")
+DEFAULT_CARD_CONTENT_INDEX_PATH = Path("catalog/content/card_content_index.csv")
 DEFAULT_OUTPUT_DIR = Path("catalog/content")
 
 
@@ -37,14 +38,27 @@ class ContentMasterRow:
     ozon_current_title: str = ""
     ozon_status: str = ""
     ozon_action_price: str = ""
+    ozon_description_present: str = ""
+    ozon_description_length: str = ""
+    ozon_photo_count: str = ""
+    ozon_attribute_count: str = ""
+    ozon_hashtags: str = ""
+    ozon_content_snapshot_status: str = ""
     wb_vendor_code: str = ""
     wb_nm_id: str = ""
     wb_current_title: str = ""
     wb_status: str = ""
     wb_subject: str = ""
     wb_action_price: str = ""
+    wb_description_present: str = ""
+    wb_description_length: str = ""
+    wb_photo_count: str = ""
+    wb_attribute_count: str = ""
+    wb_tags: str = ""
+    wb_content_snapshot_status: str = ""
     title_alignment_status: str = ""
     marketplace_presence: str = ""
+    full_snapshot_status: str = ""
     transfer_direction: str = ""
     content_review_priority: str = ""
     content_review_reasons: str = ""
@@ -176,16 +190,74 @@ def _pricing_by_product(rows: list[dict[str, str]]) -> dict[str, dict[str, str]]
     return result
 
 
+def _content_index_by_product(rows: list[dict[str, str]]) -> dict[tuple[str, str], dict[str, str]]:
+    result: dict[tuple[str, str], dict[str, str]] = {}
+    for row in rows:
+        marketplace = normalize_sku(row.get("marketplace")).lower()
+        internal_product_id = normalize_sku(row.get("internal_product_id"))
+        if marketplace and internal_product_id:
+            result[(marketplace, internal_product_id)] = row
+    return result
+
+
+def _content_snapshot_status(
+    *,
+    presence: str,
+    ozon_content: dict[str, str] | None,
+    wb_content: dict[str, str] | None,
+) -> str:
+    ozon_found = bool(ozon_content and ozon_content.get("raw_snapshot_status") == "found")
+    wb_found = bool(wb_content and wb_content.get("raw_snapshot_status") == "found")
+    if presence == "ozon_wb":
+        if ozon_found and wb_found:
+            return "both_found"
+        if ozon_found:
+            return "missing_wb"
+        if wb_found:
+            return "missing_ozon"
+        return "missing_both"
+    if presence == "ozon_only":
+        return "ozon_found" if ozon_found else "missing_ozon"
+    if presence == "wb_only":
+        return "wb_found" if wb_found else "missing_wb"
+    return "not_applicable"
+
+
+def _photo_audit_status_from_content(
+    *,
+    full_snapshot_status: str,
+    ozon_content: dict[str, str] | None,
+    wb_content: dict[str, str] | None,
+) -> str:
+    if full_snapshot_status in {"missing_both", "missing_ozon", "missing_wb"}:
+        return "snapshot_missing"
+    counts: list[int] = []
+    for content in (ozon_content, wb_content):
+        if not content or content.get("raw_snapshot_status") != "found":
+            continue
+        try:
+            counts.append(int(content.get("photo_count") or 0))
+        except ValueError:
+            counts.append(0)
+    if not counts:
+        return "not_checked"
+    if any(count < 5 for count in counts):
+        return "photo_count_lt5_not_inspected"
+    return "photo_count_ok_not_inspected"
+
+
 def build_content_master(
     *,
     products: list[dict[str, str]],
     ozon_rows: list[dict[str, str]],
     wb_rows: list[dict[str, str]],
     pricing_rows: list[dict[str, str]] | None = None,
+    card_content_rows: list[dict[str, str]] | None = None,
 ) -> tuple[list[ContentMasterRow], list[dict[str, str]], dict[str, Any]]:
     ozon_by_offer = _index_by(ozon_rows, "offer_id")
     wb_by_vendor = _index_by(wb_rows, "vendor_code")
     pricing_by_id = _pricing_by_product(pricing_rows or [])
+    card_content_by_product = _content_index_by_product(card_content_rows or [])
     content_rows: list[ContentMasterRow] = []
     audit_rows: list[dict[str, str]] = []
 
@@ -196,6 +268,8 @@ def build_content_master(
         ozon = ozon_by_offer.get(ozon_offer_id)
         wb = wb_by_vendor.get(wb_vendor_code)
         pricing = pricing_by_id.get(internal_product_id) or pricing_by_id.get(normalize_sku(product.get("internal_sku"))) or {}
+        ozon_content = card_content_by_product.get(("ozon", internal_product_id))
+        wb_content = card_content_by_product.get(("wb", internal_product_id))
 
         ozon_title = _first_text(ozon.get("title") if ozon else "", product.get("product_name") if ozon_offer_id else "")
         wb_title = _first_text(wb.get("title") if wb else "", product.get("product_name") if wb_vendor_code else "")
@@ -216,7 +290,13 @@ def build_content_master(
             reasons.append("title_mismatch")
         if not normalize_sku(product.get("cost_total")):
             reasons.append("missing_cost")
-        reasons.append("needs_photo_content_snapshot")
+        full_snapshot_status = _content_snapshot_status(
+            presence=presence,
+            ozon_content=ozon_content,
+            wb_content=wb_content,
+        )
+        if full_snapshot_status not in {"both_found", "ozon_found", "wb_found"}:
+            reasons.append("needs_photo_content_snapshot")
         priority = _priority(reasons, mapping_status)
 
         transfer_direction = ""
@@ -241,20 +321,37 @@ def build_content_master(
             ozon_current_title=ozon_title,
             ozon_status=normalize_sku(ozon.get("status") if ozon else ""),
             ozon_action_price=normalize_sku(pricing.get("ozon_action_price")),
+            ozon_description_present=normalize_sku(ozon_content.get("description_present") if ozon_content else ""),
+            ozon_description_length=normalize_sku(ozon_content.get("description_length") if ozon_content else ""),
+            ozon_photo_count=normalize_sku(ozon_content.get("photo_count") if ozon_content else ""),
+            ozon_attribute_count=normalize_sku(ozon_content.get("attribute_count") if ozon_content else ""),
+            ozon_hashtags=normalize_sku(ozon_content.get("hashtags_or_tags") if ozon_content else ""),
+            ozon_content_snapshot_status=normalize_sku(ozon_content.get("raw_snapshot_status") if ozon_content else ""),
             wb_vendor_code=wb_vendor_code,
             wb_nm_id=_first_text(product.get("wb_nm_id"), wb.get("nm_id") if wb else ""),
             wb_current_title=wb_title,
             wb_status=normalize_sku(wb.get("status") if wb else ""),
             wb_subject=normalize_sku(wb.get("subject") if wb else ""),
             wb_action_price=normalize_sku(pricing.get("wb_action_price")),
+            wb_description_present=normalize_sku(wb_content.get("description_present") if wb_content else ""),
+            wb_description_length=normalize_sku(wb_content.get("description_length") if wb_content else ""),
+            wb_photo_count=normalize_sku(wb_content.get("photo_count") if wb_content else ""),
+            wb_attribute_count=normalize_sku(wb_content.get("attribute_count") if wb_content else ""),
+            wb_tags=normalize_sku(wb_content.get("hashtags_or_tags") if wb_content else ""),
+            wb_content_snapshot_status=normalize_sku(wb_content.get("raw_snapshot_status") if wb_content else ""),
             title_alignment_status=title_status,
             marketplace_presence=presence,
+            full_snapshot_status=full_snapshot_status,
             transfer_direction=transfer_direction,
             content_review_priority=priority,
             content_review_reasons=";".join(reasons),
             next_content_step=_next_step(reasons, presence),
-            seo_ready_status="needs_full_card_snapshot",
-            photo_audit_status="not_checked",
+            seo_ready_status="ready_for_card_audit" if "needs_photo_content_snapshot" not in reasons else "needs_full_card_snapshot",
+            photo_audit_status=_photo_audit_status_from_content(
+                full_snapshot_status=full_snapshot_status,
+                ozon_content=ozon_content,
+                wb_content=wb_content,
+            ),
             notes=normalize_sku(product.get("notes")),
         )
         content_rows.append(row)
@@ -288,12 +385,19 @@ def build_content_master(
         "ozon_catalog_rows": len(ozon_rows),
         "wb_catalog_rows": len(wb_rows),
         "pricing_rows": len(pricing_rows or []),
+        "card_content_rows": len(card_content_rows or []),
         "confirmed_rows": sum(1 for row in content_rows if row.mapping_status == "confirmed"),
         "ozon_only_rows": by_presence.get("ozon_only", 0),
         "wb_only_rows": by_presence.get("wb_only", 0),
         "both_marketplaces_rows": by_presence.get("ozon_wb", 0),
         "title_mismatch_rows": by_title.get("mismatch", 0),
         "missing_cost_rows": sum(1 for row in content_rows if "missing_cost" in row.content_review_reasons),
+        "full_snapshot_found_rows": sum(
+            1 for row in content_rows if row.full_snapshot_status in {"both_found", "ozon_found", "wb_found"}
+        ),
+        "photo_count_lt5_rows": sum(
+            1 for row in content_rows if row.photo_audit_status == "photo_count_lt5_not_inspected"
+        ),
         "high_priority_rows": by_priority.get("high", 0),
         "normal_priority_rows": by_priority.get("normal", 0),
         "audit_rows": len(audit_rows),
@@ -354,6 +458,7 @@ def run_catalog_content_master(
     ozon_catalog_path: Path | None = None,
     wb_catalog_path: Path | None = None,
     pricing_status_path: Path | None = None,
+    card_content_index_path: Path | None = None,
     output_dir: Path | None = None,
     run_id: str | None = None,
 ) -> dict[str, Any]:
@@ -365,6 +470,7 @@ def run_catalog_content_master(
     ozon_catalog_path = ozon_catalog_path or data_dir / DEFAULT_OZON_CATALOG_PATH
     wb_catalog_path = wb_catalog_path or data_dir / DEFAULT_WB_CATALOG_PATH
     pricing_status_path = pricing_status_path or data_dir / DEFAULT_PRICING_STATUS_PATH
+    card_content_index_path = card_content_index_path or data_dir / DEFAULT_CARD_CONTENT_INDEX_PATH
     output_dir = ensure_dir(output_dir or data_dir / DEFAULT_OUTPUT_DIR)
 
     errors: dict[str, str] = {}
@@ -372,12 +478,14 @@ def run_catalog_content_master(
     ozon_rows: list[dict[str, str]] = []
     wb_rows: list[dict[str, str]] = []
     pricing_rows: list[dict[str, str]] = []
+    card_content_rows: list[dict[str, str]] = []
 
     for label, path, required in (
         ("products", products_path, True),
         ("ozon_catalog", ozon_catalog_path, True),
         ("wb_catalog", wb_catalog_path, True),
         ("pricing_status", pricing_status_path, False),
+        ("card_content_index", card_content_index_path, False),
     ):
         try:
             rows = _read_csv(path)
@@ -388,7 +496,10 @@ def run_catalog_content_master(
             elif label == "wb_catalog":
                 wb_rows = rows
             else:
-                pricing_rows = rows
+                if label == "pricing_status":
+                    pricing_rows = rows
+                else:
+                    card_content_rows = rows
         except Exception as exc:  # noqa: BLE001 - task report must capture missing/bad inputs
             if required:
                 errors[label] = str(exc)
@@ -401,12 +512,15 @@ def run_catalog_content_master(
         "ozon_catalog_rows": len(ozon_rows),
         "wb_catalog_rows": len(wb_rows),
         "pricing_rows": len(pricing_rows),
+        "card_content_rows": len(card_content_rows),
         "confirmed_rows": 0,
         "ozon_only_rows": 0,
         "wb_only_rows": 0,
         "both_marketplaces_rows": 0,
         "title_mismatch_rows": 0,
         "missing_cost_rows": 0,
+        "full_snapshot_found_rows": 0,
+        "photo_count_lt5_rows": 0,
         "high_priority_rows": 0,
         "normal_priority_rows": 0,
         "audit_rows": 0,
@@ -417,6 +531,7 @@ def run_catalog_content_master(
             ozon_rows=ozon_rows,
             wb_rows=wb_rows,
             pricing_rows=pricing_rows,
+            card_content_rows=card_content_rows,
         )
 
     content_dicts = [asdict(row) for row in content_rows]
@@ -459,6 +574,7 @@ def run_catalog_content_master(
             "ozon_catalog_path": str(ozon_catalog_path),
             "wb_catalog_path": str(wb_catalog_path),
             "pricing_status_path": str(pricing_status_path),
+            "card_content_index_path": str(card_content_index_path),
         },
         "artifacts": artifacts,
     }

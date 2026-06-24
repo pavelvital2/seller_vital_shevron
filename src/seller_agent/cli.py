@@ -19,6 +19,7 @@ from seller_agent.bot.telegram_runner import (
 from seller_agent.config import load_credentials
 from seller_agent.core.run_manifest import find_run, latest_run, list_runs
 from seller_agent.tasks.approvals import run_approvals_close, run_approvals_status
+from seller_agent.tasks.card_content_snapshot import run_card_content_snapshot
 from seller_agent.tasks.catalog_fetch import run_catalog_fetch
 from seller_agent.tasks.catalog_content_master import run_catalog_content_master
 from seller_agent.tasks.catalog_internal_sku_plan import run_internal_sku_plan
@@ -385,9 +386,51 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional pricing status CSV. Defaults to data/pricing/pricing_status.csv if present.",
     )
     content_master.add_argument(
+        "--card-content-index",
+        default=None,
+        help="Optional card content index CSV. Defaults to data/catalog/content/card_content_index.csv if present.",
+    )
+    content_master.add_argument(
         "--output-dir",
         default=None,
         help="Content master output directory. Defaults to data/catalog/content.",
+    )
+
+    card_content = subparsers.add_parser(
+        "fetch-card-content",
+        help="Fetch read-only Ozon/WB card content snapshots for content master and SEO audits.",
+    )
+    card_content.add_argument(
+        "--data-dir",
+        default="data",
+        help="Project data directory.",
+    )
+    card_content.add_argument(
+        "--run-id",
+        default=None,
+        help="Optional stable run id.",
+    )
+    card_content.add_argument(
+        "--products-path",
+        default=None,
+        help="Unified products CSV. Defaults to data/catalog/unified/products.csv.",
+    )
+    card_content.add_argument(
+        "--output-dir",
+        default=None,
+        help="Card content output directory. Defaults to data/catalog/content.",
+    )
+    card_content.add_argument(
+        "--marketplace",
+        choices=("all", "ozon", "wb"),
+        default="all",
+        help="Marketplace scope.",
+    )
+    card_content.add_argument(
+        "--limit-products",
+        type=int,
+        default=None,
+        help="Optional product limit for smoke checks.",
     )
 
     pricing_status = subparsers.add_parser(
@@ -1198,8 +1241,22 @@ def main(argv: list[str] | None = None) -> int:
             ozon_catalog_path=Path(args.ozon_catalog_path) if args.ozon_catalog_path else None,
             wb_catalog_path=Path(args.wb_catalog_path) if args.wb_catalog_path else None,
             pricing_status_path=Path(args.pricing_status_path) if args.pricing_status_path else None,
+            card_content_index_path=Path(args.card_content_index) if args.card_content_index else None,
             output_dir=Path(args.output_dir) if args.output_dir else None,
             run_id=args.run_id,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
+
+    if args.command == "fetch-card-content":
+        result = run_card_content_snapshot(
+            credentials=load_credentials(),
+            data_dir=Path(args.data_dir),
+            products_path=Path(args.products_path) if args.products_path else None,
+            output_dir=Path(args.output_dir) if args.output_dir else None,
+            run_id=args.run_id,
+            marketplace=args.marketplace,
+            limit_products=args.limit_products,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["overall_status"] in {"ok", "warning"} else 2
