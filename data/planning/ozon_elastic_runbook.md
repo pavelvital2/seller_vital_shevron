@@ -328,6 +328,97 @@ idempotency marker сохранен в `data/approved/applied/`.
 Повторный apply по `ozon_elastic_plan_20260621T165916` не выполнять:
 idempotency marker сохранен в `data/approved/applied/`.
 
+## Штатный apply 2026-06-22
+
+Подтвержденный сценарий с partial drift:
+
+- approved dry-run: `ozon_elastic_plan_actions_check_20260622`;
+- apply: `ozon_elastic_apply_20260622_actions_check`;
+- fresh preflight: `status_preflight_20260622T081605`, статус `ok`;
+- fresh dry-run перед записью: `ozon_elastic_plan_20260622T081644`;
+- drift-check: `partial_apply_unchanged_rows`;
+- применено: `10` строк activate/update и `3` строки deactivate;
+- Ozon API rejected: `0`;
+- verify: `ok`, расхождений по ценам `0`, снятых строк, оставшихся в акции,
+  `0`;
+- skipped/drift: `1` свежая несогласованная строка `shtpict0016`,
+  `product_id=3297582054`, `Шеврон на липучке Шторм Z бежевый`, action price
+  `419 -> 417`;
+- строку `shtpict0016` не применять без отдельного fresh review/approval;
+- после apply отдельно проверен `Супербустинг` через read-only API:
+  активных товаров `91/91`, отсутствующих `0`, лишних `0`, расхождений по
+  action price `0`;
+- отчет результата:
+  `data/runs/2026-06-22/ozon_elastic_apply_20260622_actions_check/ozon_elastic_apply_result.md`.
+
+Повторный apply по `ozon_elastic_plan_actions_check_20260622` не выполнять:
+idempotency marker сохранен в `data/approved/applied/`.
+
+## Штатный apply 2026-06-23
+
+Подтвержденный сценарий:
+
+- approved dry-run: `ozon_elastic_plan_actions_check_20260623`;
+- apply: `ozon_elastic_apply_actions_check_20260623`;
+- fresh preflight: `status_preflight_20260623T064724`, статус `ok`;
+- fresh dry-run перед записью: `ozon_elastic_plan_20260623T064804`;
+- drift-check: `partial_apply_unchanged_rows`, skipped/drift `0`;
+- применено: `4` строки activate/update и `4` строки deactivate;
+- Ozon API rejected: `0`;
+- verify: `ok`, расхождений по ценам `0`, снятых строк, оставшихся в акции,
+  `0`;
+- после apply отдельно проверен `Супербустинг`:
+  `ozon_superboosting_verify_after_elastic_20260623T064724`, активных товаров
+  `91/91`, отсутствующих `0`, лишних `0`, расхождений по action price `0`;
+- отчет результата:
+  `data/runs/2026-06-23/ozon_elastic_apply_actions_check_20260623/ozon_elastic_apply_result.md`.
+
+Повторный apply по `ozon_elastic_plan_actions_check_20260623` не выполнять:
+idempotency marker сохранен в `data/approved/applied/`.
+
+## Штатный apply 2026-06-24
+
+Подтвержденный сценарий с partial drift:
+
+- approved dry-run: `ozon_elastic_plan_actions_check_20260624`;
+- apply: `ozon_elastic_apply_actions_check_20260624`;
+- fresh preflight: `status_preflight_20260624T082726`, статус `ok`;
+- fresh dry-run перед записью: `ozon_elastic_plan_20260624T082806`;
+- drift-check: `partial_apply_unchanged_rows`;
+- применено: `32` строки activate/update и `5` строк deactivate;
+- Ozon API rejected: `0`;
+- verify: `ok`, расхождений по ценам `0`, снятых строк, оставшихся в акции,
+  `0`;
+- skipped/drift: `7` строк по `6` товарам:
+  `pict0008`, `back0013`, `pzmh0039`, `pzmh0082`, `pict0060`,
+  `pict0152`;
+- skipped/drift строки не применять без отдельного fresh review/approval;
+- после apply отдельно проверен `Супербустинг`:
+  `ozon_superboosting_verify_after_elastic_20260624T0829`, активных товаров
+  `91/91`, отсутствующих `0`, лишних `0`, расхождений по action price `0`;
+- отчет результата:
+  `data/runs/2026-06-24/ozon_elastic_apply_actions_check_20260624/ozon_elastic_apply_result.md`;
+- после отдельного review владелец подтвердил fresh-пакет
+  `ozon_elastic_plan_drift_review_20260624`;
+- apply drift-пакета: `ozon_elastic_apply_drift_review_20260624`;
+- fresh preflight: `status_preflight_20260624T083811`, статус `ok`;
+- fresh dry-run перед записью: `ozon_elastic_plan_20260624T083851`;
+- применено: `4` строки activate/update и `0` строк deactivate;
+- Ozon API rejected: `0`;
+- verify: `ok`, расхождений по ценам `0`, снятых строк, оставшихся в акции,
+  `0`;
+- skipped/drift после второго apply: `2` новые fresh-строки вне
+  согласованного пакета: `pzmh0081`, `bplapict0024`; они не применялись;
+- отчет второго apply:
+  `data/runs/2026-06-24/ozon_elastic_apply_drift_review_20260624/ozon_elastic_apply_result.md`;
+- после второго apply отдельно проверен `Супербустинг`:
+  `ozon_superboosting_verify_after_elastic_drift_20260624T0840`, активных
+  товаров `91/91`, отсутствующих `0`, лишних `0`, расхождений по action price
+  `0`;
+
+Повторный apply по `ozon_elastic_plan_actions_check_20260624` не выполнять:
+idempotency marker сохранен в `data/approved/applied/`.
+
 ## Штатный apply 2026-06-16
 
 Последний подтвержденный штатный сценарий:

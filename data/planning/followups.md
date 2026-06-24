@@ -5,6 +5,137 @@
 
 ## Pending
 
+### FU-2026-06-23-001 - Продолжить присвоение внутренних артикулов
+
+Статус: `done_current_assortment_non_current_deferred`
+
+Где остановились:
+
+- задача: owner-review внутренних `internal_sku` для товаров, которые есть
+  только на Ozon или только на WB;
+- рабочий файл результата:
+  `data/catalog/unified/internal_sku_assignment_owner_review.csv`;
+- записано owner-review строк: `441`;
+- утверждено/присвоено владельцем: `376` строк;
+- отклонено без внутреннего артикула: `3` строки;
+- отложено без внутреннего артикула: `62` строки;
+- закрыты все строки со статусом `auto_candidate`: осталось `0`;
+- дублей утвержденных `approved_internal_sku` на момент проверки нет;
+- тест генератора `tests/test_catalog_internal_sku_plan.py` проходил:
+  `7 passed`;
+- активного непросмотренного остатка в
+  `internal_sku_assignment_plan.csv` после вычитания owner-review CSV:
+  `0` строк;
+- текущий слой присвоения внутренних артикулов для актуального ассортимента
+  закрыт.
+
+Правила, которые уже зафиксированы:
+
+- позывные идут как `pz` и не получают тематический префикс `raz`;
+- `ВДВ` / воздушно-десантные войска относятся к `voisk`, даже если в названии
+  также есть `СВО`;
+- военная прокуратура относится к войсковой тематике `voisk`;
+- военная полиция относится к войсковой тематике `voisk`;
+- для `kit2` нарукавных комплектов силовых структур использовать
+  `chev_kit2_nr_<structure>_pictNNNN`; для смешанных комплектов
+  нагрудный + нарукавный место ношения не указывать;
+- группа комплектов в `needs_owner_review` закрыта полностью;
+- первая пачка одиночных шевронов записана:
+  `batch_11_needs_review_chevrons_01`, отчет
+  `data/runs/2026-06-23/internal_sku_owner_review_chevrons_batch_01/approved_rows.md`;
+- `pict0016` отклонен без `internal_sku`: владелец указал, что товар снят с
+  продажи из-за риска нарушения авторских прав;
+- `back0016` и `back0017` проверены по второму фото: размер `215x70`, поэтому
+  зафиксированы как наспинные `chev_back_fssp_text0001/0002`;
+- `form0059` "Миротворческие силы" зафиксирован как нарукавный войсковой
+  `chev_nr_voisk_text0008`, несмотря на размер `80x50`;
+- по `mvdkit2nr0015` в локальном Ozon snapshot второго фото нет; строка
+  зафиксирована как `chev_nr_mvd_pict0002` по первому фото и старому `offer_id`;
+- вторая пачка одиночных шевронов записана:
+  `batch_12_needs_review_chevrons_02`, отчет
+  `data/runs/2026-06-23/internal_sku_owner_review_chevrons_batch_02/approved_rows.md`;
+- для `batch_12_needs_review_chevrons_02` владелец подтвердил все строки как
+  `pict`; поправки по тематике: строка 3 - `svo`, строка 6 - `svo`, строка
+  8 - `raz`, строка 10 - `svo`;
+- третья пачка одиночных шевронов записана:
+  `batch_13_needs_review_chevrons_03`, отчет
+  `data/runs/2026-06-23/internal_sku_owner_review_chevrons_batch_03/approved_rows.md`;
+- для `batch_13_needs_review_chevrons_03` поправки владельца по тематике:
+  строка 2 - `prikol`, 5 - `raz`, 8 - `raz`, 9 - `raz`, 10 - `raz`,
+  11 - `prikol`, 12 - `prikol`, 13 - `raz`, 14 - `prikol`, 15 - `raz`;
+- четвертая пачка одиночных шевронов записана:
+  `batch_14_needs_review_chevrons_04`, отчет
+  `data/runs/2026-06-23/internal_sku_owner_review_chevrons_batch_04/approved_rows.md`;
+- для `batch_14_needs_review_chevrons_04` поправки владельца: строка 3 -
+  нарукавный, строка 5 - нарукавный, строка 7 - `svo`, строка 10 - `svo`,
+  строка 13 - `raz`, строка 16 - `svo`, строка 17 - `svo`;
+- пятая пачка одиночных шевронов записана:
+  `batch_15_needs_review_chevrons_05`, отчет
+  `data/runs/2026-06-23/internal_sku_owner_review_chevrons_batch_05/approved_rows.md`;
+- для `batch_15_needs_review_chevrons_05` поправки владельца: строка 1 -
+  `bpla`, строка 3 - `raz`, строка 4 - `raz`, строка 9 - `raz`, строка
+  16 - снята с продажи из-за нарушения авторских прав и записана как
+  `owner_rejected_internal_sku` без `approved_internal_sku`;
+- шестая пачка одиночных шевронов записана:
+  `batch_16_needs_review_chevrons_06`, отчет
+  `data/runs/2026-06-23/internal_sku_owner_review_chevrons_batch_06/approved_rows.md`;
+- для `batch_16_needs_review_chevrons_06` поправки владельца: строка 1 -
+  снята с продажи из-за нарушения авторских прав и записана как
+  `owner_rejected_internal_sku` без `approved_internal_sku`; строка 3 - `kp`;
+  строка 8 - `kp`; строки 14-18 - новая тематика `brig` ("бригады");
+- седьмая пачка одиночных шевронов записана:
+  `batch_17_needs_review_chevrons_07`, отчет
+  `data/runs/2026-06-23/internal_sku_owner_review_chevrons_batch_07/approved_rows.md`;
+- для `batch_17_needs_review_chevrons_07` владелец подтвердил остальные
+  строки как предложено, а строки 10 и 11 исправил на `kp` ("на кепку");
+  они записаны как `chev_kp_prikol_text0014` и
+  `chev_kp_prikol_text0015`;
+- восьмая пачка одиночных шевронов записана:
+  `batch_18_needs_review_chevrons_08`, отчет
+  `data/runs/2026-06-23/internal_sku_owner_review_chevrons_batch_08/approved_rows.md`;
+- для `batch_18_needs_review_chevrons_08` владелец подтвердил все строки как
+  предложено; это WB-позывные, записаны в формате `chev_pz_ng_textNNNN` без
+  тематического `raz`;
+- девятая пачка одиночных шевронов записана:
+  `batch_19_needs_review_chevrons_09`, отчет
+  `data/runs/2026-06-23/internal_sku_owner_review_chevrons_batch_09/approved_rows.md`;
+- для `batch_19_needs_review_chevrons_09` владелец подтвердил все строки как
+  предложено; это WB-позывные, записаны в формате `chev_pz_ng_textNNNN` без
+  тематического `raz`;
+- десятая пачка одиночных шевронов записана:
+  `batch_20_needs_review_chevrons_10`, отчет
+  `data/runs/2026-06-23/internal_sku_owner_review_chevrons_batch_10/approved_rows.md`;
+- для `batch_20_needs_review_chevrons_10` владелец подтвердил остальные
+  строки как предложено, а строки 2, 6 и 9 исправил: строка 2 -
+  `kp + prikol` (`chev_kp_prikol_pict0005`), строка 6 - `kp`
+  (`chev_kp_prikol_text0016`), строка 9 - `svo`
+  (`chev_nr_svo_pict0052`);
+- все строки `needs_owner_review` с `product_prefix=chev` закрыты; оставшиеся
+  `11` строк `needs_owner_review` имеют неизвестный тип товара и не относятся
+  к текущему ассортименту шевронов/нашивок/петлиц: подшивы, плащ-палатки,
+  панамы, бафф/снуд и балаклава;
+- оставшиеся `62` позиции non-current ассортимента записаны как
+  `owner_deferred_internal_sku` в batch
+  `batch_21_deferred_non_current_assortment`, отчет
+  `data/runs/2026-06-23/internal_sku_owner_review_deferred_non_current_assortment/deferred_rows.md`;
+- решение владельца: присвоение новых артикулов этим товарам отложить; на
+  Ozon/WB этот товар пока поставляться не будет. В отложенные вошли
+  `51` строка `unsupported_product_type` и `11` строк `needs_owner_review`
+  с неизвестным типом товара;
+- реальные seller SKU / `vendorCode` / `offer_id` в Ozon/WB пока не меняются,
+  фиксируется только внутренний `internal_sku`.
+
+Следующий практический шаг:
+
+1. Не возвращать deferred non-current ассортимент в текущий слой
+   `chev/nash/loop` без отдельного решения владельца.
+2. Если владелец позже решит поставлять эти товары на Ozon/WB, сначала
+   добавить новые типы/префиксы в `seller_sku_rules.md` и пересобрать
+   `plan-internal-skus`.
+3. Текущий практический следующий шаг по проекту: ревизия изменений ветки
+   `feature/catalog-mapping`, затем подключение общего каталога к отчетам/боту
+   или коммит/пуш по решению владельца.
+
 ### FU-2026-06-19-001 - Контроль Ozon Супербустинг
 
 Статус: `second_control_done_partial_pending_review`
@@ -94,6 +225,70 @@
    - после применения Ozon Elastic `ozon_elastic_apply_20260621T170628`
      выполнена отдельная проверка, что `Супербустинг` не затронут:
      `data/runs/2026-06-21/ozon_superboosting_verify_after_elastic_20260621T170803/ozon_superboosting_verify_after_elastic_report.md`;
+     результат `ok`, активных товаров `91/91`, расхождений по цене `0`.
+
+3. `2026-06-23` - дополнительный контроль Ozon Супербустинг при проверке
+   акций:
+
+   Статус: `done_partial_day_control_pending_review`.
+
+   Результат 2026-06-23 06:35 MSK:
+
+   - контрольный run:
+     `data/runs/2026-06-23/ozon_superboosting_check_20260623T0630/ozon_superboosting_check_report.md`;
+   - сводный отчет по акциям:
+     `data/runs/2026-06-23/actions_check_20260623T0630/actions_check_report_2026-06-23.md`;
+   - активных товаров в супербустинге: `91` из `91`;
+   - пропавших ожидаемых товаров: `0`;
+   - лишних активных товаров: `0`;
+   - расхождений по цене: `0`;
+   - за полный день 2026-06-22: `34` заказанные штуки,
+     `20653.00` руб. выручки;
+   - за неполный 2026-06-23 на момент проверки: `3` заказанные штуки,
+     `2074.00` руб. выручки;
+   - предварительная классификация по товарам: `keep` - `16`, `watch` - `7`,
+     `remove_candidate` - `68`;
+   - 2026-06-23 на момент проверки был неполным днем, поэтому снятие товаров
+     из `Супербустинга` выполнять только через отдельный dry-run/review и
+     явное подтверждение владельца.
+   - после применения Ozon Elastic `ozon_elastic_apply_actions_check_20260623`
+     выполнена отдельная проверка, что `Супербустинг` не затронут:
+     `data/runs/2026-06-23/ozon_superboosting_verify_after_elastic_20260623T064724/ozon_superboosting_verify_after_elastic_report.md`;
+     результат `ok`, активных товаров `91/91`, расхождений по цене `0`.
+
+4. `2026-06-24` - дополнительный контроль Ozon Супербустинг при проверке
+   акций:
+
+   Статус: `done_full_day_control_pending_review`.
+
+   Результат 2026-06-24 08:24 MSK:
+
+   - контрольный run:
+     `data/runs/2026-06-24/ozon_superboosting_check_20260624T0820/ozon_superboosting_check_report.md`;
+   - сводный отчет по акциям:
+     `data/runs/2026-06-24/actions_check_20260624T0825/actions_check_report_2026-06-24.md`;
+   - активных товаров в супербустинге: `91` из `91`;
+   - пропавших ожидаемых товаров: `0`;
+   - лишних активных товаров: `0`;
+   - расхождений по цене: `0`;
+   - за полный день 2026-06-23: `23` заказанные штуки,
+     `14987.00` руб. выручки;
+   - предварительная классификация по товарам: `keep` - `16`, `watch` - `3`,
+     `remove_candidate` - `72`;
+   - снятие товаров из `Супербустинга` выполнять только через отдельный
+     dry-run/review и явное подтверждение владельца.
+   - после применения Ozon Elastic `ozon_elastic_apply_actions_check_20260624`
+     выполнена отдельная проверка, что `Супербустинг` не затронут:
+     `data/runs/2026-06-24/ozon_superboosting_verify_after_elastic_20260624T0829/ozon_superboosting_verify_after_elastic_report.md`;
+     результат `ok`, активных товаров `91/91`, расхождений по цене `0`.
+   - после отдельного review и подтверждения владельца применен drift-пакет
+     Ozon Elastic `ozon_elastic_apply_drift_review_20260624`: применено `4`
+     строки activate/update, rejected `0`, verify `ok`; `2` новые fresh-строки
+     `pzmh0081` и `bplapict0024` не применялись, потому что не входили в
+     согласованный пакет.
+   - после второго apply выполнена отдельная проверка, что `Супербустинг` не
+     затронут:
+     `data/runs/2026-06-24/ozon_superboosting_verify_after_elastic_drift_20260624T0840/ozon_superboosting_verify_after_elastic_report.md`;
      результат `ok`, активных товаров `91/91`, расхождений по цене `0`.
 
 Критерий решения:

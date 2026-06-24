@@ -231,3 +231,33 @@ Apply выполняет:
 
 Повторный apply по `wb_actions_discount_plan_70-55-55_20260620T073712` не
 выполнять: idempotency marker сохранен в `data/approved/applied/`.
+
+## Штатный apply 2026-06-23
+
+Подтвержденный сценарий по схеме `70-55-55`:
+
+- approved dry-run:
+  `wb_actions_discount_plan_70-55-55_actions_check_20260623`;
+- apply:
+  `wb_actions_discount_apply_70-55-55_actions_check_20260623`;
+- fresh preflight: `status_preflight_20260623T064823`, статус `ok`;
+- fresh dry-run:
+  `wb_actions_discount_plan_70-55-55_20260623T064903`;
+- drift-check: `partial_apply_unchanged_rows`, `approved_payload_rows=77`,
+  `fresh_payload_rows=77`, `eligible_payload_rows=77`, skipped/drift `0`;
+- отправлено в WB: `77` строк;
+- WB upload ID: `168439528`;
+- verify: `ok`, history показал `77/77` successful goods;
+- отчет результата:
+  `data/runs/2026-06-23/wb_actions_discount_apply_70-55-55_actions_check_20260623/wb_actions_discount_apply_result.md`.
+
+Подтвержденные причины по payload:
+
+- превышение порога `70%`, привести к fallback `55%`: `8`;
+- участие в акции с меньшей требуемой скидкой: `69`;
+- отсутствие в активных акциях: `0` строк к изменению, потому что найденные
+  `74` товара уже имели fallback-скидку `55%`.
+
+Повторный apply по
+`wb_actions_discount_plan_70-55-55_actions_check_20260623` не выполнять:
+idempotency marker сохранен в `data/approved/applied/`.

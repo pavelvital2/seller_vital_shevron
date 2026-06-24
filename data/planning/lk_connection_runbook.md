@@ -16,6 +16,22 @@ OZON_EXPECTED_STORE=Vital Shevron
 .sessions/ozon/ozon_seller_storage_state.json
 ```
 
+API credentials разрешено читать только из переменных текущего контура:
+
+```text
+OZON_SELLER_CLIENT_ID
+OZON_SELLER_API_KEY
+OZON_PERFORMANCE_CLIENT_ID
+OZON_PERFORMANCE_CLIENT_SECRET
+VITAL_SHEVRON_OZON_SELLER_CREDENTIALS_FILE
+VITAL_SHEVRON_OZON_PERFORMANCE_CREDENTIALS_FILE
+SELLER_OZON_SELLER_CREDENTIALS_FILE
+SELLER_OZON_PERFORMANCE_CREDENTIALS_FILE
+```
+
+`TAKTERRA_OZON_*` нельзя использовать как fallback: это может смешать API-
+контуры разных магазинов.
+
 Восстановление:
 
 ```bash
@@ -60,6 +76,18 @@ WB_EXPECTED_SELLER=ИП Витальская И. П.
 .sessions/wb/browser-profile
 .sessions/wb/wb_storage_state.json
 ```
+
+WB API token разрешено читать только из:
+
+```text
+WB_API_TOKEN
+VITAL_SHEVRON_WB_TOKEN_FILE
+SELLER_WB_TOKEN_FILE
+```
+
+`TAKTERRA_WB_TOKEN_FILE` нельзя использовать как fallback: при наличии чужой
+переменной окружения проект Vital Shevron должен вернуть отсутствие токена, а
+не подключиться к другому магазину.
 
 Если `WB_EXPECTED_SELLER` пустой, keepalive проверяет вход в seller/cmp, но не
 подтверждает конкретного продавца. После первого входа marker нужно заполнить.

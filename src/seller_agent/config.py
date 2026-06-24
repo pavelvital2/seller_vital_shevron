@@ -103,7 +103,6 @@ def load_ozon_seller_credentials() -> OzonSellerCredentials | None:
         "OZON_SELLER_API_KEY",
         "VITAL_SHEVRON_OZON_SELLER_CREDENTIALS_FILE",
         "SELLER_OZON_SELLER_CREDENTIALS_FILE",
-        "TAKTERRA_OZON_SELLER_CREDENTIALS_FILE",
     )
 
     if not client_id or not api_key:
@@ -118,7 +117,6 @@ def load_ozon_performance_credentials() -> OzonPerformanceCredentials | None:
         "OZON_PERFORMANCE_CLIENT_SECRET",
         "VITAL_SHEVRON_OZON_PERFORMANCE_CREDENTIALS_FILE",
         "SELLER_OZON_PERFORMANCE_CREDENTIALS_FILE",
-        "TAKTERRA_OZON_PERFORMANCE_CREDENTIALS_FILE",
     )
 
     if not client_id or not client_secret:
@@ -135,7 +133,6 @@ def load_wb_credentials() -> WbCredentials | None:
         "WB_API_TOKEN",
         "VITAL_SHEVRON_WB_TOKEN_FILE",
         "SELLER_WB_TOKEN_FILE",
-        "TAKTERRA_WB_TOKEN_FILE",
     )
     if not token:
         return None

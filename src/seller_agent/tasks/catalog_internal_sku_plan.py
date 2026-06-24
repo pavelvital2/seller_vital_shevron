@@ -55,8 +55,8 @@ THEME_PATTERNS = (
     ("fan", ("фанат",)),
     ("prikol", ("прикол", "рыболовн", "войска тыла")),
     ("form", ("security", "секьюрити", "staff", "стафф", "охрана", "кадет", "контролер")),
-    ("svo", ("сво",)),
     ("voisk", ("войск", "морская пехота", "вдв", "сухопутн")),
+    ("svo", ("сво",)),
 )
 UNSUPPORTED_PRODUCT_MARKERS = (
     "головной убор",
@@ -222,10 +222,12 @@ def infer_sku_parts(row: dict[str, str]) -> SkuParts:
         structure = "oborg"
         reasons.append("structure_oborg_from_title")
 
+    is_callsign = "позывн" in title
+
     theme = _first_match(title, THEME_PATTERNS)
     if theme:
         reasons.append(f"theme_{theme}_from_title")
-    elif product_prefix in SUPPORTED_PRODUCT_PREFIXES and not structure:
+    elif product_prefix in SUPPORTED_PRODUCT_PREFIXES and not structure and not is_callsign:
         theme = "raz"
         reasons.append("theme_raz_fallback")
 
@@ -234,13 +236,16 @@ def infer_sku_parts(row: dict[str, str]) -> SkuParts:
     if not purpose and product_prefix != "loop" and pack_qty <= 2:
         notes.append("purpose_unknown")
 
-    if "позывн" in title:
+    if is_callsign:
         if pack_qty > 1:
             purpose = "pz"
         elif purpose:
             purpose = f"pz_{purpose}"
         else:
             purpose = "pz"
+        if theme:
+            theme = ""
+            reasons.append("theme_skipped_for_callsign")
         reasons.append("purpose_pz_from_title")
 
     if product_prefix == "loop":

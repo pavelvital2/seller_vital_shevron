@@ -84,6 +84,37 @@ def test_build_internal_sku_plan_marks_unsupported_product_type() -> None:
     assert proposals[0].proposed_internal_sku == ""
 
 
+def test_callsign_does_not_get_raz_theme() -> None:
+    proposals, summary = build_internal_sku_plan(
+        products=[
+            {
+                "internal_product_id": "ozon:pzmh0008",
+                "mapping_status": "ozon_only",
+                "product_name": 'Шеврон "Позывной Волк", нагрудный, мох',
+                "ozon_offer_id": "pzmh0008",
+                "ozon_sku": "2408799099",
+            }
+        ]
+    )
+
+    assert summary["auto_candidate_rows"] == 1
+    assert proposals[0].theme_prefix == ""
+    assert proposals[0].purpose_prefix == "pz_ng"
+    assert proposals[0].proposed_internal_sku == "chev_pz_ng_text0001"
+
+
+def test_vdv_theme_has_priority_over_svo() -> None:
+    parts = infer_sku_parts(
+        {
+            "product_name": "Шеврон СВО ВДВ разведка, на кепку 80х50 на липучке",
+            "mapping_status": "ozon_only",
+        }
+    )
+
+    assert parts.theme_prefix == "voisk"
+    assert parts.purpose_prefix == "kp"
+
+
 def test_task_registry_contains_internal_sku_plan() -> None:
     task = get_task_definition("plan-internal-skus")
 

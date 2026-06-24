@@ -28,7 +28,7 @@ from seller_agent.tasks.reviews_questions import (
 
 def test_missing_wb_token_file_returns_none(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.delenv("WB_API_TOKEN", raising=False)
-    monkeypatch.setenv("TAKTERRA_WB_TOKEN_FILE", str(tmp_path / "missing-token.txt"))
+    monkeypatch.setenv("VITAL_SHEVRON_WB_TOKEN_FILE", str(tmp_path / "missing-token.txt"))
 
     assert load_wb_credentials() is None
 
@@ -38,8 +38,34 @@ def test_missing_ozon_token_files_return_none(monkeypatch, tmp_path: Path) -> No
     monkeypatch.delenv("OZON_SELLER_API_KEY", raising=False)
     monkeypatch.delenv("OZON_PERFORMANCE_CLIENT_ID", raising=False)
     monkeypatch.delenv("OZON_PERFORMANCE_CLIENT_SECRET", raising=False)
-    monkeypatch.setenv("TAKTERRA_OZON_SELLER_CREDENTIALS_FILE", str(tmp_path / "missing-ozon-seller.txt"))
-    monkeypatch.setenv("TAKTERRA_OZON_PERFORMANCE_CREDENTIALS_FILE", str(tmp_path / "missing-ozon-performance.txt"))
+    monkeypatch.setenv(
+        "VITAL_SHEVRON_OZON_SELLER_CREDENTIALS_FILE",
+        str(tmp_path / "missing-ozon-seller.txt"),
+    )
+    monkeypatch.setenv(
+        "VITAL_SHEVRON_OZON_PERFORMANCE_CREDENTIALS_FILE",
+        str(tmp_path / "missing-ozon-performance.txt"),
+    )
+
+    assert load_ozon_seller_credentials() is None
+    assert load_ozon_performance_credentials() is None
+
+
+def test_takterra_ozon_token_files_are_not_used_as_fallback(monkeypatch, tmp_path: Path) -> None:
+    seller_file = tmp_path / "ozon-seller.txt"
+    performance_file = tmp_path / "ozon-performance.txt"
+    seller_file.write_text("wrong-client\nwrong-api-key\n", encoding="utf-8")
+    performance_file.write_text("wrong-client\nwrong-secret\n", encoding="utf-8")
+    monkeypatch.delenv("OZON_SELLER_CLIENT_ID", raising=False)
+    monkeypatch.delenv("OZON_SELLER_API_KEY", raising=False)
+    monkeypatch.delenv("OZON_PERFORMANCE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("OZON_PERFORMANCE_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("VITAL_SHEVRON_OZON_SELLER_CREDENTIALS_FILE", raising=False)
+    monkeypatch.delenv("VITAL_SHEVRON_OZON_PERFORMANCE_CREDENTIALS_FILE", raising=False)
+    monkeypatch.delenv("SELLER_OZON_SELLER_CREDENTIALS_FILE", raising=False)
+    monkeypatch.delenv("SELLER_OZON_PERFORMANCE_CREDENTIALS_FILE", raising=False)
+    monkeypatch.setenv("TAKTERRA_OZON_SELLER_CREDENTIALS_FILE", str(seller_file))
+    monkeypatch.setenv("TAKTERRA_OZON_PERFORMANCE_CREDENTIALS_FILE", str(performance_file))
 
     assert load_ozon_seller_credentials() is None
     assert load_ozon_performance_credentials() is None
@@ -102,12 +128,23 @@ def test_wb_token_file_reads_first_line(monkeypatch, tmp_path: Path) -> None:
     token_file = tmp_path / "wb-token.txt"
     token_file.write_text("secret-token\n", encoding="utf-8")
     monkeypatch.delenv("WB_API_TOKEN", raising=False)
-    monkeypatch.setenv("TAKTERRA_WB_TOKEN_FILE", str(token_file))
+    monkeypatch.setenv("VITAL_SHEVRON_WB_TOKEN_FILE", str(token_file))
 
     creds = load_wb_credentials()
 
     assert creds is not None
     assert creds.token == "secret-token"
+
+
+def test_takterra_token_file_is_not_used_as_fallback(monkeypatch, tmp_path: Path) -> None:
+    token_file = tmp_path / "wb-token.txt"
+    token_file.write_text("wrong-contour-token\n", encoding="utf-8")
+    monkeypatch.delenv("WB_API_TOKEN", raising=False)
+    monkeypatch.delenv("VITAL_SHEVRON_WB_TOKEN_FILE", raising=False)
+    monkeypatch.delenv("SELLER_WB_TOKEN_FILE", raising=False)
+    monkeypatch.setenv("TAKTERRA_WB_TOKEN_FILE", str(token_file))
+
+    assert load_wb_credentials() is None
 
 
 def test_review_reply_uses_feminine_product_phrase() -> None:
