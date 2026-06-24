@@ -19,6 +19,7 @@ from seller_agent.bot.telegram_runner import (
 from seller_agent.config import load_credentials
 from seller_agent.core.run_manifest import find_run, latest_run, list_runs
 from seller_agent.tasks.approvals import run_approvals_close, run_approvals_status
+from seller_agent.tasks.card_content_audit_backlog import run_card_content_audit_backlog
 from seller_agent.tasks.card_content_snapshot import run_card_content_snapshot
 from seller_agent.tasks.catalog_fetch import run_catalog_fetch
 from seller_agent.tasks.catalog_content_master import run_catalog_content_master
@@ -431,6 +432,36 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="Optional product limit for smoke checks.",
+    )
+
+    card_backlog = subparsers.add_parser(
+        "card-content-audit-backlog",
+        help="Build read-only backlog for card content and SEO audit from content master.",
+    )
+    card_backlog.add_argument(
+        "--data-dir",
+        default="data",
+        help="Project data directory.",
+    )
+    card_backlog.add_argument(
+        "--run-id",
+        default=None,
+        help="Optional stable run id.",
+    )
+    card_backlog.add_argument(
+        "--content-master-path",
+        default=None,
+        help="Content master CSV. Defaults to data/catalog/content/content_master.csv.",
+    )
+    card_backlog.add_argument(
+        "--output-dir",
+        default=None,
+        help="Backlog output directory. Defaults to data/catalog/content.",
+    )
+    card_backlog.add_argument(
+        "--include-low",
+        action="store_true",
+        help="Include low/no-issue rows as ready_for_visual_seo_audit.",
     )
 
     pricing_status = subparsers.add_parser(
@@ -1257,6 +1288,17 @@ def main(argv: list[str] | None = None) -> int:
             run_id=args.run_id,
             marketplace=args.marketplace,
             limit_products=args.limit_products,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
+
+    if args.command == "card-content-audit-backlog":
+        result = run_card_content_audit_backlog(
+            data_dir=Path(args.data_dir),
+            content_master_path=Path(args.content_master_path) if args.content_master_path else None,
+            output_dir=Path(args.output_dir) if args.output_dir else None,
+            run_id=args.run_id,
+            include_low=args.include_low,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["overall_status"] in {"ok", "warning"} else 2

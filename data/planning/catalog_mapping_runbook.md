@@ -26,6 +26,8 @@ data/catalog/content/content_audit.json
 data/catalog/content/content_audit.csv
 data/catalog/content/card_content_index.json
 data/catalog/content/card_content_index.csv
+data/catalog/content/card_content_audit_backlog.json
+data/catalog/content/card_content_audit_backlog.csv
 ```
 
 Файлы mapping и unified plan считаются рабочими бизнес-данными и по умолчанию
@@ -113,6 +115,9 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   -m seller_agent.cli build-content-master
+
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli card-content-audit-backlog
 ```
 
 Входы по умолчанию:
@@ -138,6 +143,8 @@ data/catalog/content/content_master.json
 data/catalog/content/content_audit.csv
 data/catalog/content/content_audit.json
 data/runs/<date>/<run_id>/catalog_content_master_report.md
+data/catalog/content/card_content_audit_backlog.csv
+data/catalog/content/card_content_audit_backlog.json
 ```
 
 `fetch-card-content` дополнительно пишет:
@@ -177,6 +184,8 @@ wb_only_rows: 162
 both_marketplaces_rows: 269
 title_mismatch_rows: 205
 missing_cost_rows: 441
+full_snapshot_found_rows: 710
+photo_count_lt5_rows: 120
 audit_rows: 1087
 ```
 
@@ -196,6 +205,21 @@ ozon_attributes: 3
 ozon_descriptions: 3
 wb_cards: 431
 errors: none
+```
+
+Smoke-проверка `card-content-audit-backlog` 2026-06-24:
+
+```text
+input_rows: 710
+backlog_rows: 688
+high_priority_rows: 68
+normal_priority_rows: 608
+low_priority_rows: 12
+title_mismatch_rows: 205
+marketplace_only_rows: 441
+photo_lt5_rows: 120
+missing_cost_rows: 441
+ozon_hashtags_missing_rows: 189
 ```
 
 Минимальные поля общего каталога:

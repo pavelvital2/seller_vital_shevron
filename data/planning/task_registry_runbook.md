@@ -95,6 +95,9 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   raw runtime snapshots и производный `card_content_index.csv/json` для
   content master и будущих SEO-аудитов. Это не визуальный фото-аудит и не
   write-операция.
+- `card-content-audit-backlog` - строит read-only очередь карточного аудита
+  из `content_master`: причины, score, high/normal/low priority, фокус аудита
+  и следующий шаг. Это не финальная рекомендация по карточке и не apply.
 - `pricing-status` - строит read-only статус цен и готовности маржинального
   анализа по unified catalog и локальным или fresh API Ozon/WB price snapshots.
   Опция `--refresh-api` обращается только к read-only price endpoints и
@@ -119,6 +122,7 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 - `plan-internal-skus`;
 - `build-content-master`;
 - `fetch-card-content`;
+- `card-content-audit-backlog`;
 - `status-preflight`;
 - `daily-morning-report`;
 - `sessions`;

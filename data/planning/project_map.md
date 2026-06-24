@@ -76,6 +76,10 @@
   фото и хештеги/теги; команда `fetch-card-content` пишет
   `data/catalog/content/card_content_index.csv/json`, generated snapshots и
   raw runtime artifacts в `data/runs/<date>/<run_id>/raw/`.
+- `src/seller_agent/tasks/card_content_audit_backlog.py` - read-only очередь
+  карточного аудита по `content_master`: приоритет, причины, фокус проверки и
+  следующий шаг; команда `card-content-audit-backlog` пишет
+  `data/catalog/content/card_content_audit_backlog.csv/json` и `RunManifest`.
 - `src/seller_agent/tasks/pricing_status.py` - read-only статус цен и
   готовности маржинального анализа: соединяет unified catalog с локальными или
   fresh API Ozon/WB price snapshots, Ozon Elastic dry-run и WB actions dry-run,
@@ -189,7 +193,8 @@ Ozon CDP port по умолчанию: `9544`.
 - `data/catalog/content/` - generated read-only content master и content audit
   для будущей унификации названий, описаний, характеристик, фото и SEO;
   содержит `content_master.*`, `content_audit.*`, `card_content_index.*` и
-  generated card snapshots; не коммитить, кроме `README.md`.
+  `card_content_audit_backlog.*`, generated card snapshots; не коммитить,
+  кроме `README.md`.
 - `data/runs/` - runtime reports, не коммитить.
 - `data/runs/index.jsonl` - runtime-индекс `RunManifest`, не коммитить.
 - `data/pending/` - pending packages перед approval, не коммитить.

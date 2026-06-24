@@ -10,6 +10,8 @@ Generated-файлы в этой папке не коммитятся:
 - `card_content_index.csv/json` - производный индекс snapshot карточек:
   наличие описания, количество фото, количество характеристик, хештеги/теги и
   статус raw snapshot.
+- `card_content_audit_backlog.csv/json` - read-only очередь карточного
+  аудита: приоритет, причины, фокус проверки и следующий шаг.
 - `ozon_card_content.json`, `wb_card_content.json` - generated read-only
   snapshots карточного контента.
 
@@ -21,6 +23,9 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   -m seller_agent.cli build-content-master
+
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli card-content-audit-backlog
 ```
 
 Этот слой не меняет карточки Ozon/WB, фото, цены, остатки или артикулы

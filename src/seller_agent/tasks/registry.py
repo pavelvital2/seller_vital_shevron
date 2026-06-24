@@ -240,6 +240,20 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_mapping=True,
     ),
     RegisteredTask(
+        name="card-content-audit-backlog",
+        command="card-content-audit-backlog",
+        title="Card content audit backlog",
+        description=(
+            "Build read-only product backlog for visual card audit, SEO/content "
+            "unification and marketplace transfer review from content master."
+        ),
+        mode="read_only",
+        risk="low",
+        marketplaces=("ozon", "wb"),
+        runbook_path="data/planning/product_card_work_runbook.md",
+        requires_mapping=True,
+    ),
+    RegisteredTask(
         name="pricing-status",
         command="pricing-status",
         title="Pricing status",

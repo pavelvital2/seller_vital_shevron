@@ -29,6 +29,9 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   -m seller_agent.cli build-content-master
+
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli card-content-audit-backlog
 ```
 
 Команды строят:
@@ -37,6 +40,7 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 data/catalog/content/card_content_index.csv
 data/catalog/content/content_master.csv
 data/catalog/content/content_audit.csv
+data/catalog/content/card_content_audit_backlog.csv
 data/runs/<date>/<run_id>/catalog_content_master_report.md
 ```
 
@@ -54,11 +58,27 @@ Content master нужен как очередь и контрольный сло
 - `transfer_direction` показывает кандидатов на перенос на вторую площадку;
 - `content_review_priority` и `next_content_step` помогают выбрать следующий
   товар для аудита.
+- `card_content_audit_backlog.csv` ранжирует карточки по причинам:
+  `title_mismatch`, `marketplace_only`, `photo_lt5`, `missing_cost`,
+  `ozon_hashtags_missing`, отсутствующее описание/характеристики и пропуски
+  snapshot.
 
 Ограничение: `fetch-card-content` считает фото по данным API, но не смотрит
 изображения глазами. Content master не заменяет покарточный аудит. Перед
 рекомендациями по карточке агент все равно обязан открыть все фото, описать
 их и сделать коллаж по правилам ниже.
+
+Smoke 2026-06-24 после полного snapshot:
+
+```text
+content_master_rows: 710
+card_content_rows: 979
+full_snapshot_found_rows: 710
+photo_count_lt5_rows: 120
+card_content_audit_backlog_rows: 688
+high_priority_rows: 68
+normal_priority_rows: 608
+```
 
 ## Обязательный порядок перед рекомендациями
 
