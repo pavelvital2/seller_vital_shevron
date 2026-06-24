@@ -97,7 +97,9 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   write-операция.
 - `card-content-audit-backlog` - строит read-only очередь карточного аудита
   из `content_master`: причины, score, high/normal/low priority, фокус аудита
-  и следующий шаг. Это не финальная рекомендация по карточке и не apply.
+  и следующий шаг. Optional `--sales-signals-csv`, `--stock-signals-csv`,
+  `--parser-signals-csv` добавляют продажи, остатки и parser-видимость для
+  бизнес-приоритизации. Это не финальная рекомендация по карточке и не apply.
 - `pricing-status` - строит read-only статус цен и готовности маржинального
   анализа по unified catalog и локальным или fresh API Ozon/WB price snapshots.
   Опция `--refresh-api` обращается только к read-only price endpoints и

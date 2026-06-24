@@ -245,7 +245,8 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         title="Card content audit backlog",
         description=(
             "Build read-only product backlog for visual card audit, SEO/content "
-            "unification and marketplace transfer review from content master."
+            "unification and marketplace transfer review from content master; "
+            "optionally enrich priorities with sales, stock and parser visibility CSV signals."
         ),
         mode="read_only",
         risk="low",

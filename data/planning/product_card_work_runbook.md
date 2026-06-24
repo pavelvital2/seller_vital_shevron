@@ -34,6 +34,42 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   -m seller_agent.cli card-content-audit-backlog
 ```
 
+Для более правильной очередности карточек backlog можно обогащать
+read-only сигналами продаж, остатков и parser-видимости:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli card-content-audit-backlog \
+  --sales-signals-csv data/path/to/sales_signals.csv \
+  --stock-signals-csv data/path/to/stock_signals.csv \
+  --parser-signals-csv data/path/to/parser_visibility.csv
+```
+
+Каждый аргумент можно передавать несколько раз. Команда распознает ключи
+товара по `internal_product_id`, `internal_sku`, `offer_id`/`ozon_offer_id`,
+`product_id`/`api_product_id`/`ozon_product_id`, `sku`/`ozon_sku`,
+`vendorCode`/`wb_vendor_code`, `nmID`/`wb_nm_id`.
+
+Поддерживаемые сигналы:
+
+- продажи: `sales_units_30d`, `units_30d`, `ordered_units`, `orders`,
+  `sales`, `buyouts`, `quantity_sold`;
+- выручка: `sales_revenue_30d`, `revenue_30d`, `revenue`, `orders_money`,
+  `sales_amount`;
+- остатки: `stock_total`, `fbo_present`, `fbo_stock_at_apply`, `present`,
+  `quantity`, `stock`, `available_stock`, `available_stock_count`;
+- parser-видимость: `parser_best_position`, `best_position`, `position`,
+  `min_position`, `queries_found_count`, `visible_queries`, `top30_count`,
+  `max_query_popularity_7d`.
+
+Сигналы добавляют поля `sales_units_30d`, `sales_revenue_30d`,
+`stock_total`, `ozon_stock_total`, `wb_stock_total`, `parser_best_position`,
+`parser_visible_queries`, `parser_top30_queries`,
+`parser_max_query_popularity_7d`, `business_priority` и `business_reasons`.
+Они нужны только для ранжирования: товары с продажами, остатком и видимостью
+поднимаются выше, товары с нулевым остатком помечаются как
+`blocked_by_stock`.
+
 Команды строят:
 
 ```text
@@ -61,12 +97,19 @@ Content master нужен как очередь и контрольный сло
 - `card_content_audit_backlog.csv` ранжирует карточки по причинам:
   `title_mismatch`, `marketplace_only`, `photo_lt5`, `missing_cost`,
   `ozon_hashtags_missing`, отсутствующее описание/характеристики и пропуски
-  snapshot.
+  snapshot. При наличии optional signal CSV также учитываются
+  `sales_positive`, `stock_positive`, `stock_zero`, `parser_top30_visible`,
+  `parser_top100_visible`, `parser_visible`.
 
 Ограничение: `fetch-card-content` считает фото по данным API, но не смотрит
 изображения глазами. Content master не заменяет покарточный аудит. Перед
 рекомендациями по карточке агент все равно обязан открыть все фото, описать
 их и сделать коллаж по правилам ниже.
+
+Ограничение по сигналам: optional CSV не являются самостоятельным источником
+истины по продажам или остаткам. Перед финальным решением по карточке,
+переносу товара, цене или рекламе нужно проверять актуальные данные через
+профильный отчет/API/ЛК.
 
 Smoke 2026-06-24 после полного snapshot:
 
@@ -79,6 +122,21 @@ card_content_audit_backlog_rows: 688
 high_priority_rows: 68
 normal_priority_rows: 608
 ```
+
+Smoke 2026-06-24 после обогащения Ozon parser-сигналами из
+`our_products_visibility_price.csv`:
+
+```text
+backlog_rows: 704
+high_priority_rows: 285
+normal_priority_rows: 398
+stock_signal_rows: 335
+parser_signal_rows: 335
+business_priority_now_rows: 13
+```
+
+Продажи в этом smoke не подмешивались: полного нормализованного файла
+`sales-by-product` за 30 дней на момент проверки не было подтверждено.
 
 ## Обязательный порядок перед рекомендациями
 

@@ -78,7 +78,8 @@
   raw runtime artifacts в `data/runs/<date>/<run_id>/raw/`.
 - `src/seller_agent/tasks/card_content_audit_backlog.py` - read-only очередь
   карточного аудита по `content_master`: приоритет, причины, фокус проверки и
-  следующий шаг; команда `card-content-audit-backlog` пишет
+  следующий шаг; optional CSV-сигналы продаж, остатков и parser-видимости
+  повышают точность приоритета; команда `card-content-audit-backlog` пишет
   `data/catalog/content/card_content_audit_backlog.csv/json` и `RunManifest`.
 - `src/seller_agent/tasks/pricing_status.py` - read-only статус цен и
   готовности маржинального анализа: соединяет unified catalog с локальными или

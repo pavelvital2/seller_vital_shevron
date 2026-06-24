@@ -463,6 +463,24 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Include low/no-issue rows as ready_for_visual_seo_audit.",
     )
+    card_backlog.add_argument(
+        "--sales-signals-csv",
+        action="append",
+        default=[],
+        help="Optional normalized sales signal CSV. Can be passed multiple times.",
+    )
+    card_backlog.add_argument(
+        "--stock-signals-csv",
+        action="append",
+        default=[],
+        help="Optional normalized stock signal CSV. Can be passed multiple times.",
+    )
+    card_backlog.add_argument(
+        "--parser-signals-csv",
+        action="append",
+        default=[],
+        help="Optional parser visibility signal CSV. Can be passed multiple times.",
+    )
 
     pricing_status = subparsers.add_parser(
         "pricing-status",
@@ -1299,6 +1317,9 @@ def main(argv: list[str] | None = None) -> int:
             output_dir=Path(args.output_dir) if args.output_dir else None,
             run_id=args.run_id,
             include_low=args.include_low,
+            sales_signals_paths=[Path(path) for path in args.sales_signals_csv],
+            stock_signals_paths=[Path(path) for path in args.stock_signals_csv],
+            parser_signals_paths=[Path(path) for path in args.parser_signals_csv],
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["overall_status"] in {"ok", "warning"} else 2
