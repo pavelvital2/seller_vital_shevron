@@ -11,7 +11,8 @@ task-runner. Он нужен, чтобы бот и будущие timers зап�
 Первый MVP поддерживает только read-only задачи:
 
 - `daily-morning-report`;
-- `pricing-status`;
+- `pricing-status` включая optional input `refresh_api=true`, если runner
+  получил credentials;
 - `status-preflight`.
 
 Write-операции через `WorkflowRunner` не включены.

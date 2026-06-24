@@ -470,13 +470,64 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 Назначение: собрать read-only статус цен и готовности маржинального анализа по
 Ozon/WB на базе `data/catalog/unified/products.csv` и локальных price snapshots.
 
+С 2026-06-24 команда умеет опционально брать свежие read-only snapshots через
+официальные API:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli pricing-status --refresh-api
+```
+
+Ограничить площадку:
+
+```bash
+--refresh-marketplace ozon|wb|all
+```
+
+Используемые API-источники:
+
+- Ozon Seller API: `POST /v5/product/info/prices`;
+- WB Discounts/Prices API: `GET /api/v2/list/goods/filter`.
+
+Дополнительные read-only источники акционных цен:
+
+- Ozon Elastic dry-run: `ozon_elastic_dry_run.csv`;
+- WB actions discount dry-run: `wb-discount-calculation-active-actions-*.csv`
+  с разделителем `;`.
+
+Если пути не переданы явно, `pricing-status` пытается найти последние файлы в
+`data/runs/`:
+
+```bash
+--ozon-actions-csv <path>
+--wb-actions-csv <path>
+```
+
+При `--refresh-api` команда сохраняет свежие snapshots в runtime run-dir:
+
+```text
+data/runs/<date>/pricing_status_<timestamp>/raw/ozon_product_info_prices_raw.json
+data/runs/<date>/pricing_status_<timestamp>/raw/ozon_product_info_prices.json
+data/runs/<date>/pricing_status_<timestamp>/raw/wb_goods_prices.json
+```
+
+`ozon_product_info_prices.json` - нормализованная копия Ozon-ответа: вложенный
+объект `price` разворачивается в плоские поля `price`, `old_price`,
+`min_price`, `marketing_seller_price`, `net_price`, а тарифные FBO-поля
+`sales_percent_fbo`, `fbo_deliv_to_customer_amount`,
+`fbo_return_flow_amount`, `acquiring` сохраняются для следующего слоя
+маржинальной модели.
+
 Что показывает:
 
 - внутренние `internal_product_id`/`internal_sku` и native marketplace IDs;
 - себестоимость из unified catalog: `cost_total`, `pack_qty`;
 - Ozon `price`, `old_price`, `min_price`, `marketing_seller_price`, если
   найден локальный snapshot;
+- Ozon action price из Elastic dry-run: `calculated_action_price` или
+  `current_action_price`;
 - WB базовую цену, скидку и скидочную цену, если найден локальный snapshot;
+- WB action price из action discount dry-run: `Финальная цена`;
 - целевые внутренние net-пороги по сценариям владельца:
   `profit_85_ads_20` и `profit_60_ads_25`, умноженные на `pack_qty`;
 - warning-коды: нет себестоимости, нет price snapshot, пустая/неподтвержденная
@@ -522,6 +573,18 @@ data/runs/<date>/pricing_status_<timestamp>/pricing_status_report.md
 Telegram-вывод отчетов по ценам, маржинальности, марже и расходам строить по
 общему стандарту `data/planning/chat_report_templates.md`.
 
-Следующий технический шаг: подключить к `pricing-status` актуальные API-снапшоты
-Ozon `/v5/product/info/prices`, WB goods/prices API, цены по акциям и
-финансовую модель FBO/FBW по фактическим расходам.
+Smoke-проверка 2026-06-24:
+
+```text
+run_id: pricing_status_api_actions_smoke_20260624
+Ozon rows: 548
+WB rows: 432
+Ozon action rows: 504
+WB action rows: 431
+overall_status: warning
+errors: none
+```
+
+Следующий технический шаг: подключить к `pricing-status` Ozon Superboosting как
+отдельный `STOCK_DISCOUNT` источник, затем добавить финансовую модель FBO/FBW
+по фактическим расходам.

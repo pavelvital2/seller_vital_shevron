@@ -86,8 +86,11 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 - `plan-internal-skus` - готовит owner-review план внутренних артикулов для
   `ozon_only`/`wb_only` товаров.
 - `pricing-status` - строит read-only статус цен и готовности маржинального
-  анализа по unified catalog и локальным Ozon/WB price snapshots. Требует
-  mapping как слой нормализации, но не меняет цены и не обращается к write API.
+  анализа по unified catalog и локальным или fresh API Ozon/WB price snapshots.
+  Опция `--refresh-api` обращается только к read-only price endpoints и
+  сохраняет snapshots в `data/runs/<date>/<run_id>/raw/`. Требует mapping как
+  слой нормализации, дополнительно читает Ozon/WB action dry-run CSV для
+  action-price, но не меняет цены и не обращается к write API.
 - `requires_mapping: true` означает, что задача не должна переходить к
   cross-marketplace write без подтвержденного mapping.
 - `requires_lk: true` означает, что перед запуском нужно проверить профильную

@@ -121,6 +121,39 @@ class OzonSellerAdapter:
 
         return items
 
+    def fetch_product_info_prices(
+        self,
+        *,
+        visibility: str = "ALL",
+        limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        cursor = ""
+        page_limit = min(max(int(limit), 1), 1000)
+
+        while True:
+            payload: dict[str, Any] = {
+                "filter": {"visibility": visibility},
+                "limit": page_limit,
+            }
+            if cursor:
+                payload["cursor"] = cursor
+            else:
+                payload["last_id"] = ""
+
+            data = self.post("/v5/product/info/prices", payload)
+            page_items = data.get("items") or []
+            if not isinstance(page_items, list):
+                page_items = []
+
+            items.extend(row for row in page_items if isinstance(row, dict))
+            next_cursor = data.get("cursor") or ""
+            if not page_items or not next_cursor or next_cursor == cursor:
+                break
+            cursor = next_cursor
+
+        return items
+
     def fetch_product_stocks(
         self,
         product_ids: list[str],

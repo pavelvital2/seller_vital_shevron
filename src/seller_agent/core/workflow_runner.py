@@ -221,12 +221,17 @@ def _pricing_status_handler(
     inputs: dict[str, Any],
 ) -> dict[str, Any]:
     return run_pricing_status(
+        credentials=credentials,
         data_dir=data_dir,
         products_path=_optional_path(inputs.get("products_path")),
         ozon_prices_path=_optional_path(inputs.get("ozon_prices_path")),
         wb_prices_path=_optional_path(inputs.get("wb_prices_path")),
+        ozon_actions_path=_optional_path(inputs.get("ozon_actions_path")),
+        wb_actions_path=_optional_path(inputs.get("wb_actions_path")),
         output_dir=_optional_path(inputs.get("output_dir")),
         run_id=_optional_str(inputs.get("run_id")),
+        refresh_api=_bool_input(inputs, "refresh_api", False),
+        refresh_marketplace=_optional_str(inputs.get("refresh_marketplace")) or "all",
     )
 
 

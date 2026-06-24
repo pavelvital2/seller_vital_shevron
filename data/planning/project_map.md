@@ -66,10 +66,14 @@
   unified catalog; команда `plan-internal-skus` формирует review CSV/JSON,
   не меняет Ozon `offer_id` и WB `vendorCode`.
 - `src/seller_agent/tasks/pricing_status.py` - read-only статус цен и
-  готовности маржинального анализа: соединяет unified catalog с локальными
-  Ozon/WB price snapshots, выводит себестоимость, доступные цены, целевые
-  net-пороги и warning-коды; команда `pricing-status` пишет runtime artifacts
-  в `data/pricing/` и `data/runs/`.
+  готовности маржинального анализа: соединяет unified catalog с локальными или
+  fresh API Ozon/WB price snapshots, Ozon Elastic dry-run и WB actions dry-run,
+  выводит себестоимость, доступные цены, action-price, целевые net-пороги и
+  warning-коды; команда `pricing-status` пишет runtime artifacts в
+  `data/pricing/` и `data/runs/`, а `--refresh-api` сохраняет свежие snapshots
+  в `data/runs/<date>/<run_id>/raw/`.
+- `src/seller_agent/marketplaces/wb/prices_adapter.py` - read-only adapter
+  WB Discounts/Prices API для `GET /api/v2/list/goods/filter`.
 - `src/seller_agent/bot/dispatcher.py` - thin layer над `TaskRegistry` для
   будущего Telegram-бота.
 - `src/seller_agent/bot/commands.py` - read-only Telegram MVP command layer:

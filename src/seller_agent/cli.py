@@ -379,9 +379,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional WB goods/prices JSON snapshot.",
     )
     pricing_status.add_argument(
+        "--ozon-actions-csv",
+        default=None,
+        help="Optional Ozon Elastic action price CSV, for example ozon_elastic_dry_run.csv.",
+    )
+    pricing_status.add_argument(
+        "--wb-actions-csv",
+        default=None,
+        help="Optional WB actions discount CSV with semicolon delimiter.",
+    )
+    pricing_status.add_argument(
         "--output-dir",
         default=None,
         help="Pricing status output directory. Defaults to data/pricing.",
+    )
+    pricing_status.add_argument(
+        "--refresh-api",
+        action="store_true",
+        help="Fetch fresh read-only Ozon/WB price snapshots before building the report.",
+    )
+    pricing_status.add_argument(
+        "--refresh-marketplace",
+        choices=("all", "ozon", "wb"),
+        default="all",
+        help="Marketplace scope for --refresh-api.",
     )
 
     status_preflight = subparsers.add_parser(
@@ -1131,12 +1152,17 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "pricing-status":
         result = run_pricing_status(
+            credentials=load_credentials() if args.refresh_api else None,
             data_dir=Path(args.data_dir),
             products_path=Path(args.products_path) if args.products_path else None,
             ozon_prices_path=Path(args.ozon_prices_json) if args.ozon_prices_json else None,
             wb_prices_path=Path(args.wb_prices_json) if args.wb_prices_json else None,
+            ozon_actions_path=Path(args.ozon_actions_csv) if args.ozon_actions_csv else None,
+            wb_actions_path=Path(args.wb_actions_csv) if args.wb_actions_csv else None,
             output_dir=Path(args.output_dir) if args.output_dir else None,
             run_id=args.run_id,
+            refresh_api=args.refresh_api,
+            refresh_marketplace=args.refresh_marketplace,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["overall_status"] in {"ok", "warning"} else 2

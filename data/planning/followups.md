@@ -133,8 +133,12 @@
    добавить новые типы/префиксы в `seller_sku_rules.md` и пересобрать
    `plan-internal-skus`.
 3. Базовый read-only `pricing-status` подключен к unified catalog 2026-06-24.
-   Следующий слой: подключить fresh API price snapshots, цены по акциям и
-   финансовую модель FBO/FBW для настоящих margin/min-price выводов.
+   Fresh API price snapshots Ozon/WB подключены в ветке
+   `feature/pricing-margin-live-snapshots`: `--refresh-api` сохраняет
+   `ozon_product_info_prices*.json` и `wb_goods_prices.json` в run artifacts.
+   Action-price из Ozon Elastic dry-run и WB actions dry-run также подключены.
+   Следующий слой: подключить Ozon Superboosting/STOCK_DISCOUNT как отдельный
+   источник и финансовую модель FBO/FBW для настоящих margin/min-price выводов.
 
 ### FU-2026-06-19-001 - Контроль Ozon Супербустинг
 
