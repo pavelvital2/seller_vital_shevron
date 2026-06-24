@@ -4,8 +4,8 @@ from datetime import date
 import json
 from pathlib import Path
 
-from takterra_agent.config import AppCredentials, OzonSellerCredentials, WbCredentials
-from takterra_agent.tasks.daily_morning_report import (
+from seller_agent.config import AppCredentials, OzonSellerCredentials, WbCredentials
+from seller_agent.tasks.daily_morning_report import (
     _pending_packages,
     _recommendations_summary,
     _summarize_wb_orders,
@@ -83,7 +83,7 @@ def test_recommendations_summary_counts_open_items(tmp_path: Path) -> None:
 
 def test_daily_morning_report_uses_latest_preflight_without_refresh(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(
-        "takterra_agent.tasks.daily_morning_report.combined_session_status",
+        "seller_agent.tasks.daily_morning_report.combined_session_status",
         lambda: {"overall_status": "ok", "sessions": {}},
     )
     _write_json(
@@ -144,7 +144,7 @@ def test_summarize_wb_orders_counts_active_cancelled_and_amount() -> None:
 
 def test_daily_morning_report_seller_v2_uses_business_adapters(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(
-        "takterra_agent.tasks.daily_morning_report.combined_session_status",
+        "seller_agent.tasks.daily_morning_report.combined_session_status",
         lambda: {"overall_status": "ok", "sessions": {}},
     )
     _write_json(
@@ -254,9 +254,9 @@ def test_daily_morning_report_seller_v2_uses_business_adapters(tmp_path: Path, m
         def fetch_unanswered_questions_count(self):
             return {"data": {"count": 5}}
 
-    monkeypatch.setattr("takterra_agent.tasks.daily_morning_report.OzonSellerAdapter", FakeOzonAdapter)
-    monkeypatch.setattr("takterra_agent.tasks.daily_morning_report.WbStatisticsAdapter", FakeWbStatisticsAdapter)
-    monkeypatch.setattr("takterra_agent.tasks.daily_morning_report.WbCommunicationsAdapter", FakeWbCommunicationsAdapter)
+    monkeypatch.setattr("seller_agent.tasks.daily_morning_report.OzonSellerAdapter", FakeOzonAdapter)
+    monkeypatch.setattr("seller_agent.tasks.daily_morning_report.WbStatisticsAdapter", FakeWbStatisticsAdapter)
+    monkeypatch.setattr("seller_agent.tasks.daily_morning_report.WbCommunicationsAdapter", FakeWbCommunicationsAdapter)
 
     result = run_daily_morning_report(
         credentials=AppCredentials(
@@ -282,10 +282,10 @@ def test_daily_morning_report_seller_v2_uses_business_adapters(tmp_path: Path, m
 
 def test_daily_morning_report_seller_v3_uses_new_template(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(
-        "takterra_agent.tasks.daily_morning_report.combined_session_status",
+        "seller_agent.tasks.daily_morning_report.combined_session_status",
         lambda: {"overall_status": "ok", "sessions": {}},
     )
-    monkeypatch.setattr("takterra_agent.tasks.daily_morning_report._moscow_today", lambda: date(2026, 6, 14))
+    monkeypatch.setattr("seller_agent.tasks.daily_morning_report._moscow_today", lambda: date(2026, 6, 14))
     _write_json(
         tmp_path / "runs" / "2026-06-11" / "status_preflight_test" / "summary.json",
         {
@@ -463,11 +463,11 @@ def test_daily_morning_report_seller_v3_uses_new_template(tmp_path: Path, monkey
         def fetch_fullstats(self, *, ids, date_from: str, date_to: str):
             return [{"advertId": 10, "days": [{"date": date_from, "sum": 15}]}]
 
-    monkeypatch.setattr("takterra_agent.tasks.daily_morning_report.OzonSellerAdapter", FakeOzonAdapter)
-    monkeypatch.setattr("takterra_agent.tasks.daily_morning_report.WbStatisticsAdapter", FakeWbStatisticsAdapter)
-    monkeypatch.setattr("takterra_agent.tasks.daily_morning_report.WbCommunicationsAdapter", FakeWbCommunicationsAdapter)
-    monkeypatch.setattr("takterra_agent.tasks.daily_morning_report.WbFinanceAdapter", FakeWbFinanceAdapter)
-    monkeypatch.setattr("takterra_agent.tasks.daily_morning_report.WbPromotionAdapter", FakeWbPromotionAdapter)
+    monkeypatch.setattr("seller_agent.tasks.daily_morning_report.OzonSellerAdapter", FakeOzonAdapter)
+    monkeypatch.setattr("seller_agent.tasks.daily_morning_report.WbStatisticsAdapter", FakeWbStatisticsAdapter)
+    monkeypatch.setattr("seller_agent.tasks.daily_morning_report.WbCommunicationsAdapter", FakeWbCommunicationsAdapter)
+    monkeypatch.setattr("seller_agent.tasks.daily_morning_report.WbFinanceAdapter", FakeWbFinanceAdapter)
+    monkeypatch.setattr("seller_agent.tasks.daily_morning_report.WbPromotionAdapter", FakeWbPromotionAdapter)
 
     result = run_daily_morning_report(
         credentials=AppCredentials(

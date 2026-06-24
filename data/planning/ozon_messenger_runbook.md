@@ -163,8 +163,8 @@ Query keys:
 
 ```bash
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python - <<'PY'
-from takterra_agent.config import load_credentials
-from takterra_agent.marketplaces.ozon.adapter import OzonSellerAdapter
+from seller_agent.config import load_credentials
+from seller_agent.marketplaces.ozon.adapter import OzonSellerAdapter
 
 creds = load_credentials().ozon_seller
 adapter = OzonSellerAdapter(creds)
@@ -186,6 +186,26 @@ PY
 ```python
 adapter.post("/v3/chat/history", {"chat_id": chat_id, "limit": 50})
 ```
+
+Подтвержденное наблюдение 2026-06-19 по текущей форме ответа API:
+
+- в `/v3/chat/list` идентификатор чата может лежать не в верхнем поле
+  `chat_id`, а во вложенном объекте `chat.chat_id`;
+- `unread_count` по строкам чатов и общий `total_unread_count` могут
+  расходиться с фактическими `is_read=false` в `/v3/chat/history`; для
+  ежедневного triage считать приоритетным постраничный обход историй и
+  фактические `is_read=false`;
+- текст сообщения в `/v3/chat/history` может приходить не в поле `text`, а в
+  массиве `data`; элементы `data` могут быть строками, поэтому парсер должен
+  поддерживать обе формы: строка и объект;
+- истории возвращаются от новых сообщений к старым; последнее актуальное
+  сообщение для классификации - первый элемент списка, если порядок
+  подтвержден по `created_at`;
+- для вопросов покупателей отдельно разделять:
+  - новые/непрочитанные обращения (`user.type=Customer` и `is_read=false`);
+  - старые прочитанные диалоги, где последним осталось сообщение покупателя;
+    это не смешивать с текущими новыми вопросами, а выносить отдельным
+    backlog-хвостом.
 
 Для ежедневного мониторинга уведомлений сначала собрать:
 
@@ -234,6 +254,18 @@ Ozon помечает площадочные уведомления непроч
   сообщения в трех чатах имеют `user.type = Seller` и совпадают с
   согласованными текстами.
 
+Подтвержденная внештатная ситуация 2026-06-19:
+
+- официальный Seller API `/v1/chat/send/message` снова вернул `HTTP 403`:
+  `method is allowed starting from the premium plus subscription`;
+- по одному покупательскому чату официальный API вернул `chat blocked by user`,
+  а LK/CDP fallback не нашел поле ввода; такой чат считать недоступным для
+  ответа и не ретраить вслепую;
+- 4 согласованных ответа были успешно отправлены через
+  `scripts/messenger/ozon_send_messages_cdp.js`;
+- verify через `/v3/chat/history` подтвердил, что последние сообщения в этих
+  4 чатах имеют `user.type = Seller` и совпадают с согласованными текстами.
+
 Для площадочных уведомлений `/v2/chat/read` сработал через API, но только если
 передавать не один `chat_id`, а payload:
 
@@ -249,6 +281,17 @@ Ozon помечает площадочные уведомления непроч
 постраничном обходе все чаты имеют `unread_count=0`. Такой счетчик считать
 нестрогим до повторной проверки ЛК или других групп (`main`, `support_v2`).
 
+Подтвержденный apply 2026-06-19:
+
+- после approval владельца `18` площадочных уведомлений Ozon в `11` чатах
+  были отмечены прочитанными через `/v2/chat/read`;
+- по каждой строке использовался payload
+  `{"chat_id": "<chat_id>", "from_message_id": <newest_unread_notification_message_id>}`;
+- verify полным обходом `/v3/chat/history` показал `0` чатов с
+  непрочитанными `NotificationUser` и `0` чатов с непрочитанными `Customer`;
+- результат сохранен в
+  `data/runs/2026-06-19/ozon_messenger_notifications_mark_read_20260619T082141/`.
+
 ## Fallback через LK/CDP
 
 Fallback нужен, если:
@@ -258,12 +301,109 @@ Fallback нужен, если:
 - нужно сверить, что видит владелец в ЛК;
 - нужно исследовать изменение интерфейса Ozon.
 
+Перед любым LK/CDP fallback обязательно сверить контур:
+
+- текущий проект: `/home/pavel/projects/seller_vital_shevron`;
+- Ozon CDP Vital Shevron: `http://127.0.0.1:9544`;
+- профиль браузера должен быть
+  `/home/pavel/projects/seller_vital_shevron/.sessions/ozon/chrome-profile`;
+- expected store: `Vital Shevron`;
+- не использовать CDP/профиль другого проекта, даже если рядом работает
+  агент TAKTERRA или другого магазина. Если `ss`, `ps` или CDP page list
+  показывают чужой `user-data-dir`, операцию остановить и восстановить
+  правильный keeper.
+
 Probe-скрипт:
 
 ```bash
 RUN_DIR="data/runs/$(date +%F)/ozon_messenger_probe_$(date +%Y%m%dT%H%M%S)"
 node scripts/research/ozon_messenger_page_probe_cdp.js --run-dir "$RUN_DIR"
 ```
+
+Apply согласованных ответов через LK/CDP fallback:
+
+```bash
+node scripts/messenger/ozon_send_messages_cdp.js \
+  --approved-path data/approved/<approved_dir>/approved_apply_plan.json \
+  --run-dir data/runs/<date>/<apply_run_id>
+```
+
+После apply обязательно проверить результат официальным Seller API
+`/v3/chat/history`: последнее сообщение по каждому успешно обработанному
+`chat_id` должно иметь `user.type = Seller` и текст должен совпадать с
+approved package.
+
+Подтвержденный блокер 2026-06-20:
+
+- официальный Seller API `/v1/chat/send/message` вернул `HTTP 403`:
+  `method is allowed starting from the premium plus subscription`;
+- LK/CDP fallback не смог отправить approved-сообщение, потому что страница
+  `https://seller.ozon.ru/app/messenger?group=customers_v2` не загрузила
+  список чатов: websocket
+  `wss://ws.seller.ozon.ru/chat-notification/ws/v3/web/seller` падал с
+  `HTTP Authentication failed; no valid credentials available`, UI показывал
+  ошибку `ws1006`;
+- обычный `ozon_session_keepalive_cdp.js` и `sessions status --marketplace
+  ozon` при этом могли быть `ok`, потому что dashboard/products/prices
+  открывались. Это не подтверждает работоспособность Messenger websocket;
+- если `ozon_send_messages_cdp.js` вернул `message_input_not_found`, нужно
+  выполнить read-only Messenger probe и проверить websocket frames/консоль, а
+  не ретраить отправку вслепую;
+- если после keepalive/restart Messenger websocket остается в `ws1006`, ответ
+  покупателю считать неотправленным, проверить `/v3/chat/history` и запросить
+  отдельное восстановление Ozon LK-сессии с интерактивным входом. Нельзя
+  отмечать такой чат закрытым.
+
+Подтвержденное восстановление и apply 2026-06-20:
+
+- После owner approval был выполнен интерактивный restore Ozon LK-сессии:
+  `restore_ozon_session_for_messenger_retry_20260620T0845`.
+- Перед повторным LK/CDP fallback проверен контур: Vital Shevron на
+  `127.0.0.1:9544`, профиль
+  `/home/pavel/projects/seller_vital_shevron/.sessions/ozon/chrome-profile`;
+  TAKTERRA работала отдельно на `127.0.0.1:9444`.
+- Правило: разные проекты не должны делить Chrome profile. Если появляется
+  Chrome `ProcessSingleton`, сначала проверить `ps`/`ss`; в подтвержденной
+  ситуации 2026-06-20 это был конфликт двух процессов Vital Shevron за один
+  профиль Vital, а не общий профиль с TAKTERRA.
+- Повторная отправка через официальный `/v1/chat/send/message` снова вернула
+  `HTTP 403` Premium Plus, поэтому применен LK/CDP fallback:
+  `ozon_messenger_retry_apply_after_restore_20260620T0848`.
+- Результат fallback: `sent_ok=1`, `skipped=0`, `blocker=""`.
+- Verify через официальный `/v3/chat/history` подтвердил: последнее сообщение
+  в целевом чате имеет `user.type = Seller`, текст совпадает с approved
+  package, непрочитанных сообщений покупателя в проверенном окне нет.
+- После отправки выполнен `ozon_session_keepalive_cdp.js`; итоговый
+  `sessions_status_after_keepalive_messenger_retry_20260620T0849` вернул
+  `overall_status: ok`.
+
+Подтвержденный apply 2026-06-21:
+
+- После owner approval по run `ozon_messenger_triage_20260621T172053`
+  выполнен apply `ozon_messenger_apply_20260621T173056`.
+- Официальный `/v1/chat/send/message` для ответа покупателю снова вернул
+  `HTTP 403`: `method is allowed starting from the premium plus subscription`;
+  это штатно переводит отправку ответа на LK/CDP fallback.
+- `scripts/messenger/ozon_send_messages_cdp.js` отправил 1 согласованный ответ
+  покупателю через CDP-контур Vital Shevron `127.0.0.1:9544`; результат
+  `sent_ok=1`, `skipped=0`, `blocker=""`.
+- 3 информационных уведомления Ozon отмечены прочитанными через
+  `/v2/chat/read` с payload `{"chat_id": "...", "from_message_id": ...}`.
+- Verify через `/v3/chat/history` подтвердил: последнее сообщение в
+  покупательском чате имеет `user.type = Seller`, текст совпадает с approved
+  package, непрочитанных сообщений покупателя нет.
+- Полный обход `/v3/chat/list` после apply показал `0` строк с
+  `unread_count > 0` и `0` фактически непрочитанных сообщений в историях; общий
+  `total_unread_count` при этом остался `1`, поэтому этот общий счетчик
+  считать нестрогим и сверять по строкам/историям.
+- После apply выполнен `ozon_session_keepalive_cdp.js`; контур Vital Shevron
+  подтвержден, `stateExported=true`, `needsLogin=false`.
+
+Важное ограничение LK-страницы Messenger: общий `document.body.innerText`
+содержит не только открытый диалог, но и список соседних чатов. Поэтому нельзя
+определять блокировку или статус целевого чата поиском фраз вроде
+`Чат заблокирован` по всему body. Для apply проверять фактическое поле ввода
+в открытом диалоге, состояние кнопки отправки и затем делать API-verify.
 
 Скрипт сохраняет только redacted artifacts:
 
@@ -306,6 +446,49 @@ node scripts/research/ozon_messenger_page_probe_cdp.js --run-dir "$RUN_DIR"
    - риски;
    - owner approval.
 4. Apply ответов делать отдельной командой с verify.
+5. Для старого хвоста диалогов, где последнее сообщение покупателя уже
+   прочитано, не отправлять ответы автоматически. Сначала разделить:
+   благодарности/завершенные диалоги, вопросы под заказ, вопросы наличия,
+   претензии/заказы и правовые риски. Претензии, заказы и правовые вопросы
+   разбирать вручную, без шаблонных ответов.
+6. После owner approval ежедневная операция должна быть доведена до закрытия:
+   отправить согласованные ответы, отметить согласованные уведомления
+   прочитанными, выполнить verify и сохранить состояние обработанного хвоста.
+   В следующем отчете уже обработанные уведомления и закрытые хвосты не
+   показывать как новые задачи.
+
+## Состояние обработанного хвоста
+
+Если в daily triage обнаружены старые прочитанные диалоги, где последним
+осталось сообщение покупателя, их нельзя бесконечно повторять в каждом новом
+отчете. После разбора и согласования владельцем нужно сохранить state-файл без
+секретов и без raw-переписки в `data/approved/closed/`.
+
+Текущий формат:
+
+```text
+data/approved/closed/ozon_messenger_tail_<date>_<hash>.json
+```
+
+Минимальные поля:
+
+- `source_run_id`, `refined_run_id`;
+- `closed_without_answer`;
+- `standard_reply_possible_but_old`;
+- `needs_stock_check_before_reply`;
+- `manual_order_claim_review`;
+- `manual_legal_review`;
+- `manual_unclear_context`;
+- `reporting_rule`.
+
+Правило для следующих отчетов:
+
+- `closed_without_answer` и `standard_reply_possible_but_old` не выводить как
+  новые задачи;
+- `needs_stock_check_before_reply`, `manual_order_claim_review`,
+  `manual_legal_review`, `manual_unclear_context` выводить только как
+  отдельный backlog/ручной риск, а не как новые непрочитанные вопросы;
+- новые `Customer is_read=false` всегда показывать независимо от state-файла.
 
 ## Ежедневный просмотр уведомлений
 

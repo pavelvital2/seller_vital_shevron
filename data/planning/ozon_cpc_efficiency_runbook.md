@@ -43,7 +43,7 @@ Ozon:
 
 ```bash
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
-  -m takterra_agent.cli plan-ozon-cpc-optimization \
+  -m seller_agent.cli plan-ozon-cpc-optimization \
   --source-run-id <ozon_cpc_efficiency_run_id>
 ```
 
@@ -100,7 +100,7 @@ GET /api/client/campaign/<campaign_id>/v2/products?page=<page>&pageSize=100
 
 ```bash
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
-  -m takterra_agent.cli plan-ozon-cpc-optimization \
+  -m seller_agent.cli plan-ozon-cpc-optimization \
   --source-run-id <ozon_cpc_efficiency_run_id> \
   --current-bids-json <current_bids.json>
 ```
@@ -118,7 +118,7 @@ ozon_cpc_bid_changes.csv
 
 ```bash
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
-  -m takterra_agent.cli apply-ozon-cpc-bids \
+  -m seller_agent.cli apply-ozon-cpc-bids \
   --plan-run-id <ozon_cpc_optimization_plan_run_id> \
   --confirmed-by-user
 ```

@@ -65,7 +65,10 @@ read-only -> dry-run -> review -> approved -> apply -> verify -> result
    нужен.
 7. Любая новая кнопка бота должна иметь runbook, task registry entry, тесты,
    safety metadata и понятный отчет.
-8. Целевой проект должен быть store-agnostic: core-код, package name,
+8. Telegram-ответ по отчетным задачам должен включать краткий chat-summary и,
+   если команда вернула безопасный `artifacts.report`, прикрепленный файл
+   полного отчета через `sendDocument`.
+9. Целевой проект должен быть store-agnostic: core-код, package name,
    task-runner, bot dispatcher, общие runbook-и и архитектурные документы не
    должны зависеть от названия конкретного магазина или старого проекта.
    Store-specific значения должны жить в отдельном `StoreProfile`/конфиге,
@@ -74,7 +77,7 @@ read-only -> dry-run -> review -> approved -> apply -> verify -> result
 ## Целевая архитектура
 
 ```text
-src/takterra_agent/
+src/seller_agent/
   core/
     run_manifest.py
     task_registry.py
@@ -150,6 +153,18 @@ data/
 
 ## Этап 1. Единый `RunManifest`
 
+Статус: `in_progress`.
+
+MVP начат 2026-06-18 в ветке `feature/run-manifest-stage-1`: добавлен
+`src/seller_agent/core/run_manifest.py`, runtime-индекс
+`data/runs/index.jsonl`, CLI `runs list/latest/show` и подключение к
+`status-preflight`, `daily-morning-report`, `reviews-questions`.
+
+Ветка `feature/run-manifest-coverage` расширяет Этап 1: добавляет
+`lifecycle_status`, автоматическое извлечение `source_run_ids`, связи
+`pending_id/approved_id/applied_by_run_id` и подключает manifest к основным
+read-only/dry-run/apply задачам Ozon/WB.
+
 Цель: любой запуск task-runner должен иметь общий машинно-читаемый паспорт.
 
 Минимальная схема:
@@ -162,6 +177,7 @@ data/
   "risk": "none|low|normal|high",
   "marketplaces": ["ozon", "wb"],
   "status": "ok|warning|blocked|error",
+  "lifecycle_status": "created|pending_review|approved|applied|verified|failed|closed",
   "started_at": "",
   "finished_at": "",
   "inputs": {},
@@ -176,14 +192,16 @@ data/
 
 Что сделать:
 
-1. Добавить `src/takterra_agent/core/run_manifest.py`.
+1. Добавить `src/seller_agent/core/run_manifest.py`.
 2. Добавить запись строк в `data/runs/index.jsonl`.
 3. Подключить manifest к новым запускам, затем постепенно к существующим.
-4. Добавить команды:
+4. Добавить lifecycle-связи `pending_id -> approved_id -> applied_by_run_id`.
+5. Добавить команды:
 
 ```bash
-PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli runs list
-PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli runs latest --task status-preflight
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli runs list
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli runs latest --task status-preflight
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli runs show --run-id <run_id>
 ```
 
 Критерий готовности:
@@ -191,11 +209,21 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli r
 - новые runs пишут `manifest.json`;
 - `data/runs/index.jsonl` пополняется;
 - можно найти последний успешный run нужной задачи без ручного поиска по
-  папкам.
+  папкам;
+- dry-run запускам назначается `pending_review`;
+- apply-запуски связываются с approved/fresh/preflight run и получают
+  `applied` или `verified`.
 
 ## Этап 2. Реальный `TaskRegistry`
 
-Цель: CLI и будущий бот должны брать список задач из одного источника.
+Статус: `in_progress`.
+
+Ветка `feature/task-registry` добавляет первый рабочий слой:
+`src/seller_agent/tasks/registry.py`, CLI `tasks list/show` и
+`bot/dispatcher.py` как thin layer поверх registry.
+
+Цель: CLI, fresh-агенты и будущий бот должны брать список задач из одного
+источника.
 
 Task metadata:
 
@@ -218,16 +246,21 @@ telegram_button_label
 
 Что сделать:
 
-1. Расширить `src/takterra_agent/tasks/registry.py`.
-2. Зарегистрировать все текущие CLI-команды.
-3. Подключить CLI help к registry без изменения внешнего поведения.
-4. Сделать `bot/dispatcher.py` thin layer поверх registry.
+1. Расширить `src/seller_agent/tasks/registry.py` - выполнено первым
+   проходом.
+2. Зарегистрировать все текущие CLI-команды - выполнено первым проходом.
+3. Добавить CLI `tasks list/show` - выполнено первым проходом.
+4. Подключить CLI help/docs к registry без изменения внешнего поведения.
+5. Сделать `bot/dispatcher.py` thin layer поверх registry - выполнено первым
+   проходом.
 
 Критерий готовности:
 
 - все текущие команды видны в registry;
 - для каждой команды известен риск и режим;
 - будущий бот не дублирует список команд руками.
+- `tasks list --telegram-only` показывает команды, которые можно подключать к
+  read-only Telegram MVP.
 
 ## Этап 2A. Сопоставление Ozon/WB и общий каталог продукции
 
@@ -253,7 +286,7 @@ telegram_button_label
 1. Обновить раздельные каталоги:
 
 ```bash
-PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli fetch-catalog
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli fetch-catalog
 ```
 
 2. Сохранить/обновить marketplace-local каталоги:
@@ -307,6 +340,32 @@ data/catalog/unified/products.csv
 data/catalog/unified/products.json
 ```
 
+Штатная read-only команда:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli build-unified-catalog
+```
+
+Команда добавлена 2026-06-21 как отдельный слой `catalog-build-unified` в
+`TaskRegistry`. Она берет confirmed mapping и обработанные Ozon/WB каталоги,
+строит внутренний общий каталог, пишет `RunManifest` и issues-report, но не
+переименовывает seller SKU на площадках.
+
+6A. Для товаров, которые остались `ozon_only` или `wb_only`, построить
+read-only план внутренних артикулов:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli plan-internal-skus
+```
+
+Команда `catalog-internal-sku-plan` формирует
+`data/catalog/unified/internal_sku_assignment_plan.csv/json` и run report. Это
+только review-план: реальные `offer_id` Ozon и `vendorCode` WB не меняются,
+а `auto_candidate` строки все равно требуют owner review перед записью в
+постоянный mapping/unified слой.
+
 Минимальные поля общего каталога:
 
 ```text
@@ -356,7 +415,25 @@ approved mapping -> dry-run rename plan -> owner approval -> apply -> verify
 
 ## Этап 3. Approval package и lifecycle
 
+Статус: `in_progress`.
+
 Цель: закрыть безопасный цикл dangerous operations.
+
+Ветка `feature/run-manifest-coverage` добавляет первый технический слой:
+stable checksum helpers, runtime marker
+`data/approved/applied/<sha256-approved-id>.applied.json` и idempotency guard
+для основных apply-команд. Guard блокирует повторный apply до внешних
+write-запросов, если approved/pending пакет уже отмечен marker или уже есть в
+`data/runs/index.jsonl` как примененный.
+
+Ветка `feature/approval-package-builder` начинает следующий слой: добавляет
+builder approved package для `reviews-questions`, checksum action rows и
+проверку checksum в `apply-reviews-questions` перед write-операциями.
+
+Ветка `feature/approval-status-close` добавляет CLI-основу для будущего
+Telegram `/approvals`: read-only `approvals status`, maintenance
+`approvals close`, close-marker `data/approved/closed/*.closed.json` и
+RunManifest task `approvals-close`.
 
 Lifecycle:
 
@@ -367,10 +444,16 @@ pending -> approved -> applied -> verified -> closed
 Что сделать:
 
 1. Описать единый JSON-формат pending/approved package.
+   Первый формат `approval-package/v1` добавлен для `reviews-questions`.
 2. Добавить checksum action rows.
+   Для `reviews-questions` checksum считается и проверяется перед apply.
 3. Добавить idempotency guard: старый approved нельзя применить повторно.
+   Первый общий guard уже добавлен в `src/seller_agent/safety/approvals.py`.
 4. После успешного apply обновлять status package.
-5. Начать с отзывов/вопросов, потому что там уже есть pending/approved
+   Первый runtime marker уже пишется в `data/approved/applied/`.
+5. Добавить обзор и закрытие lifecycle.
+   Первый CLI-слой `approvals status/close` добавлен.
+6. Начать с отзывов/вопросов, потому что там уже есть pending/approved
    практика.
 
 Минимальные команды:
@@ -379,7 +462,7 @@ pending -> approved -> applied -> verified -> closed
 prepare-reviews-questions-approved --source-pending <id> --mode replies-only
 prepare-reviews-questions-approved --source-pending <id> --mode mark-viewed-only
 approvals status
-approvals close --approved-id <id>
+approvals close --id <id> --kind pending|approved
 ```
 
 Критерий готовности:
@@ -388,6 +471,12 @@ approvals close --approved-id <id>
 - после apply visible связь: source pending, approved package, apply run,
   verify status;
 - ручная сборка approved JSON больше не нужна для типовых сценариев.
+
+Оставшийся gap этапа: расширить единый approved package builder на остальные
+write-контуры и подключить `approvals status/close` к Telegram. Сейчас guard
+уже защищает apply-команды, создание approved-пакетов реализовано только для
+`reviews-questions`, CLI-обзор lifecycle уже добавлен, а TaskRegistry содержит
+метаданные `approvals`.
 
 ## Этап 4. Централизованный safety guard
 
@@ -408,7 +497,7 @@ Safety guard должен проверять:
 
 Что сделать:
 
-1. Добавить `src/takterra_agent/safety/guards.py`.
+1. Добавить `src/seller_agent/safety/guards.py`.
 2. Перенести общие проверки из apply-команд в safety layer.
 3. Оставить task-specific проверки внутри workflow.
 
@@ -450,6 +539,23 @@ schemas.py
 
 ## Этап 6. Read-only bot MVP
 
+Статус: `in_progress`.
+
+Ветка `feature/read-only-telegram-mvp` добавила первый command layer:
+`src/seller_agent/bot/commands.py`, dispatcher `dispatch_message()` и CLI
+preview `bot preview --message /status`.
+
+Ветка `feature/telegram-runner-adapter` добавляет real Telegram adapter
+`src/seller_agent/bot/telegram_runner.py`: отправка read-only preview в
+Telegram, одноразовый `getUpdates` polling и controlled `poll-loop` с
+allowlist и lock. Production service включается только после подтверждения
+token-file, личного chat id и runtime allowlist.
+
+В следующем слое `/today` и `/status` получают live read-only режим через
+`WorkflowRunner`: бот строит свежий `daily-morning-report --seller-v3` или
+`status-preflight`, отправляет краткий Telegram-summary и сохраняет полный
+runtime-отчет. Write-операций нет.
+
 Цель: первый бот должен только показывать состояние и отчеты, без write.
 
 Команды MVP:
@@ -459,11 +565,8 @@ schemas.py
 /today
 /catalog
 /reviews
-/prices
-/ads
-/search
-/positions
 /approvals
+/runs
 /help
 ```
 
@@ -475,18 +578,29 @@ schemas.py
 | `/today` | `daily-morning-report --seller-v2` |
 | `/catalog` | `fetch-catalog` summary/latest |
 | `/reviews` | `reviews-questions --marketplace all` |
-| `/prices` | будущий `pricing-status` |
-| `/ads` | Ozon CPC + WB promotion summaries |
-| `/search` | будущий `search-queries` |
-| `/positions` | будущий `wb-parser-positions` |
-| `/approvals` | approvals list/status |
+| `/approvals` | `approvals status` |
+| `/runs` | latest RunManifest по Telegram-задачам |
+| `/help` | `TaskRegistry` Telegram tasks |
 
 Критерий готовности:
 
 - бот не делает write-операции;
-- каждая команда пишет `RunManifest`;
-- бот отправляет краткий отчет и ссылки на артефакты;
+- Telegram bot token не хранится в проекте, документах, memory или git;
+- постоянный polling работает только с allowlist chat_id и lock-file;
+- production runner пишет `RunManifest` при live read-only `/today` и
+  `/status`; остальные MVP-команды пока читают текущий runtime;
+- бот отправляет краткий отчет, безопасно прикрепляет файл `artifacts.report`
+  и оставляет ссылки на артефакты;
 - ошибки показываются безопасно, без секретов.
+
+Ограничение текущего прохода: live API-задачи разрешены только для read-only
+`/today` и `/status`; остальные команды показывают последние runtime-данные и
+статусы. Adapter может отправить готовый read-only ответ в Telegram. После
+attachment policy, `WorkflowRunner` MVP, live `/status` и rename-only
+`seller_agent` следующий отдельный слой - каталог/mapping и аккуратное
+расширение на следующие read-only задачи.
+Команды `/prices`, `/ads`, `/search`, `/positions` подключать после появления
+соответствующих read-only task-runner команд и стандартных отчетов.
 
 ## Этап 7. Approval bot
 
@@ -612,9 +726,9 @@ approval records.
 - Не давать боту прямой доступ к write API без safety guard.
 - Не переносить TAKTERRA product-first модель без учета разных Ozon/WB
   артикулов Vital Shevron.
-- Не переименовывать `takterra_agent` вместе с реализацией новой логики. Когда
-  rename будет согласован, делать отдельный rename-only этап в универсальное
-  имя `seller_agent`, подходящее под любой магазин.
+- Не смешивать package rename с реализацией новой логики. Rename-only этап
+  выполнен 2026-06-18: рабочий package `src/seller_agent/`, CLI
+  `seller-agent`, systemd entrypoint `python -m seller_agent.cli`.
 - Не оставлять названия конкретных магазинов и старых проектов в целевом
   generic core. Все такие значения должны быть вынесены в store profile,
   миграционные/reference-документы или удалены после переноса смысла в
@@ -630,10 +744,10 @@ Ozon/WB.
 
 Что сделать:
 
-1. Переименовать package в универсальное имя:
+1. Переименовать package в универсальное имя - выполнено 2026-06-18:
 
 ```text
-src/takterra_agent/ -> src/seller_agent/
+src/seller_agent/
 ```
 
 2. Ввести `StoreProfile`:
@@ -696,10 +810,12 @@ bot command schema
 
 1. `RunManifest` MVP.
 2. `data/runs/index.jsonl`.
-3. Расширенный `TaskRegistry` для всех текущих CLI-команд.
-4. `approvals status` и lifecycle schema.
-5. `prepare-reviews-questions-approved` как первый approved package builder.
+3. `prepare-reviews-questions-approved` как первый approved package builder.
+4. `approvals status/close` и lifecycle schema.
+5. Расширенный `TaskRegistry` для всех текущих CLI-команд.
 6. Обновление README/CLI docs из registry или по registry.
+7. Read-only Telegram MVP на registry без write-кнопок.
+8. Реальный Telegram runner и attachment policy.
 
 Критерий завершения спринта:
 

@@ -1,4 +1,4 @@
-from takterra_agent.tasks.wb_promotion_bid_plan import build_wb_promotion_bid_plan_rows
+from seller_agent.tasks.wb_promotion_bid_plan import build_wb_promotion_bid_plan_rows
 
 
 def test_wb_promotion_bid_plan_uses_current_bid_and_min_floor() -> None:

@@ -1,224 +1,74 @@
 ---
 name: marketplace-analytics
-description: "Run read-only marketplace analytics workflows for Ozon/Wildberries seller projects: SEO audits, parser position analysis, search-query demand, pricing and margin checks, ads efficiency, stocks/supply planning, reviews/questions summaries, cannibalization checks, and repeatable report/backlog generation. Use when Codex is asked to analyze marketplace data, parser runs, Ozon/WB search queries, product cards, prices, stocks, supplies, promotions, or to prepare an analytics report without write changes."
+description: "Router skill for Vital Shevron marketplace work. Use when a task mentions Ozon/Wildberries seller analytics, reports, parser data, prices, promotions, reviews/questions, customer chats, search queries, stock/supply, product cards, or marketplace operations and a more specific repo skill/user skill may need to be selected."
 ---
 
-# Marketplace Analytics
+# Marketplace Analytics Router
 
-## Core Rules
+This repo skill is only a routing layer. Do not grow it into a detailed
+runbook. Detailed rules live in `data/planning/*.md` and in narrower skills.
 
-- Read `AGENTS.md` first and follow the project's safety rules.
-- Treat analytics as read-only unless the owner explicitly approves an apply
-  operation through the project safety chain.
-- Never save or print API keys, tokens, cookies, storage state, auth headers,
-  login codes, or closed-source secret file contents.
-- Use API-first sources when an official API can provide the required data.
-  Use LK pages only when API data is unavailable or insufficient, and record
-  why the API path was not enough.
-- Do not commit raw parser datasets, catalog snapshots, `data/runs/`,
-  `data/pending/`, `data/approved/`, sessions, or temporary auth files.
-- Use temporary folders for working datasets when needed, then clean them after
-  the derived report is saved.
-- If source freshness matters, verify source timestamps before drawing
-  conclusions. If freshness cannot be confirmed, say so in the report.
-- After a marketplace parser finishes a new top-query pass, verify the latest
-  parser slice before analysis: file `mtime`, parser `run_id`, unique query
-  count and `collected_at_utc` range. Do not reuse an older parser report just
-  because it is already present under `data/runs/`.
-- For Ozon parser SEO/price analysis, treat parser SERP `price` as
-  buyer-visible public search price. Keep it separate from Ozon Seller API/LK
-  seller `price`, `old_price`, `min_price`, action price and finance accruals.
-  Do not interpret the gap as loss/profit until Ozon compensation, points,
-  discounts and financial transactions are reconciled.
-- For WB actions discount reports, read
-  `wb-discount-calculation-active-actions-<scheme>.csv` with semicolon
-  delimiter `;`. If it is read with the default comma delimiter, columns such
-  as `Причина`, `Действие`, `Акций`, discounts and vendor codes are parsed
-  incorrectly. Prefer `summary.json` for machine summaries and XLSX for manual
-  review when possible.
-- Do not estimate sales from search-query counts alone. Query counts can support
-  demand/opportunity ranking only when conversion assumptions are explicitly
-  labeled as assumptions.
-- For supply planning, never treat stock warehouse or shipment warehouse as the
-  destination cluster. Separate `stock_warehouse`, `ship_from_warehouse`,
-  `buyer_region`/`buyer_city`, and `destination_cluster`. If only shipment
-  warehouses are available, label the limitation and do not present them as
-  where goods should be sent.
-- For Vital Shevron supply workbooks, include only currently manufactured
-  goods: chevrons, patches, petlitcy, and kits made from them. Exclude hats,
-  pouches, panamas, aprons, false epaulettes, and other non-manufactured goods
-  from the production/supply workbook.
-- Build the owner-facing supply workbook as `.xlsx` with three sheets:
-  `Артикулы`, `Озон кластеры`, `ВБ кластеры`. Keep CSV files as supporting
-  artifacts only.
+## Always
 
-## Required Source Discovery
+- Read `AGENTS.md` first.
+- Keep Ozon and WB identities separate until mapping is confirmed.
+- Use Ozon-native IDs (`offer_id`, `product_id`, `sku`) and WB-native IDs
+  (`vendorCode`, `nmID`, `barcode`).
+- Use API-first sources; use LK/CDP only when API is missing or insufficient,
+  and record why.
+- Do not print or save secrets, cookies, storage state, auth headers, tokens,
+  login codes, or private buyer data into committed files.
+- For write-related marketplace actions use:
+  `read-only -> dry-run -> review -> approved -> apply -> verify -> result`.
+- After successful marketplace operations update the matching instruction in
+  `data/planning/`; if a reusable cross-task rule was discovered, update the
+  relevant skill too.
 
-Before analysis, read the runbooks that match the task:
+## Route By Task
 
-- `data/planning/search_queries_runbook.md` for Ozon/WB search demand;
-- `data/planning/seo_audit_runbook.md` for card SEO audits;
-- `data/planning/product_card_work_runbook.md` before any product-card
-  recommendations or dry-run card edits;
-- `data/planning/card_grouping_runbook.md` for Ozon/WB card grouping,
-  Ozon `model_info`, WB `imtID`, and future grouping dry-runs;
-- `data/planning/ozon_parser_positions_runbook.md` for Ozon parser positions;
-- `data/planning/wb_parser_positions_runbook.md` for WB parser positions;
-- `data/planning/pricing_runbook.md` for price, min price and margin checks;
-- `data/planning/ozon_cpc_efficiency_runbook.md` for Ozon CPC;
-- `data/planning/wb_promotion_runbook.md` for WB promotion;
-- `data/planning/supply_planning_runbook.md` for stocks, 90-day sales,
-  localization and supply planning;
-- `data/planning/reviews_questions_runbook.md` for reviews and questions;
-- `data/planning/ozon_messenger_runbook.md` for Ozon customer chats,
-  notification triage, important marketplace messages and Messenger page/API
-  checks;
-- `data/planning/catalog_mapping_runbook.md` when cross-marketplace matching
-  or unified product reporting is involved.
+Prefer the narrowest matching skill:
 
-Also check:
+- `marketplace-reviews-questions` - reviews, questions, reply drafts, media,
+  approval packages, apply/verify.
+- `marketplace-ozon-messenger` - Ozon Messenger, buyer chats, notifications,
+  important platform messages, mark-read and tail cleanup.
+- `marketplace-supply-planning` - stocks, 90-day sales, localization,
+  destination clusters, production constraints and supply workbooks.
+- `marketplace-search-query-research` - Ozon/WB search query demand, LK/API
+  exports, Excel exports, top queries and parser query comparison.
+- `marketplace-action-monitoring` - promotion/action apply monitoring,
+  Superboosting/Elastic/WB action baselines, post-apply sales checks.
+- User-level `marketplace-sales-analytics` - sales, orders, buyouts, returns,
+  margin, stock coverage and period comparisons.
+- User-level `marketplace-promotion-analytics` - ads, bids, budgets, CPC,
+  Elastic, Superboosting, WB promotion and action economics.
+- User-level `marketplace-seo-card-optimization` - SEO visibility, parser
+  positions, query coverage, cannibalization and card optimization.
+- User-level `marketplace-product-card-content` - card titles, descriptions,
+  attributes, photos, hashtags, color/name, grouping and designer tasks.
+- User-level `marketplace-reporting` - owner-facing Telegram/Markdown/Excel
+  report formatting and approval summaries.
 
-- latest relevant `data/runs/YYYY-MM-DD/` derived reports;
-- local Ozon/WB catalog snapshots, without committing raw snapshots;
-- confirmed native marketplace IDs before matching rows;
-- `data/planning/recommendations_index.md` for existing backlog items.
+## Required Source Check
 
-## Identity Rules
+For any marketplace task, read the matching runbook before acting. Common
+routes:
 
-- Ozon scenarios use Ozon-native identifiers: `offer_id`, `product_id`, `sku`.
-- WB scenarios use WB-native identifiers: `vendorCode`, `nmID`, barcode.
-- Cross-marketplace conclusions require confirmed mapping. Missing mapping does
-  not block marketplace-local read-only analysis.
-- For WB parser analysis, do not identify own goods by brand alone. Use local
-  `nmID` and confirmed supplier/shop identity.
-- For Ozon parser exports, verify the meaning of parser `productId` and `sku`
-  on every run. In the 2026-06-13 Vital Shevron run, parser `productId`/`sku`
-  matched local Ozon `sku`, not local API `product_id`; this is a known
-  project observation, not a permanent external rule.
+- `data/planning/chat_report_templates.md`
+- `data/planning/run_manifest_runbook.md`
+- `data/planning/recommendations_index.md`
+- `data/planning/project_map.md`
 
-## Workflow
+If no narrow skill exists, use this router plus the closest runbook and report
+whether a new narrow skill should be created.
 
-1. Define scope: marketplace, operation, period, query set, product set and
-   whether the result is read-only, dry-run, or write-related.
-2. Gather sources and record source paths, timestamps, export periods and API/LK
-   routes used.
-3. Validate product identity and mapping before joining datasets.
-4. Build derived tables only:
-   - query opportunities;
-   - product/card audit;
-   - cluster coverage;
-   - cannibalization;
-   - competitor visibility;
-   - pricing/margin constraints;
-   - ads efficiency;
-   - stock coverage and supply recommendations;
-   - destination cluster allocation, separate from shipment/stock warehouses;
-   - limitations and missing data.
-5. Save the report under `data/runs/<date>/<operation>_<timestamp>/` unless the
-   task explicitly requires a permanent planning document.
-6. Present a concise chat report with sources, metrics, findings,
-   recommendations, risks, and saved file paths.
-7. If a write action is requested, stop at dry-run/review unless the owner has
-   explicitly approved the apply stage.
-8. If a new source, page, API method, error recovery, rule or recommendation is
-   discovered, update the matching runbook, `project_map.md` and
-   `recommendations_index.md` in the same work cycle.
-9. At the end of the task, assess whether this skill itself should be improved.
-   If there is a concrete improvement, report it to the owner and propose the
-   edit. Add only repeatable rules, verified limitations, source routes,
-   recovery steps, report templates, or quality checks that reduce future error
-   risk or speed up recurring work.
+## Output
 
-## SEO-Specific Rules
-
-- Use search clusters from the card title for target query matching.
-- Before recommending product-card changes, inspect all available card photos
-  and describe photo count, image content, colors/background, patch shape and
-  size. Do not propose title, description, attribute or photo changes before
-  this photo audit.
-- For product-card reports, send the owner a single collage image containing
-  all current card photos together with the written report. If an Ozon card has
-  fewer than 5 useful photos or misses wearing/use-case, reverse-side,
-  комплект/Velcro, or service-infographic images, add or update a designer task
-  in `data/planning/product_card_designer_tasks.md`.
-- For Ozon card audits, include current hashtags, color, and color name in the
-  report. Do not use `БПЛА` as an Ozon hashtag for Vital Shevron; the owner
-  reported that Ozon rejects it. Attribute IDs must be verified through the
-  category attributes API before dry-run/apply.
-- For Ozon hashtag recommendations, prioritize relevant search queries where
-  the card is already visible, normalize query phrases into both joined and
-  underscore hashtag variants when Ozon accepts both, exclude blocked tags, and
-  fill up to 30 hashtags by confirmed frequency from
-  `data/planning/ozon_hashtag_frequency_table.md`. If frequency was not
-  collected from the Ozon card editor dropdown, label it as unconfirmed.
-- Product-card Telegram reports must include the full decision view in chat,
-  not only as an attached file. Before apply, show `сейчас -> рекомендую` for
-  each important parameter without technical sources. After apply/verify,
-  rebuild and resend the full report and chat summary with `было -> стало`,
-  accepted recommendations, rejected recommendations, and owner-modified
-  decisions.
-- Product-card Telegram reports must keep an `SEO-видимость` block with the
-  key queries where the card is already visible in parser/Ozon/WB, plus compact
-  visibility metrics when available. Do not omit this block when shortening the
-  chat summary, because title and hashtag decisions depend on it.
-- Description text is diagnostic only; do not treat description-only matches as
-  full SEO coverage.
-- For WB SEO audits, keep rating sources separate: parser SERP rating,
-  Feedbacks API review valuations, and official card rating are different
-  metrics. If official card rating cannot be confirmed from an available
-  source, label it as a limitation instead of merging it with parser or
-  feedback ratings.
-- Compare demand, parser position, own-card coverage, card quality and
-  competitor visibility together. Do not recommend title edits from query count
-  alone.
-- For Ozon SEO decisions, compare buyer-visible parser price with top-10/top-30
-  competitor prices and with seller API price before recommending title,
-  advertising or price actions.
-- Wait for parser runs to finish when the user asks for a complete comparison.
-  If only partial parser data is available, label the report as partial.
-- Keep Ozon and WB results separate until mapping quality is confirmed.
-
-## Output Shape
-
-For Telegram-facing analytics reports, follow
-`data/planning/chat_report_templates.md` first. The chat message is the owner's
-primary report screen; the full report file must still be saved and attached or
-listed at the bottom of the message.
-
-For reviews/questions reports, use `data/planning/reviews_questions_runbook.md`.
-Do not propose identical boilerplate replies for every review. A review with
-attached photo/video but no text must not be treated as "view only"; it needs a
-public reply, and only a technical inability to reply can be escalated as a
-blocker. Show buyer rating on every proposed reply row and inspect attached
-media when links/previews are available; if media content cannot be inspected,
-state that limitation. Send all review photos that relate to proposed replies
-to the owner in Telegram for approval; if a photo cannot be attached, say which
-photo is missing and why.
-
-For Ozon customer chats and notifications, use
-`data/planning/ozon_messenger_runbook.md`. Prefer official Seller API
-`/v3/chat/list` and `/v3/chat/history` for read-only chat reports. Treat LK
-websocket `sc_chat/getChats` as fallback or UI-state research only. The
-`customers_v2` page is a daily notification source: separate buyer questions
-that need replies, important Ozon marketplace changes that should be sent to
-Telegram, and noise/promotional banners. Never save raw chat text, buyer
-personal data, cookies, storage state or auth headers into committed docs;
-answer sending is a write operation and needs the full approval chain.
-
-For analytics reports without a more specific template, use this order:
+Report in the owner's preferred format:
 
 1. Краткий вывод.
 2. Источники и период.
-3. Что проверено.
-4. Находки.
-5. Рекомендации.
-6. Риски и ограничения.
-7. Файлы результата.
-8. Что делать дальше.
-
-## Development Boundary
-
-This repo skill is the immediate lightweight layer. Do not build a Codex plugin,
-multi-agent workflow, or Agents SDK tracing until the underlying project
-workflows have stable CLI commands, run manifests, source contracts and report
-formats. Keep those larger steps in the development plan.
+3. Что сделано.
+4. Риски и ограничения.
+5. Файлы результата.
+6. Следующий шаг.

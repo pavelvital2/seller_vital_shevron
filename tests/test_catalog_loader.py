@@ -1,4 +1,4 @@
-from takterra_agent.catalog.loader import build_master_catalog, normalize_sku
+from seller_agent.catalog.loader import build_master_catalog, normalize_sku
 
 
 def test_normalize_sku_keeps_significant_zeroes() -> None:

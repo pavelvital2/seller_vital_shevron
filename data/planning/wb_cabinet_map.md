@@ -81,10 +81,10 @@ cmp.wildberries.ru
 
 ```bash
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
-  -m takterra_agent.cli sessions status
+  -m seller_agent.cli sessions status
 
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
-  -m takterra_agent.cli status-preflight
+  -m seller_agent.cli status-preflight
 ```
 
 Не выводить cookies, storage state, auth headers, API tokens и коды входа.
@@ -326,7 +326,7 @@ https://seller.wildberries.ru/feedbacks/feedbacks-tab
 API-first:
 
 - `feedbacks-api.wildberries.ru`;
-- проектный adapter: `src/takterra_agent/marketplaces/wb/communications_adapter.py`.
+- проектный adapter: `src/seller_agent/marketplaces/wb/communications_adapter.py`.
 
 Риск:
 

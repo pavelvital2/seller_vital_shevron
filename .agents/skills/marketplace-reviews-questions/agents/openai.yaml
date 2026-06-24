@@ -1,0 +1,4 @@
+interface:
+  display_name: "Marketplace Reviews"
+  short_description: "Reviews, questions, media and reply approval"
+  default_prompt: "Use $marketplace-reviews-questions to prepare or apply Ozon/WB review and question workflows."

@@ -5,19 +5,19 @@
 Технический отчет:
 
 ```bash
-PYTHONPATH=src python3 -m takterra_agent.cli daily-morning-report
+PYTHONPATH=src python3 -m seller_agent.cli daily-morning-report
 ```
 
 Селлерский v2:
 
 ```bash
-PYTHONPATH=src python3 -m takterra_agent.cli daily-morning-report --seller-v2
+PYTHONPATH=src python3 -m seller_agent.cli daily-morning-report --seller-v2
 ```
 
 Селлерский v3 по утвержденному Telegram-шаблону:
 
 ```bash
-PYTHONPATH=src python3 -m takterra_agent.cli daily-morning-report --seller-v3
+PYTHONPATH=src python3 -m seller_agent.cli daily-morning-report --seller-v3
 ```
 
 ## Правило до унификации SKU
@@ -28,6 +28,12 @@ PYTHONPATH=src python3 -m takterra_agent.cli daily-morning-report --seller-v3
 Telegram-вывод ежедневного отчета строить по общему стандарту
 `data/planning/chat_report_templates.md`: chat-summary должен быть достаточным
 для просмотра с телефона без открытия полного файла.
+
+Перед сборкой и отправкой ежедневного отчета агент обязан проверить
+`data/planning/followups.md`. Если там есть pending-задачи с датой текущего
+дня, их нужно вывести в отдельном блоке отчета и выполнить в рамках утреннего
+цикла, если это read-only контроль. Если задача требует write-действий,
+сначала подготовить dry-run/review и запросить подтверждение владельца.
 
 ## Обязательный формат ежедневного отчета
 

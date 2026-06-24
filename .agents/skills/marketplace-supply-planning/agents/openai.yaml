@@ -1,0 +1,4 @@
+interface:
+  display_name: "Supply Planning"
+  short_description: "Stocks, sales, localization and supply workbook"
+  default_prompt: "Use $marketplace-supply-planning to calculate Ozon/WB production and supply plans."

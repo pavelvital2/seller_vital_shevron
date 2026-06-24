@@ -1,9 +1,9 @@
 import json
 from pathlib import Path
 
-from takterra_agent.config import AppCredentials
-from takterra_agent.tasks.status_preflight import _overall_status, _summarize_master_catalog
-from takterra_agent.tasks.status_preflight import _check_ozon_performance_api
+from seller_agent.config import AppCredentials
+from seller_agent.tasks.status_preflight import _overall_status, _summarize_master_catalog
+from seller_agent.tasks.status_preflight import _check_ozon_performance_api
 
 
 def test_overall_status_errors_win() -> None:

@@ -2,8 +2,8 @@ from decimal import Decimal
 
 import pytest
 
-from takterra_agent.config import AppCredentials
-from takterra_agent.tasks.ozon_cpc_bids_apply import _split_apply_rows, run_ozon_cpc_bids_apply
+from seller_agent.config import AppCredentials
+from seller_agent.tasks.ozon_cpc_bids_apply import _split_apply_rows, run_ozon_cpc_bids_apply
 
 
 def test_ozon_cpc_bids_apply_requires_confirmation() -> None:

@@ -4,14 +4,14 @@
 
 ```bash
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
-  -m takterra_agent.cli reviews-questions --marketplace all
+  -m seller_agent.cli reviews-questions --marketplace all
 ```
 
 Для проверки только WB:
 
 ```bash
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
-  -m takterra_agent.cli reviews-questions --marketplace wb
+  -m seller_agent.cli reviews-questions --marketplace wb
 ```
 
 Команда выполняет read-only сбор отзывов и вопросов, готовит отчет и не
@@ -29,10 +29,76 @@ read-only -> draft answers -> owner review -> approved -> apply -> verify -> res
 
 Approved-пакет должен содержать:
 
+- `schema_version: "approval-package/v1"` для новых пакетов;
 - верхнеуровневый `status: "approved"`;
+- `pending_id` и `source_run_id`;
+- `actions_checksum` для применяемых строк;
 - список `actions`;
 - у каждой применяемой строки `approved: true`;
 - у каждой применяемой строки `state: "approved"`.
+
+Штатный способ создать approved-пакет после согласования владельца:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli prepare-reviews-questions-approved \
+  --source-pending <pending_id> \
+  --mode all
+```
+
+Режимы:
+
+- `all` - ответы на отзывы/вопросы и отметка Ozon-отзывов просмотренными;
+- `replies-only` - только публичные ответы и WB-вопросы;
+- `mark-viewed-only` - только отметка Ozon-отзывов просмотренными.
+
+Команда сохраняет:
+
+```text
+data/approved/<approved_id>/approved_apply_plan.json
+data/approved/<approved_id>/skipped_actions.json
+data/approved/<approved_id>/APPROVED_PACKAGE.md
+```
+
+Apply выполнять только после явного согласования владельца и только из
+approved-пакета:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli apply-reviews-questions \
+  --approved-path data/approved/<approved_id>/approved_apply_plan.json \
+  --confirmed-by-user
+```
+
+Если запустить apply без `--confirmed-by-user`, guard должен завершить команду
+с блокером `Apply requires --confirmed-by-user`. Это штатная защита, после
+проверки согласования нужно повторить команду с флагом.
+
+`apply-reviews-questions` проверяет `actions_checksum` до внешних write-
+операций. Если approved JSON был изменен после создания, apply должен
+завершиться ошибкой checksum mismatch.
+
+Проверить статус pending/approved/apply chain:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli approvals status \
+  --id <pending_id>
+```
+
+Закрыть устаревший pending-пакет, если владелец решил не применять его:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli approvals close \
+  --id <pending_id> \
+  --kind pending \
+  --reason "superseded"
+```
+
+Непримененный approved-пакет закрывать только осознанно: команда требует
+`--force`, потому что это скрывает уже согласованную write-операцию из обычного
+`approvals status`.
 
 Если `status: "approved"` есть только наверху, но у строк нет
 `approved: true`, apply может завершиться техническим `ok`, но ничего не
@@ -42,7 +108,7 @@ Approved-пакет должен содержать:
 
 ```bash
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
-  -m takterra_agent.cli reviews-questions --marketplace all
+  -m seller_agent.cli reviews-questions --marketplace all
 ```
 
 Успешной операцией считать только результат, где:
@@ -129,11 +195,167 @@ fallback.
   `review_uuid`. В ответе проверять поля `photos` и `videos`; фото покупателя
   нужно отличать от `product.cover_image`, потому что `cover_image` - это
   изображение карточки товара.
+- Готовый helper для новых агентов:
+
+```bash
+NODE_PATH=/home/Codex/agent-tools/node/node_modules \
+  node scripts/reviews/ozon_review_media_detail_cdp.js \
+  --run-dir data/runs/<date>/<reviews_questions_run_id>
+```
+
+  Helper автоматически читает
+  `processed/reviews_questions_items.json`, выбирает Ozon-отзывы с
+  `photos_count > 0` или `videos_count > 0`, делает read-only запрос
+  `/api/v2/review/detail`, сохраняет только redacted detail без автора,
+  `order_number`, `chat_url`, user id и других приватных полей, скачивает
+  вложения из `photos`/`videos` в
+  `processed/ozon_review_media_detail/` и пишет `summary.json` +
+  `media_manifest.json`.
+
+  Для точечной проверки одного отзыва:
+
+```bash
+NODE_PATH=/home/Codex/agent-tools/node/node_modules \
+  node scripts/reviews/ozon_review_media_detail_cdp.js \
+  --run-dir data/runs/<date>/<reviews_questions_run_id> \
+  --review-uuid <review_uuid>
+```
+
+  Нельзя сохранять полный raw detail в постоянные документы или git: в нем
+  могут быть имя покупателя, номер заказа, chat URL и user id. В Telegram
+  отправлять только сами фото/видео, нужные для согласования ответа, и краткое
+  описание без закрытых данных покупателя.
 - Если после apply появился новый Ozon-отзыв без текста, которого не было в
   approved-пакете, его можно только вынести в новый отчет на согласование.
   Нельзя автоматически отмечать его просмотренным в рамках старого approval.
 
 ## Проверенные операции
+
+### Штатный apply 2026-06-23
+
+- Pending-пакет:
+  `data/pending/reviews_questions_20260623T211638_pending`.
+- Approved-пакет:
+  `data/approved/reviews_questions_20260623T211638_pending_approved/approved_apply_plan.json`.
+- Apply: `reviews_questions_apply_20260623T212430`.
+- Результат apply: WB ответы `0/0`, WB вопросы `0/0`, Ozon публичные ответы
+  `7/7`, Ozon отметки просмотренным `38/38`.
+- Ozon счетчик перед/после: `NOT_VIEWED 42 -> 0`, `PROCESSED 2623 -> 2630`,
+  `VIEWED 4055 -> 4090`.
+- Медиа: перед согласованием проверены `3` Ozon-отзыва с медиа; скачано `6`
+  фото через `scripts/reviews/ozon_review_media_detail_cdp.js`, собран
+  contact sheet
+  `data/runs/2026-06-23/reviews_questions_20260623T211638/processed/ozon_review_media_detail/review_media_contact_sheet.jpg`
+  и отправлен владельцу в Telegram.
+- Контрольный read-only: `reviews_questions_20260623T212458`.
+- Verify: `items_count=0`, `actions_count=0`; WB Feedbacks API вернул `0`
+  отзывов/вопросов к обработке, Ozon LK/CDP fallback вернул `0` отзывов и `0`
+  вопросов к обработке.
+- Нулевой pending контрольного verify
+  `reviews_questions_20260623T212458_pending` закрыт как `no_actions_verify`,
+  чтобы он не висел в статусах на согласование.
+- Ограничение источника: официальный Ozon Review API `/v1/review/count` и
+  `/v1/review/list` вернул `HTTP 403: not available with existing
+  subscription`, поэтому Ozon проверен через LK/CDP fallback.
+
+### Штатный apply 2026-06-22
+
+- Pending-пакет:
+  `data/pending/reviews_questions_20260622T_reviews_check_pending`.
+- Approved-пакет:
+  `data/approved/reviews_questions_20260622T_reviews_check_pending_approved/approved_apply_plan.json`.
+- Перед согласованием владелец заметил, что Telegram-вывод отчета пришел
+  одной строкой. Правило перенесено в
+  `data/planning/chat_report_templates.md`: owner-facing Telegram-сводки
+  отправлять реальным многострочным текстом, без литеральных `\n`.
+- Apply: `reviews_questions_apply_20260622T_owner_approved`.
+- Результат apply: WB ответы `1/1`, WB вопросы `0/0`, Ozon публичные ответы
+  `5/5`, Ozon отметки просмотренным `49/49`.
+- Ozon счетчик перед/после: `NOT_VIEWED 53 -> 0`, `PROCESSED 2618 -> 2623`,
+  `VIEWED 4004 -> 4052`.
+- Медиа: в согласованном пакете был `1` Ozon-отзыв с фото без текста
+  (`pict0043`); фото скачано через
+  `scripts/reviews/ozon_review_media_detail_cdp.js`, просмотрено и отправлено
+  владельцу в Telegram перед apply.
+- Контрольный read-only: `reviews_questions_verify_20260622T_after_apply`.
+- Verify: `items_count=0`, `actions_count=0`; WB Feedbacks API вернул `0`
+  отзывов/вопросов к обработке, Ozon LK/CDP fallback вернул `0` отзывов и `0`
+  вопросов к обработке.
+- Нулевой pending контрольного verify
+  `reviews_questions_verify_20260622T_after_apply_pending` закрыт как
+  `no_actions_verify`, чтобы он не висел в статусах на согласование.
+- Ограничение источника: официальный Ozon Review API `/v1/review/count` и
+  `/v1/review/list` вернул `HTTP 403: not available with existing
+  subscription`, поэтому Ozon проверен через LK/CDP fallback.
+
+### Штатный apply 2026-06-21
+
+- Pending-пакет:
+  `data/pending/reviews_questions_20260621T165153_pending`.
+- Approved-пакет:
+  `data/approved/reviews_questions_20260621T165153_pending_approved/approved_apply_plan.json`.
+- Apply: `reviews_questions_apply_20260621T165647`.
+- Перед apply Ozon-сессия была восстановлена через штатный
+  `restore-ozon-session`; CDP guard подтвердил порт `9544` и профиль Vital
+  Shevron.
+- Результат apply: WB ответы `0/0`, WB вопросы `0/0`, Ozon публичные ответы
+  `5/5`, Ozon отметки просмотренным `47/47`.
+- Счетчик Ozon перед/после: `NOT_VIEWED 52 -> 0`, `PROCESSED 2613 -> 2618`,
+  `VIEWED 3956 -> 4003`.
+- Контрольный read-only: `reviews_questions_20260621T165709`.
+- Verify: `items_count=0`, `actions_count=0`; WB Feedbacks API вернул `0`
+  отзывов/вопросов к обработке, Ozon LK/CDP fallback вернул `0` отзывов и `0`
+  вопросов к обработке.
+- Ограничение источника: официальный Ozon Review API `/v1/review/count` и
+  `/v1/review/list` вернул `HTTP 403: not available with existing
+  subscription`, поэтому Ozon проверен через LK/CDP fallback.
+- Медиа: в согласованном пакете не было фото или видео.
+- Нулевой pending контрольного verify
+  `reviews_questions_20260621T165709_pending` закрыт как `no_actions_verify`,
+  чтобы он не висел в статусах на согласование.
+
+### Штатный apply 2026-06-20
+
+- Pending-пакет: `data/pending/reviews_questions_20260620T_owner_request_pending`.
+- Approved-пакет:
+  `data/approved/reviews_questions_20260620T_owner_request_pending_approved/approved_apply_plan.json`.
+- Apply: `reviews_questions_apply_20260620T_owner_request`.
+- Результат apply: WB ответы `0/0`, WB вопросы `0/0`, Ozon публичные ответы
+  `1/1`, Ozon отметки просмотренным `12/12`.
+- Контрольный read-only: `reviews_questions_verify_20260620T_owner_request`.
+- Verify: `items_count=0`, `actions_count=0`; WB Feedbacks API вернул `0`
+  отзывов/вопросов к обработке, Ozon LK/CDP fallback вернул `0` отзывов и `0`
+  вопросов к обработке.
+- Ограничение источника: официальный Ozon Review API `/v1/review/count` и
+  `/v1/review/list` вернул `HTTP 403: not available with existing
+  subscription`, поэтому Ozon проверен через LK/CDP fallback.
+- Медиа: в согласованном пакете не было фото или видео.
+- Нулевой pending контрольного verify
+  `reviews_questions_verify_20260620T_owner_request_pending` закрыт как
+  `no_actions_verify`, чтобы он не висел в статусах на согласование.
+
+### Штатный apply 2026-06-19
+
+- Pending-пакет: `data/pending/reviews_questions_20260619T065240_pending`.
+- Approved-пакет:
+  `data/approved/reviews_questions_20260619T065240_pending_approved/approved_apply_plan.json`.
+- Apply: `reviews_questions_apply_20260619T0708`.
+- Результат apply: WB ответы `2/2`, WB вопросы `0/0`, Ozon публичные ответы
+  `3/3`, Ozon отметки просмотренным `31/31`.
+- Контрольный read-only: `reviews_questions_verify_20260619T0709`.
+- Verify: `items_count=0`, `actions_count=0`; WB Feedbacks API вернул `0`
+  отзывов/вопросов к обработке, Ozon LK/CDP fallback вернул `0` отзывов и `0`
+  вопросов к обработке.
+- Ограничение источника: официальный Ozon Review API `/v1/review/count` и
+  `/v1/review/list` вернул `HTTP 403: not available with existing
+  subscription`, поэтому Ozon проверен через LK/CDP fallback.
+- Медиа: перед согласованием Ozon-отзыв `bplapict0025` был проверен через
+  `scripts/reviews/ozon_review_media_detail_cdp.js`; фото покупателя
+  отправлено владельцу в Telegram, после согласования опубликован публичный
+  ответ.
+- Нулевой pending контрольного verify
+  `reviews_questions_verify_20260619T0709_pending` закрыт как
+  `no_actions_verify`, чтобы он не висел в статусах на согласование.
 
 ### Штатный apply 2026-06-18
 

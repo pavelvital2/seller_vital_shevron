@@ -4,14 +4,17 @@ from datetime import datetime
 import json
 from pathlib import Path
 
-from takterra_agent.config import (
+import pytest
+
+from seller_agent.config import (
     WbCredentials,
     load_ozon_performance_credentials,
     load_ozon_seller_credentials,
     load_wb_credentials,
 )
-from takterra_agent.marketplaces.wb.communications_adapter import WbCommunicationsAdapter
-from takterra_agent.tasks.reviews_questions import (
+from seller_agent.marketplaces.wb.communications_adapter import WbCommunicationsAdapter
+from seller_agent.tasks.reviews_questions import (
+    _approved_actions,
     _build_report,
     build_actions,
     classify_item,
@@ -19,12 +22,13 @@ from takterra_agent.tasks.reviews_questions import (
     draft_question_reply,
     normalize_wb_feedback,
     normalize_wb_question,
+    run_reviews_questions_prepare_approved,
 )
 
 
 def test_missing_wb_token_file_returns_none(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.delenv("WB_API_TOKEN", raising=False)
-    monkeypatch.setenv("TAKTERRA_WB_TOKEN_FILE", str(tmp_path / "missing-token.txt"))
+    monkeypatch.setenv("VITAL_SHEVRON_WB_TOKEN_FILE", str(tmp_path / "missing-token.txt"))
 
     assert load_wb_credentials() is None
 
@@ -34,8 +38,34 @@ def test_missing_ozon_token_files_return_none(monkeypatch, tmp_path: Path) -> No
     monkeypatch.delenv("OZON_SELLER_API_KEY", raising=False)
     monkeypatch.delenv("OZON_PERFORMANCE_CLIENT_ID", raising=False)
     monkeypatch.delenv("OZON_PERFORMANCE_CLIENT_SECRET", raising=False)
-    monkeypatch.setenv("TAKTERRA_OZON_SELLER_CREDENTIALS_FILE", str(tmp_path / "missing-ozon-seller.txt"))
-    monkeypatch.setenv("TAKTERRA_OZON_PERFORMANCE_CREDENTIALS_FILE", str(tmp_path / "missing-ozon-performance.txt"))
+    monkeypatch.setenv(
+        "VITAL_SHEVRON_OZON_SELLER_CREDENTIALS_FILE",
+        str(tmp_path / "missing-ozon-seller.txt"),
+    )
+    monkeypatch.setenv(
+        "VITAL_SHEVRON_OZON_PERFORMANCE_CREDENTIALS_FILE",
+        str(tmp_path / "missing-ozon-performance.txt"),
+    )
+
+    assert load_ozon_seller_credentials() is None
+    assert load_ozon_performance_credentials() is None
+
+
+def test_takterra_ozon_token_files_are_not_used_as_fallback(monkeypatch, tmp_path: Path) -> None:
+    seller_file = tmp_path / "ozon-seller.txt"
+    performance_file = tmp_path / "ozon-performance.txt"
+    seller_file.write_text("wrong-client\nwrong-api-key\n", encoding="utf-8")
+    performance_file.write_text("wrong-client\nwrong-secret\n", encoding="utf-8")
+    monkeypatch.delenv("OZON_SELLER_CLIENT_ID", raising=False)
+    monkeypatch.delenv("OZON_SELLER_API_KEY", raising=False)
+    monkeypatch.delenv("OZON_PERFORMANCE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("OZON_PERFORMANCE_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("VITAL_SHEVRON_OZON_SELLER_CREDENTIALS_FILE", raising=False)
+    monkeypatch.delenv("VITAL_SHEVRON_OZON_PERFORMANCE_CREDENTIALS_FILE", raising=False)
+    monkeypatch.delenv("SELLER_OZON_SELLER_CREDENTIALS_FILE", raising=False)
+    monkeypatch.delenv("SELLER_OZON_PERFORMANCE_CREDENTIALS_FILE", raising=False)
+    monkeypatch.setenv("TAKTERRA_OZON_SELLER_CREDENTIALS_FILE", str(seller_file))
+    monkeypatch.setenv("TAKTERRA_OZON_PERFORMANCE_CREDENTIALS_FILE", str(performance_file))
 
     assert load_ozon_seller_credentials() is None
     assert load_ozon_performance_credentials() is None
@@ -98,12 +128,23 @@ def test_wb_token_file_reads_first_line(monkeypatch, tmp_path: Path) -> None:
     token_file = tmp_path / "wb-token.txt"
     token_file.write_text("secret-token\n", encoding="utf-8")
     monkeypatch.delenv("WB_API_TOKEN", raising=False)
-    monkeypatch.setenv("TAKTERRA_WB_TOKEN_FILE", str(token_file))
+    monkeypatch.setenv("VITAL_SHEVRON_WB_TOKEN_FILE", str(token_file))
 
     creds = load_wb_credentials()
 
     assert creds is not None
     assert creds.token == "secret-token"
+
+
+def test_takterra_token_file_is_not_used_as_fallback(monkeypatch, tmp_path: Path) -> None:
+    token_file = tmp_path / "wb-token.txt"
+    token_file.write_text("wrong-contour-token\n", encoding="utf-8")
+    monkeypatch.delenv("WB_API_TOKEN", raising=False)
+    monkeypatch.delenv("VITAL_SHEVRON_WB_TOKEN_FILE", raising=False)
+    monkeypatch.delenv("SELLER_WB_TOKEN_FILE", raising=False)
+    monkeypatch.setenv("TAKTERRA_WB_TOKEN_FILE", str(token_file))
+
+    assert load_wb_credentials() is None
 
 
 def test_review_reply_uses_feminine_product_phrase() -> None:
@@ -307,3 +348,180 @@ def test_wb_question_answer_uses_answer_object_payload(monkeypatch) -> None:
         "answer": {"text": "Ответ"},
         "state": "wbRu",
     }
+
+
+def test_prepare_reviews_questions_approved_builds_replies_package(tmp_path: Path) -> None:
+    pending_id = "reviews_questions_test_pending"
+    pending_dir = tmp_path / "pending" / pending_id
+    pending_dir.mkdir(parents=True)
+    (pending_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "pending_id": pending_id,
+                "run_id": "reviews_questions_test",
+                "status": "pending_owner_review",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    actions = [
+        {
+            "platform": "wb",
+            "source_type": "review",
+            "source_id": "feedback-1",
+            "action_type": "public_review_reply",
+            "state": "pending_owner_confirmation",
+            "draft_text": "Спасибо за отзыв!",
+        },
+        {
+            "platform": "ozon",
+            "source_type": "review",
+            "source_id": "review-1",
+            "action_type": "mark_review_viewed",
+            "state": "pending_owner_confirmation",
+            "draft_text": "",
+        },
+        {
+            "platform": "wb",
+            "source_type": "question",
+            "source_id": "question-1",
+            "action_type": "manual_question_review",
+            "state": "needs_owner_input",
+            "draft_text": "",
+        },
+    ]
+    (pending_dir / "draft_answers.json").write_text(
+        json.dumps({"run_id": "reviews_questions_test", "actions": actions}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    result = run_reviews_questions_prepare_approved(
+        data_dir=tmp_path,
+        source_pending=pending_id,
+        mode="replies-only",
+        approved_by="owner-test",
+    )
+
+    package_path = Path(result["artifacts"]["approved_package"])
+    package = json.loads(package_path.read_text(encoding="utf-8"))
+
+    assert result["selected_actions_count"] == 1
+    assert result["skipped_actions_count"] == 2
+    assert package["status"] == "approved"
+    assert package["schema_version"] == "approval-package/v1"
+    assert package["pending_id"] == pending_id
+    assert package["actions"][0]["approved"] is True
+    assert package["actions"][0]["state"] == "approved"
+    assert package["actions"][0]["approved_by"] == "owner-test"
+    assert _approved_actions(package_path) == package["actions"]
+
+
+def test_prepare_reviews_questions_approved_builds_mark_viewed_package(tmp_path: Path) -> None:
+    pending_id = "reviews_questions_test_pending"
+    pending_dir = tmp_path / "pending" / pending_id
+    pending_dir.mkdir(parents=True)
+    (pending_dir / "manifest.json").write_text(
+        json.dumps({"run_id": "reviews_questions_test"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    actions = [
+        {
+            "platform": "ozon",
+            "source_type": "review",
+            "source_id": "review-1",
+            "action_type": "mark_review_viewed",
+            "state": "pending_owner_confirmation",
+            "draft_text": "",
+        },
+        {
+            "platform": "wb",
+            "source_type": "review",
+            "source_id": "feedback-1",
+            "action_type": "public_review_reply",
+            "state": "pending_owner_confirmation",
+            "draft_text": "Спасибо!",
+        },
+    ]
+    (pending_dir / "draft_answers.json").write_text(
+        json.dumps({"actions": actions}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    result = run_reviews_questions_prepare_approved(
+        data_dir=tmp_path,
+        source_pending=pending_id,
+        mode="mark-viewed-only",
+    )
+
+    package = json.loads(Path(result["artifacts"]["approved_package"]).read_text(encoding="utf-8"))
+
+    assert [action["action_type"] for action in package["actions"]] == ["mark_review_viewed"]
+    assert result["selected_actions_count"] == 1
+
+
+def test_approved_actions_rejects_checksum_mismatch(tmp_path: Path) -> None:
+    pending_id = "reviews_questions_test_pending"
+    pending_dir = tmp_path / "pending" / pending_id
+    pending_dir.mkdir(parents=True)
+    (pending_dir / "manifest.json").write_text(
+        json.dumps({"run_id": "reviews_questions_test"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (pending_dir / "draft_answers.json").write_text(
+        json.dumps(
+            {
+                "actions": [
+                    {
+                        "platform": "wb",
+                        "source_type": "review",
+                        "source_id": "feedback-1",
+                        "action_type": "public_review_reply",
+                        "state": "pending_owner_confirmation",
+                        "draft_text": "Спасибо!",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    result = run_reviews_questions_prepare_approved(data_dir=tmp_path, source_pending=pending_id)
+    package_path = Path(result["artifacts"]["approved_package"])
+    package = json.loads(package_path.read_text(encoding="utf-8"))
+    package["actions"][0]["draft_text"] = "Другой текст"
+    package_path.write_text(json.dumps(package, ensure_ascii=False), encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="checksum mismatch"):
+        _approved_actions(package_path)
+
+
+def test_prepare_reviews_questions_approved_rejects_empty_selection(tmp_path: Path) -> None:
+    pending_id = "reviews_questions_test_pending"
+    pending_dir = tmp_path / "pending" / pending_id
+    pending_dir.mkdir(parents=True)
+    (pending_dir / "manifest.json").write_text(
+        json.dumps({"run_id": "reviews_questions_test"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (pending_dir / "draft_answers.json").write_text(
+        json.dumps(
+            {
+                "actions": [
+                    {
+                        "platform": "wb",
+                        "source_type": "question",
+                        "source_id": "question-1",
+                        "action_type": "manual_question_review",
+                        "state": "needs_owner_input",
+                        "draft_text": "",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="No approvable"):
+        run_reviews_questions_prepare_approved(data_dir=tmp_path, source_pending=pending_id)

@@ -37,23 +37,31 @@ data/catalog/unified/
 
 ```bash
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/pytest -q
-PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli --help
-PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli status-preflight --skip-lk
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli --help
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli status-preflight --skip-lk
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli runs list
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli runs latest --task status-preflight
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli tasks list
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli bot preview --message /help
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli bot poll-once --allowed-chat-id 123456789 --token-file /home/pavel/.secrets/vital_shevron_telegram_bot_token
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli bot poll-loop --live-today --live-status --allowed-chat-id 123456789 --max-iterations 1 --token-file /home/pavel/.secrets/vital_shevron_telegram_bot_token
 ```
 
 После получения API credentials:
 
 ```bash
-PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli fetch-catalog
-PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli daily-morning-report
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli fetch-catalog
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli build-unified-catalog
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli plan-internal-skus
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli daily-morning-report
 ```
 
 Сессии ЛК:
 
 ```bash
-PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli sessions status
-PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli sessions restart --marketplace ozon
-PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli install-session-systemd
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli sessions status
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli sessions restart --marketplace ozon
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli install-session-systemd
 ```
 
 ## Операционные инструкции
@@ -61,6 +69,14 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli i
 Основные постоянные инструкции находятся в `data/planning/`:
 
 - `status_preflight_runbook.md` - единая проверка состояния.
+- `run_manifest_runbook.md` - единый паспорт запусков task-runner и runtime-
+  индекс `data/runs/index.jsonl`.
+- `task_registry_runbook.md` - единый реестр задач для CLI, fresh-агентов и
+  будущего Telegram-бота.
+- `telegram_bot_mvp_runbook.md` - read-only Telegram MVP, preview CLI,
+  Telegram adapter и safe report attachment без write-операций через бот.
+- `workflow_runner_runbook.md` - единый read-only запуск live задач для
+  Telegram/timers через `TaskRegistry`, locks и `RunManifest`.
 - `lk_connection_runbook.md` - подключение ЛК Ozon/WB.
 - `session_manager_runbook.md` - управление LK-сессиями и восстановление.
 - `ozon_cabinet_map.md` - подробная карта ЛК Ozon.
@@ -92,9 +108,9 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli i
 
 ## Секреты
 
-Секреты задаются через `.env` и внешние файлы в `.sessions/`. Сами ключи,
-cookies, storage state и коды входа не должны попадать в код, документы, отчеты
-или git.
+Секреты задаются через `.env` и внешние файлы вне git/под `.sessions/`. Сами
+ключи, Telegram bot token, cookies, storage state и коды входа не должны
+попадать в код, документы, отчеты или git.
 
 Шаблон настроек:
 

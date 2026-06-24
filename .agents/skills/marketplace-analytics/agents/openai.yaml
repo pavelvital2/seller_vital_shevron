@@ -1,4 +1,4 @@
 interface:
-  display_name: "Marketplace Analytics"
-  short_description: "SEO, parser, pricing and ads analytics"
-  default_prompt: "Use $marketplace-analytics to run a read-only marketplace analytics workflow for Ozon/WB."
+  display_name: "Marketplace Router"
+  short_description: "Routes Ozon/WB tasks to narrow skills"
+  default_prompt: "Use $marketplace-analytics to choose the right Vital Shevron marketplace skill and runbook."

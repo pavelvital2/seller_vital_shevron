@@ -1,7 +1,7 @@
 from decimal import Decimal
 
-from takterra_agent.tasks.wb_actions_discount_plan import _header_index, _find_column
-from takterra_agent.tasks.wb_actions_discount_plan import ceil_percent_from_price, parse_scheme
+from seller_agent.tasks.wb_actions_discount_plan import _header_index, _find_column
+from seller_agent.tasks.wb_actions_discount_plan import ceil_percent_from_price, parse_scheme
 
 
 def test_parse_scheme_65_50_50() -> None:

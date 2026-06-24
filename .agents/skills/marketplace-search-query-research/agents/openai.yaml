@@ -1,0 +1,4 @@
+interface:
+  display_name: "Search Queries"
+  short_description: "Ozon/WB query demand and parser comparison"
+  default_prompt: "Use $marketplace-search-query-research to collect or analyze Ozon/WB search queries."

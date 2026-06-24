@@ -81,10 +81,10 @@ OZON_EXPECTED_STORE=Vital Shevron
 
 ```bash
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
-  -m takterra_agent.cli sessions status
+  -m seller_agent.cli sessions status
 
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
-  -m takterra_agent.cli status-preflight
+  -m seller_agent.cli status-preflight
 ```
 
 Не выводить cookies, storage state, auth headers, API tokens и коды входа.

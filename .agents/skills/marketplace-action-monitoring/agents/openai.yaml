@@ -1,0 +1,4 @@
+interface:
+  display_name: "Action Monitoring"
+  short_description: "Post-promotion baseline and product decisions"
+  default_prompt: "Use $marketplace-action-monitoring to monitor Ozon/WB promotion results after apply."

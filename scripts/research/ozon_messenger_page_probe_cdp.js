@@ -5,9 +5,13 @@ const fs = require('fs');
 const path = require('path');
 
 const { chromium } = require('../lib/playwright');
+const { assertOzonCdpContour } = require('../lib/ozon_cdp_guard');
 
 const projectRoot = path.resolve(__dirname, '..', '..');
 const cdpUrl = process.env.OZON_CDP_URL || 'http://127.0.0.1:9544';
+const expectedStore = process.env.OZON_EXPECTED_STORE || 'Vital Shevron';
+const expectedCdpPort = 9544;
+const expectedProfileDir = path.join(projectRoot, '.sessions', 'ozon', 'chrome-profile');
 const targetUrl = 'https://seller.ozon.ru/app/messenger?group=customers_v2';
 
 function parseArgs(argv) {
@@ -179,6 +183,12 @@ async function summarizeVisibleUi(page) {
 
   let page;
   try {
+    result.contourGuard = assertOzonCdpContour({
+      cdpUrl,
+      expectedPort: expectedCdpPort,
+      expectedProfileDir,
+      expectedStore,
+    });
     const browser = await chromium.connectOverCDP(cdpUrl, { timeout: 10000 });
     const context = browser.contexts()[0];
     if (!context) throw new Error('No browser context found in CDP session');

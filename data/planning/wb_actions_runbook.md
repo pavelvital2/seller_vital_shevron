@@ -18,14 +18,14 @@
 
 ```bash
 PYTHONPATH=src NODE_PATH=/home/Codex/agent-tools/node/node_modules \
-  /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli plan-wb-actions-discounts
+  /home/Codex/agent-tools/python/bin/python -m seller_agent.cli plan-wb-actions-discounts
 ```
 
 Если владелец отдельно попросил другую схему:
 
 ```bash
 PYTHONPATH=src NODE_PATH=/home/Codex/agent-tools/node/node_modules \
-  /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli plan-wb-actions-discounts --scheme 70-55-55
+  /home/Codex/agent-tools/python/bin/python -m seller_agent.cli plan-wb-actions-discounts --scheme 70-55-55
 ```
 
 Команда выполняет read-only/dry-run: читает активные акции и текущие цены,
@@ -72,6 +72,11 @@ apply_performed: false
 Причины по строкам:
 <reason>: <count>
 
+Бизнес-причины изменения скидки:
+- превышение порога <threshold>%: <count>
+- участие в акции с меньшей требуемой скидкой: <count>
+- отсутствие в активных акциях: <count>
+
 Акции:
 активные: <n>
 будущие: <n>
@@ -79,6 +84,22 @@ apply_performed: false
 Файлы отчета:
 <paths>
 ```
+
+В отчетах владельцу по WB акциям техническую колонку `Причина` нужно
+дополнительно переводить в понятные бизнес-причины:
+
+- `превышение порога 70%` - расчетная скидка до порога выше разрешенного
+  порога схемы, поэтому применяется fallback `55%`;
+- `участие в акции с меньшей требуемой скидкой` - товар есть в активной акции
+  WB, но для участия достаточно меньшей скидки, чем стоит сейчас, поэтому
+  расчет предлагает снизить скидку;
+- `отсутствие в активных акциях` - товар не найден в активных акциях WB; если
+  текущая скидка уже равна fallback `55%`, строка должна быть показана как
+  `не менять`, а не как изменение.
+
+Если причина `отсутствие в активных акциях` не создает строк к изменению, это
+все равно нужно явно показать в отчете: сколько таких товаров найдено и почему
+они не попали в payload.
 
 ## Apply
 
@@ -97,7 +118,7 @@ read-only -> dry-run -> review -> approved -> apply -> verify -> result
 
 ```bash
 PYTHONPATH=src NODE_PATH=/home/Codex/agent-tools/node/node_modules \
-  /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli apply-wb-actions-discounts \
+  /home/Codex/agent-tools/python/bin/python -m seller_agent.cli apply-wb-actions-discounts \
   --plan-run-id <approved_wb_actions_discount_plan_run_id> \
   --confirmed-by-user
 ```
@@ -106,12 +127,21 @@ Apply выполняет:
 
 - свежий `status-preflight`;
 - свежий dry-run WB по схеме из утвержденного плана;
-- drift-check payload строк `nmID + price + discount`;
+- partial drift-check payload строк `nmID + price + discount`;
+- upload только строк, где `nmID + price + discount` совпали между
+  согласованным и свежим расчетом;
+- строки, где изменились цена, скидка или состав payload, не загружаются
+  автоматически, сохраняются в `processed/skipped_drift_rows.json` и
+  выводятся в итоговом отчете как требующие нового согласования;
 - upload в официальный WB endpoint
   `https://discounts-prices-api.wildberries.ru/api/v2/upload/task`;
 - проверку статуса upload через history/buffer endpoints;
 - сохранение `summary.json`, `wb_actions_discount_apply_result.md`,
   `drift_check.json`, отправленного payload и WB upload response.
+
+Если после fresh dry-run изменились только отдельные строки, нельзя
+останавливать весь пакет: неизменившиеся строки применяются, изменившиеся
+строки пропускаются и остаются на новый review/approval.
 
 ## Штатный apply 2026-06-16
 
@@ -155,7 +185,7 @@ Apply выполняет:
 
    ```bash
    PYTHONPATH=src NODE_PATH=/home/Codex/agent-tools/node/node_modules \
-     /home/Codex/agent-tools/python/bin/python -m takterra_agent.cli plan-wb-actions-discounts --scheme 70-55-55
+     /home/Codex/agent-tools/python/bin/python -m seller_agent.cli plan-wb-actions-discounts --scheme 70-55-55
    ```
 
 4. Если fresh dry-run успешен и расчет не изменился критично, повторить apply
@@ -173,3 +203,61 @@ Apply выполняет:
   `added=[]`, `removed=[]`;
 - upload ID: `167128951`;
 - verify: `248/248` successful goods.
+
+## Штатный apply 2026-06-20
+
+Подтвержденный сценарий по схеме `70-55-55`:
+
+- approved dry-run: `wb_actions_discount_plan_70-55-55_20260620T073712`;
+- apply: `wb_actions_discount_apply_70-55-55_20260620T075506`;
+- fresh preflight: `status_preflight_20260620T075506`, статус `ok`;
+- fresh dry-run:
+  `wb_actions_discount_plan_70-55-55_20260620T075546`;
+- drift-check: `partial_apply_unchanged_rows`, `approved_payload_rows=276`,
+  `fresh_payload_rows=276`, `eligible_payload_rows=276`, skipped/drift `0`;
+- отправлено в WB: `276` строк;
+- WB upload ID: `167765884`;
+- verify: `ok`, history показал `276/276` successful goods;
+- отчет результата:
+  `data/runs/2026-06-20/wb_actions_discount_apply_70-55-55_20260620T075506/wb_actions_discount_apply_result.md`.
+
+Перед apply по этому плану владелец запросил отчет с бизнес-причинами
+изменения скидки. Подтвержденные причины по payload:
+
+- превышение порога `70%`, привести к fallback `55%`: `82`;
+- участие в акции с меньшей требуемой скидкой: `194`;
+- отсутствие в активных акциях: `0` строк к изменению, потому что найденные
+  `74` товара уже имели fallback-скидку `55%`.
+
+Повторный apply по `wb_actions_discount_plan_70-55-55_20260620T073712` не
+выполнять: idempotency marker сохранен в `data/approved/applied/`.
+
+## Штатный apply 2026-06-23
+
+Подтвержденный сценарий по схеме `70-55-55`:
+
+- approved dry-run:
+  `wb_actions_discount_plan_70-55-55_actions_check_20260623`;
+- apply:
+  `wb_actions_discount_apply_70-55-55_actions_check_20260623`;
+- fresh preflight: `status_preflight_20260623T064823`, статус `ok`;
+- fresh dry-run:
+  `wb_actions_discount_plan_70-55-55_20260623T064903`;
+- drift-check: `partial_apply_unchanged_rows`, `approved_payload_rows=77`,
+  `fresh_payload_rows=77`, `eligible_payload_rows=77`, skipped/drift `0`;
+- отправлено в WB: `77` строк;
+- WB upload ID: `168439528`;
+- verify: `ok`, history показал `77/77` successful goods;
+- отчет результата:
+  `data/runs/2026-06-23/wb_actions_discount_apply_70-55-55_actions_check_20260623/wb_actions_discount_apply_result.md`.
+
+Подтвержденные причины по payload:
+
+- превышение порога `70%`, привести к fallback `55%`: `8`;
+- участие в акции с меньшей требуемой скидкой: `69`;
+- отсутствие в активных акциях: `0` строк к изменению, потому что найденные
+  `74` товара уже имели fallback-скидку `55%`.
+
+Повторный apply по
+`wb_actions_discount_plan_70-55-55_actions_check_20260623` не выполнять:
+idempotency marker сохранен в `data/approved/applied/`.

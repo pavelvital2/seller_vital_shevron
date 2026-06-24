@@ -4,8 +4,8 @@ from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 
-from takterra_agent.sessions.manager import install_systemd_units, restore_ozon_session
-from takterra_agent.sessions.state import SESSION_DEFINITIONS, SessionDefinition, parse_timestamp, refresh_freshness
+from seller_agent.sessions.manager import install_systemd_units, restore_ozon_session
+from seller_agent.sessions.state import SESSION_DEFINITIONS, SessionDefinition, parse_timestamp, refresh_freshness
 
 
 def test_parse_timestamp_accepts_z_suffix() -> None:
