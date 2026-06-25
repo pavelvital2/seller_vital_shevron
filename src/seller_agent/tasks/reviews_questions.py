@@ -160,6 +160,15 @@ def _list_count(*values: Any) -> int:
     return 0
 
 
+def _single_media_present(*values: Any) -> int:
+    for value in values:
+        if isinstance(value, str) and value.strip():
+            return 1
+        if isinstance(value, dict) and value:
+            return 1
+    return 0
+
+
 def _review_media_fields(item: dict[str, Any]) -> dict[str, Any]:
     photos_count = _int_value(
         item.get("photos_count")
@@ -174,9 +183,21 @@ def _review_media_fields(item: dict[str, Any]) -> dict[str, Any]:
         or item.get("video_count")
         or item.get("videoCount")
         or _list_count(item.get("videos"), item.get("videoLinks"), item.get("video_links"))
+        or _single_media_present(item.get("video"), item.get("videoLink"), item.get("video_link"))
     )
     media_urls: list[str] = []
-    for key in ("photos", "photoLinks", "photo_links", "images", "videos", "videoLinks", "video_links"):
+    for key in (
+        "photos",
+        "photoLinks",
+        "photo_links",
+        "images",
+        "videos",
+        "video",
+        "videoLinks",
+        "videoLink",
+        "video_links",
+        "video_link",
+    ):
         value = item.get(key)
         if isinstance(value, list):
             for row in value:
@@ -186,6 +207,12 @@ def _review_media_fields(item: dict[str, Any]) -> dict[str, Any]:
                     url = row.get("url") or row.get("src") or row.get("link")
                     if isinstance(url, str) and url.startswith(("http://", "https://")):
                         media_urls.append(url)
+        elif isinstance(value, str) and value.startswith(("http://", "https://")):
+            media_urls.append(value)
+        elif isinstance(value, dict):
+            url = value.get("url") or value.get("src") or value.get("link")
+            if isinstance(url, str) and url.startswith(("http://", "https://")):
+                media_urls.append(url)
     return {
         "photos_count": photos_count,
         "videos_count": videos_count,

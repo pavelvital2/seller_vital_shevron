@@ -116,6 +116,13 @@
   запросов Ozon/WB из ЛК/API.
 - `data/planning/seo_audit_runbook.md` - read-only SEO-аудит карточек Ozon/WB
   на основе спроса, parser-позиций и карточного контента.
+- `data/planning/card_content_standards_runbook.md` - постоянный стандарт
+  заполнения карточек Ozon/WB после doc-review: названия, описания,
+  характеристики, фото, хештеги, группировка и mapping в master product
+  passport.
+- `data/planning/master_product_passport_runbook.md` - архитектура целевого
+  внутреннего паспорта товара, порядок запуска `design-product-passport`,
+  generated artifacts и маппинг внутренних полей в Ozon/WB.
 - `data/planning/product_card_work_runbook.md` - обязательный порядок
   покарточной работы: фото-аудит всех фото, липучка/нашивки, размеры, вес,
   упаковка, материал/состав, описание и правила review перед изменениями

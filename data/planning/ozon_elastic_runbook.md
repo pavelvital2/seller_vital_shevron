@@ -419,6 +419,58 @@ idempotency marker сохранен в `data/approved/applied/`.
 Повторный apply по `ozon_elastic_plan_actions_check_20260624` не выполнять:
 idempotency marker сохранен в `data/approved/applied/`.
 
+## Проверка акций 2026-06-25
+
+Read-only/dry-run проверка без применения изменений:
+
+- preflight: `status_preflight_20260625T074528`, статус `ok`;
+- Ozon Elastic dry-run: `ozon_elastic_plan_actions_check_20260625`;
+- action: `Эластичный бустинг. Без ограничения срока действия`,
+  `action_id=1977747`;
+- результат Ozon Elastic: активных строк `504`, кандидатов `41`, добавить
+  `4`, обновить цену `499`, из них с изменившейся ценой `57`, снять `5`,
+  skip candidates `37`, blocked `0`;
+- WB actions dry-run: `wb_actions_discount_plan_70-55-55_actions_check_20260625`;
+- результат WB: товаров `432`, изменений к загрузке `0`, в акциях `358`,
+  вне акций `74`, threshold triggered `82`;
+- Superboosting check: `ozon_superboosting_check_20260625T0746`, активных
+  товаров `91/91`, отсутствующих `0`, лишних `0`, расхождений по цене `0`;
+- Superboosting за полный день `2026-06-24`: заказано `19` шт.,
+  выручка `10911.00` руб.; `2026-06-25` частичный день на момент проверки:
+  `3` шт., `1377.00` руб.;
+- предварительная классификация Superboosting: `keep` - `15`, `watch` - `2`,
+  `remove_candidate` - `74`, `blocked` - `0`;
+- сводный отчет:
+  `data/runs/2026-06-25/actions_check_20260625T0758/actions_check_report_2026-06-25.md`.
+
+Технический нюанс Ozon Analytics: при проверке Superboosting 2026-06-25
+запрос `/v1/analytics/data` с фильтром `{"key":"sku","op":"IN","value":[...]}`
+вернул `400` из-за массива в строковом поле. Для контроля Superboosting
+использовать постраничную выгрузку `dimensions=["sku","day"]` без фильтра и
+локальную фильтрацию нужных SKU, пока в проекте не подтвержден корректный
+формат фильтра списка SKU для этого метода.
+
+Подтвержденный apply Ozon Elastic 2026-06-25:
+
+- approved dry-run: `ozon_elastic_plan_actions_check_20260625`;
+- apply: `ozon_elastic_apply_actions_check_20260625`;
+- fresh preflight: `status_preflight_20260625T080500`, статус `ok`;
+- fresh dry-run перед записью: `ozon_elastic_plan_20260625T080539`;
+- drift-check: `partial_apply_unchanged_rows`;
+- применено: `54` строки activate/update и `5` строк deactivate;
+- Ozon API rejected: `0`;
+- verify: `ok`, расхождений по ценам `0`, снятых строк, оставшихся в акции,
+  `0`;
+- skipped/drift: `12` строк по `9` товарам:
+  `pzol0009`, `back0009`, `loop0017`, `pzmh0046`, `pzmh0057`,
+  `pzmh0058`, `pict0096`, `pzmh0078`, `loop0030`;
+- skipped/drift строки не применять без отдельного fresh review/approval;
+- после apply отдельно проверен `Супербустинг`:
+  `ozon_superboosting_verify_after_elastic_20260625T0807`, активных товаров
+  `91/91`, отсутствующих `0`, лишних `0`, расхождений по action price `0`;
+- отчет результата:
+  `data/runs/2026-06-25/ozon_elastic_apply_actions_check_20260625/ozon_elastic_apply_result.md`.
+
 ## Штатный apply 2026-06-16
 
 Последний подтвержденный штатный сценарий:

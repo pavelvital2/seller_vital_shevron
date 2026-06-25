@@ -270,6 +270,50 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_mapping=True,
     ),
     RegisteredTask(
+        name="card-content-parameter-inventory",
+        command="card-content-parameter-inventory",
+        title="Card content parameter inventory",
+        description=(
+            "Build read-only inventory of actually filled Ozon/WB card parameters "
+            "and marketplace category/subject schemas before product-passport design."
+        ),
+        mode="read_only",
+        risk="low",
+        marketplaces=("ozon", "wb"),
+        runbook_path="data/planning/product_card_work_runbook.md",
+        requires_credentials=True,
+        requires_mapping=True,
+    ),
+    RegisteredTask(
+        name="product-passport-design",
+        command="design-product-passport",
+        title="Design master product passport",
+        description=(
+            "Build read-only master product passport schema and internal field "
+            "mapping to Ozon attributes and WB characteristics before mass card audits."
+        ),
+        mode="read_only",
+        risk="low",
+        marketplaces=("ozon", "wb"),
+        runbook_path="data/planning/master_product_passport_runbook.md",
+        requires_mapping=True,
+    ),
+    RegisteredTask(
+        name="card-content-audit-packages",
+        command="card-content-audit-packages",
+        title="Card content audit packages",
+        description=(
+            "Build saved read-only source packages for card audits from backlog, "
+            "Ozon/WB snapshots and product-passport schema. Visual audit and "
+            "recommendations remain pending until an agent inspects all photos."
+        ),
+        mode="read_only",
+        risk="low",
+        marketplaces=("ozon", "wb"),
+        runbook_path="data/planning/product_card_work_runbook.md",
+        requires_mapping=True,
+    ),
+    RegisteredTask(
         name="pricing-status",
         command="pricing-status",
         title="Pricing status",

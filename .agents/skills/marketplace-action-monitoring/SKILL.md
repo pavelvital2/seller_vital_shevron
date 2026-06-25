@@ -18,6 +18,10 @@ description: "Use for Ozon/Wildberries marketplace action monitoring after promo
 - For Ozon `STOCK_DISCOUNT` actions such as `Супербустинг`, keep them separate
   from Elastic and compare action price against min price and the previous
   Elastic/action price.
+- For Ozon Superboosting sales control, if `/v1/analytics/data` rejects a
+  `sku IN [list]` filter, fetch `dimensions=["sku","day"]` by pages without
+  the SKU filter and filter the needed SKU list locally. This was confirmed on
+  2026-06-25 by a 400 response for array `filters.value`.
 
 ## Baseline Pattern
 

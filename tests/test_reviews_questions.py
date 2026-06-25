@@ -101,6 +101,33 @@ def test_normalize_wb_feedback_and_draft_positive_empty_review() -> None:
     assert actions[0]["state"] == "pending_owner_confirmation"
 
 
+def test_normalize_wb_feedback_detects_photo_links_and_single_video() -> None:
+    item = normalize_wb_feedback(
+        {
+            "id": "feedback-media",
+            "text": "",
+            "productValuation": 5,
+            "answer": None,
+            "photoLinks": ["https://example.test/review-photo.jpg"],
+            "video": {"link": "https://example.test/review-video.mp4"},
+            "productDetails": {
+                "nmId": 123,
+                "supplierArticle": "chev_test0001",
+                "productName": "Шеврон на липучке тестовый",
+            },
+        }
+    )
+
+    assert item["has_media"] is True
+    assert item["photos_count"] == 1
+    assert item["videos_count"] == 1
+    assert item["media_urls"] == [
+        "https://example.test/review-photo.jpg",
+        "https://example.test/review-video.mp4",
+    ]
+    assert classify_item(item) == "needs_media_review_for_public_reply"
+
+
 def test_normalize_wb_question_quantity_requires_owner_input() -> None:
     item = normalize_wb_question(
         {

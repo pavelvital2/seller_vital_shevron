@@ -106,6 +106,25 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   `stock_signals.csv`, `parser_signals.csv`, `all_signals.csv` и runtime
   report. Опция `--skip-api` оставляет только локальный parser-слой без
   обращений к Ozon/WB API.
+- `card-content-parameter-inventory` - строит read-only инвентаризацию
+  параметров карточек перед мастер-паспортом товара: что фактически заполнено
+  в Ozon/WB snapshots и какие атрибуты доступны/обязательны по схемам
+  площадок. Использует Ozon `POST /v1/description-category/attribute` и WB
+  `GET /content/v2/object/charcs/{subjectId}`. Пишет CSV в
+  `data/catalog/content/parameter_inventory/` и runtime report. Это не
+  визуальный аудит и не изменение карточек.
+- `design-product-passport` - строит read-only структуру полноценного
+  master product passport, JSON Schema и маппинг внутренних полей в Ozon
+  attributes / WB characteristics по свежей parameter inventory. Пишет
+  generated artifacts в `data/catalog/content/product_passport/` и runtime
+  report. Это не карточная рекомендация, не dry-run payload и не write.
+- `card-content-audit-packages` - строит сохраненные read-only source
+  packages для карточного аудита из backlog, Ozon/WB snapshots и master
+  product passport schema. Пишет `package_index.csv/json`,
+  `audit_package.json`, `audit_report.md`, `photos.html` и runtime report.
+  Это не визуальный аудит, не рекомендация и не write: каждый пакет должен
+  оставаться со статусами `visual_audit_status=pending_agent_review` и
+  `recommendation_status=not_prepared`, пока агент не откроет все фото.
 - `pricing-status` - строит read-only статус цен и готовности маржинального
   анализа по unified catalog и локальным или fresh API Ozon/WB price snapshots.
   Опция `--refresh-api` обращается только к read-only price endpoints и
@@ -132,6 +151,9 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 - `fetch-card-content`;
 - `collect-card-signals`;
 - `card-content-audit-backlog`;
+- `card-content-parameter-inventory`;
+- `design-product-passport`;
+- `card-content-audit-packages`;
 - `status-preflight`;
 - `daily-morning-report`;
 - `sessions`;

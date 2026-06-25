@@ -86,6 +86,26 @@
   текущие остатки и latest parser-видимость; команда `collect-card-signals`
   пишет `data/catalog/content/signals/*.csv` и runtime raw/summary в
   `data/runs/<date>/<run_id>/`.
+- `src/seller_agent/tasks/card_content_parameter_inventory.py` - read-only
+  инвентаризация параметров карточек перед полноценным мастер-паспортом:
+  фактически заполненные Ozon-атрибуты/WB-характеристики из snapshots и
+  схемы категорий/предметов через Ozon
+  `/v1/description-category/attribute` и WB
+  `/content/v2/object/charcs/{subjectId}`; команда
+  `card-content-parameter-inventory` пишет CSV в
+  `data/catalog/content/parameter_inventory/` и runtime report.
+- `src/seller_agent/tasks/product_passport_design.py` - read-only дизайн
+  полноценного master product passport: поля паспорта, JSON Schema и маппинг
+  внутренних полей в Ozon attributes / WB characteristics по свежей parameter
+  inventory; команда `design-product-passport` пишет generated artifacts в
+  `data/catalog/content/product_passport/` и runtime report.
+- `src/seller_agent/tasks/card_content_audit_packages.py` - read-only
+  generator сохраненных карточных audit packages из backlog, Ozon/WB snapshots
+  и master product passport schema; команда `card-content-audit-packages`
+  пишет `data/catalog/content/card_audit_packages/<run_id>/package_index.*`,
+  `audit_package.json`, `audit_report.md`, `photos.html` и `RunManifest`.
+  Визуальный аудит и рекомендации остаются pending до ручного просмотра фото
+  агентом.
 - `src/seller_agent/tasks/pricing_status.py` - read-only статус цен и
   готовности маржинального анализа: соединяет unified catalog с локальными или
   fresh API Ozon/WB price snapshots, Ozon Elastic dry-run и WB actions dry-run,
@@ -199,8 +219,9 @@ Ozon CDP port по умолчанию: `9544`.
 - `data/catalog/content/` - generated read-only content master и content audit
   для будущей унификации названий, описаний, характеристик, фото и SEO;
   содержит `content_master.*`, `content_audit.*`, `card_content_index.*` и
-  `card_content_audit_backlog.*`, generated card snapshots; не коммитить,
-  кроме `README.md`.
+  `card_content_audit_backlog.*`, generated card snapshots и
+  `parameter_inventory/*.csv`, `product_passport/*`,
+  `card_audit_packages/<run_id>/*`; не коммитить, кроме `README.md`.
 - `data/runs/` - runtime reports, не коммитить.
 - `data/runs/index.jsonl` - runtime-индекс `RunManifest`, не коммитить.
 - `data/pending/` - pending packages перед approval, не коммитить.
@@ -261,6 +282,13 @@ Ozon CDP port по умолчанию: `9544`.
 - `data/planning/wb_parser_positions_runbook.md`
 - `data/planning/search_queries_runbook.md`
 - `data/planning/seo_audit_runbook.md`
+- `data/planning/card_content_standards_runbook.md` - постоянный стандарт
+  заполнения карточек Ozon/WB после doc-review: названия, описания,
+  характеристики, фото, хештеги, группировка и mapping в master product
+  passport.
+- `data/planning/master_product_passport_runbook.md` - архитектура целевого
+  внутреннего паспорта товара, порядок запуска `design-product-passport`,
+  generated artifacts и маппинг внутренних полей в Ozon/WB.
 - `data/planning/product_card_work_runbook.md` - обязательная инструкция
   покарточной работы: просмотр всех фото, описание изображения/цветов/фона,
   правила липучки и пришивных нашивок, размеры/вес/упаковка,

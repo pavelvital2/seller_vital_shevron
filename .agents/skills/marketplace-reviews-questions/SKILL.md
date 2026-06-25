@@ -19,6 +19,9 @@ description: "Use for Ozon/Wildberries reviews and questions workflows: read-onl
 - Inspect attached media when links/previews are available; if media cannot be
   inspected, state that limitation.
 - Send review media that affects reply approval to the owner in Telegram.
+- For WB reviews, media can be present directly in Feedbacks API fields such as
+  `photoLinks` and `video`/`videos`/`videoLinks`; treat these as media evidence
+  and send/download them for owner approval when present.
 
 ## Source Routes
 

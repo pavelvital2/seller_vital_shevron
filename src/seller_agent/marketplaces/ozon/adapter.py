@@ -140,6 +140,24 @@ class OzonSellerAdapter:
 
         return items
 
+    def fetch_description_category_attributes(
+        self,
+        *,
+        description_category_id: int,
+        type_id: int,
+        language: str = "RU",
+    ) -> list[dict[str, Any]]:
+        data = self.post(
+            "/v1/description-category/attribute",
+            {
+                "description_category_id": description_category_id,
+                "type_id": type_id,
+                "language": language,
+            },
+        )
+        result = data.get("result") if isinstance(data, dict) else []
+        return result if isinstance(result, list) else []
+
     def fetch_product_info_prices(
         self,
         *,

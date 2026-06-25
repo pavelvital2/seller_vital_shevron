@@ -20,6 +20,8 @@ from seller_agent.config import load_credentials
 from seller_agent.core.run_manifest import find_run, latest_run, list_runs
 from seller_agent.tasks.approvals import run_approvals_close, run_approvals_status
 from seller_agent.tasks.card_content_audit_backlog import run_card_content_audit_backlog
+from seller_agent.tasks.card_content_audit_packages import run_card_content_audit_packages
+from seller_agent.tasks.card_content_parameter_inventory import run_card_content_parameter_inventory
 from seller_agent.tasks.card_content_signals import run_collect_card_signals
 from seller_agent.tasks.card_content_snapshot import run_card_content_snapshot
 from seller_agent.tasks.catalog_fetch import run_catalog_fetch
@@ -33,6 +35,7 @@ from seller_agent.tasks.ozon_elastic_apply import run_ozon_elastic_apply
 from seller_agent.tasks.ozon_cpc_optimization_plan import CpcOptimizationThresholds, run_ozon_cpc_optimization_plan
 from seller_agent.tasks.ozon_elastic_plan import run_ozon_elastic_plan
 from seller_agent.tasks.pricing_status import run_pricing_status
+from seller_agent.tasks.product_passport_design import run_product_passport_design
 from seller_agent.tasks.reviews_questions import (
     run_reviews_questions,
     run_reviews_questions_apply,
@@ -535,6 +538,122 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         help="Explicit parser-derived CSV to normalize. Can be passed multiple times.",
+    )
+
+    card_params = subparsers.add_parser(
+        "card-content-parameter-inventory",
+        help="Build read-only inventory of Ozon/WB card parameters and category schemas.",
+    )
+    card_params.add_argument(
+        "--data-dir",
+        default="data",
+        help="Project data directory.",
+    )
+    card_params.add_argument(
+        "--run-id",
+        default=None,
+        help="Optional stable run id.",
+    )
+    card_params.add_argument(
+        "--content-dir",
+        default=None,
+        help="Card content snapshot directory. Defaults to data/catalog/content.",
+    )
+    card_params.add_argument(
+        "--output-dir",
+        default=None,
+        help="Parameter inventory output directory. Defaults to data/catalog/content/parameter_inventory.",
+    )
+    card_params.add_argument(
+        "--skip-schema",
+        action="store_true",
+        help="Do not call Ozon/WB schema APIs; summarize only current local snapshots.",
+    )
+
+    passport_design = subparsers.add_parser(
+        "design-product-passport",
+        help="Build read-only master product passport schema and Ozon/WB attribute mapping.",
+    )
+    passport_design.add_argument(
+        "--data-dir",
+        default="data",
+        help="Project data directory.",
+    )
+    passport_design.add_argument(
+        "--run-id",
+        default=None,
+        help="Optional stable run id.",
+    )
+    passport_design.add_argument(
+        "--parameter-inventory-dir",
+        default=None,
+        help="Parameter inventory directory. Defaults to data/catalog/content/parameter_inventory.",
+    )
+    passport_design.add_argument(
+        "--output-dir",
+        default=None,
+        help="Product passport design output directory. Defaults to data/catalog/content/product_passport.",
+    )
+
+    card_audit_packages = subparsers.add_parser(
+        "card-content-audit-packages",
+        help="Build saved read-only card audit source packages from backlog and snapshots.",
+    )
+    card_audit_packages.add_argument(
+        "--data-dir",
+        default="data",
+        help="Project data directory.",
+    )
+    card_audit_packages.add_argument(
+        "--run-id",
+        default=None,
+        help="Optional stable run id.",
+    )
+    card_audit_packages.add_argument(
+        "--backlog-path",
+        default=None,
+        help="Backlog CSV. Defaults to data/catalog/content/card_content_audit_backlog.csv.",
+    )
+    card_audit_packages.add_argument(
+        "--content-master-path",
+        default=None,
+        help="Content master CSV. Defaults to data/catalog/content/content_master.csv.",
+    )
+    card_audit_packages.add_argument(
+        "--ozon-content-path",
+        default=None,
+        help="Ozon card content JSON. Defaults to data/catalog/content/ozon_card_content.json.",
+    )
+    card_audit_packages.add_argument(
+        "--wb-content-path",
+        default=None,
+        help="WB card content JSON. Defaults to data/catalog/content/wb_card_content.json.",
+    )
+    card_audit_packages.add_argument(
+        "--passport-schema-path",
+        default=None,
+        help="Master product passport JSON schema path.",
+    )
+    card_audit_packages.add_argument(
+        "--attribute-mapping-path",
+        default=None,
+        help="Product passport attribute mapping CSV path.",
+    )
+    card_audit_packages.add_argument(
+        "--output-dir",
+        default=None,
+        help="Output package directory. Defaults to data/catalog/content/card_audit_packages/<run-id>.",
+    )
+    card_audit_packages.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Optional package limit for smoke checks or batch work.",
+    )
+    card_audit_packages.add_argument(
+        "--business-priority",
+        default="now",
+        help="Backlog business_priority filter. Use 'all' to include all rows.",
     )
 
     pricing_status = subparsers.add_parser(
@@ -1391,6 +1510,46 @@ def main(argv: list[str] | None = None) -> int:
             skip_api=args.skip_api,
             parser_source=args.parser_source,
             parser_paths=[Path(path) for path in args.parser_csv],
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
+
+    if args.command == "card-content-parameter-inventory":
+        result = run_card_content_parameter_inventory(
+            credentials=None if args.skip_schema else load_credentials(),
+            data_dir=Path(args.data_dir),
+            content_dir=Path(args.content_dir) if args.content_dir else None,
+            output_dir=Path(args.output_dir) if args.output_dir else None,
+            run_id=args.run_id,
+            fetch_schema=not args.skip_schema,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
+
+    if args.command == "design-product-passport":
+        result = run_product_passport_design(
+            data_dir=Path(args.data_dir),
+            parameter_inventory_dir=Path(args.parameter_inventory_dir) if args.parameter_inventory_dir else None,
+            output_dir=Path(args.output_dir) if args.output_dir else None,
+            run_id=args.run_id,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
+
+    if args.command == "card-content-audit-packages":
+        business_priority = None if args.business_priority == "all" else args.business_priority
+        result = run_card_content_audit_packages(
+            data_dir=Path(args.data_dir),
+            backlog_path=Path(args.backlog_path) if args.backlog_path else None,
+            content_master_path=Path(args.content_master_path) if args.content_master_path else None,
+            ozon_content_path=Path(args.ozon_content_path) if args.ozon_content_path else None,
+            wb_content_path=Path(args.wb_content_path) if args.wb_content_path else None,
+            passport_schema_path=Path(args.passport_schema_path) if args.passport_schema_path else None,
+            attribute_mapping_path=Path(args.attribute_mapping_path) if args.attribute_mapping_path else None,
+            output_dir=Path(args.output_dir) if args.output_dir else None,
+            run_id=args.run_id,
+            limit=args.limit,
+            business_priority=business_priority,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["overall_status"] in {"ok", "warning"} else 2

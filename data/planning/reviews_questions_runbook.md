@@ -225,11 +225,43 @@ NODE_PATH=/home/Codex/agent-tools/node/node_modules \
   могут быть имя покупателя, номер заказа, chat URL и user id. В Telegram
   отправлять только сами фото/видео, нужные для согласования ответа, и краткое
   описание без закрытых данных покупателя.
+- Для WB-отзывов официальный Feedbacks API может отдавать медиа прямо в списке
+  отзывов: `photoLinks` для фото и `video`/`videos`/`videoLinks` для видео.
+  В нормализаторе эти поля должны попадать в `photos_count`, `videos_count`,
+  `has_media` и `media_urls`. Если `has_media=true`, отзыв нельзя закрывать
+  без медиа-review: нужно показать медиа владельцу или явно указать, почему
+  медиа не удалось скачать/отправить. Если `photoLinks=null` и `video=null`,
+  медиа в конкретном WB-отзыве по API не подтверждено.
 - Если после apply появился новый Ozon-отзыв без текста, которого не было в
   approved-пакете, его можно только вынести в новый отчет на согласование.
   Нельзя автоматически отмечать его просмотренным в рамках старого approval.
 
 ## Проверенные операции
+
+### Штатный apply 2026-06-25
+
+- Pending-пакет:
+  `data/pending/reviews_questions_20260625T080630_pending`.
+- Approved-пакет:
+  `data/approved/reviews_questions_20260625T080630_pending_approved/approved_apply_plan.json`.
+- Apply: `reviews_questions_apply_20260625T082620`.
+- Результат apply: WB ответы `2/2`, WB вопросы `0/0`, Ozon публичные ответы
+  `2/2`, Ozon отметки просмотренным `50/50`.
+- Ozon счетчик перед/после: `NOT_VIEWED 52 -> 0`, `PROCESSED 2629 -> 2631`,
+  `VIEWED 4090 -> 4140`.
+- Контрольный read-only: `reviews_questions_verify_20260625T0827`.
+- Verify: `items_count=0`, `actions_count=0`; WB Feedbacks API вернул `0`
+  отзывов/вопросов к обработке, Ozon LK/CDP fallback вернул `0` отзывов и `0`
+  вопросов к обработке.
+- Нулевой pending контрольного verify
+  `reviews_questions_verify_20260625T0827_pending` закрыт как
+  `no_actions_verify`, чтобы он не висел в статусах на согласование.
+- Медиа WB в исходном pending-пакете: оба WB-отзыва имели `photoLinks=null` и
+  `video=null`, поэтому медиа по ним не подтверждено и отправлять в Telegram
+  было нечего.
+- Ограничение источника: официальный Ozon Review API `/v1/review/count` и
+  `/v1/review/list` вернул `HTTP 403: not available with existing
+  subscription`, поэтому Ozon проверен через LK/CDP fallback.
 
 ### Штатный apply 2026-06-23
 
