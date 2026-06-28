@@ -91,6 +91,89 @@ def test_seo_query_pack_builds_exact_theme_cluster(tmp_path: Path) -> None:
     ]
 
 
+def test_seo_query_pack_suppresses_sleeve_seo_for_thematic_nr_chevron(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    content_path = data_dir / "catalog" / "content" / "content_master.csv"
+    query_path = data_dir / "queries.json"
+    _write_csv(
+        content_path,
+        [
+            {
+                "internal_product_id": "p1",
+                "internal_sku": "chev_nr_bpla_pict0028",
+                "product_group": "chev",
+                "product_name": "Шеврон БПЛА Смерть сходящая с небес",
+                "marketplace_presence": "ozon_only",
+                "mapping_status": "ozon_only",
+            }
+        ],
+    )
+    _write_json(
+        query_path,
+        [
+            {"marketplace": "ozon", "query": "шеврон бпла", "popularity": 268, "seed_query": "шеврон бпла"},
+            {"marketplace": "ozon", "query": "шеврон бпла на рукав", "popularity": 111, "seed_query": "шеврон"},
+        ],
+    )
+
+    result = build_seo_query_pack(
+        data_dir=data_dir,
+        content_master_path=Path("catalog/content/content_master.csv"),
+        query_source_paths=[Path("queries.json")],
+        output_dir=data_dir / "catalog/content/seo_query_pack",
+        run_id="seo_pack_test_bpla_nr",
+    )
+
+    rows = _read_csv(Path(result["artifacts"]["card_seo_targets_csv"]))
+    target_json = json.loads(Path(result["artifacts"]["card_seo_targets_json"]).read_text(encoding="utf-8"))[0]
+    assert result["status_counts"] == {"ready": 1}
+    assert rows[0]["primary_target"] == "шеврон БПЛА"
+    assert rows[0]["placement_code"] == "nr"
+    assert rows[0]["placement_label"] == "на рукав"
+    assert rows[0]["placement_terms"] == ""
+    assert "шеврон на рукав" in rows[0]["excluded_terms"]
+    assert target_json["target_query_clusters"]["placement"] == []
+    assert all("рукав" not in row["query"] for row in target_json["confirmed_query_rows"])
+
+
+def test_seo_query_pack_keeps_sleeve_seo_for_formal_nr_chevron(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    content_path = data_dir / "catalog" / "content" / "content_master.csv"
+    query_path = data_dir / "queries.json"
+    _write_csv(
+        content_path,
+        [
+            {
+                "internal_product_id": "p1",
+                "internal_sku": "chev_nr_mvd_pict0001",
+                "product_group": "chev",
+                "product_name": "Шеврон МВД нарукавный",
+                "marketplace_presence": "ozon_wb",
+                "mapping_status": "confirmed",
+            }
+        ],
+    )
+    _write_json(
+        query_path,
+        [
+            {"marketplace": "ozon", "query": "шеврон мвд", "popularity": 268, "seed_query": "шеврон мвд"},
+            {"marketplace": "ozon", "query": "шеврон мвд на рукав", "popularity": 111, "seed_query": "шеврон"},
+        ],
+    )
+
+    result = build_seo_query_pack(
+        data_dir=data_dir,
+        content_master_path=Path("catalog/content/content_master.csv"),
+        query_source_paths=[Path("queries.json")],
+        output_dir=data_dir / "catalog/content/seo_query_pack",
+        run_id="seo_pack_test_mvd_nr",
+    )
+
+    rows = _read_csv(Path(result["artifacts"]["card_seo_targets_csv"]))
+    assert result["status_counts"] == {"ready": 1}
+    assert rows[0]["placement_terms"] == "шеврон на рукав; шеврон МВД на рукав"
+
+
 def test_seo_query_pack_excludes_non_patch_assortment(tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     _write_csv(

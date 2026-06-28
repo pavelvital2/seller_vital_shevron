@@ -23,6 +23,7 @@ DEFAULT_ATTRIBUTE_MAPPING_PATH = Path("catalog/content/product_passport/passport
 DEFAULT_SEO_QUERY_PACK_PATH = Path("catalog/content/seo_query_pack/card_seo_targets.json")
 DEFAULT_OUTPUT_DIR = Path("catalog/content/card_audit_packages")
 DEFAULT_ALLOWED_SEO_STATUSES = {"ready", "ready_broad_only"}
+SLEEVE_SEO_ALLOWED_THEMES = {"form", "fsb", "fsin", "fso", "fssp", "gv", "mvd", "rg", "voisk"}
 
 PACKAGE_INDEX_FIELDS = [
     "package_rank",
@@ -231,6 +232,21 @@ def _unique(values: list[str]) -> list[str]:
     return result
 
 
+def _split_terms(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return _unique([normalize_sku(item) for item in value])
+    return _unique([part.strip() for part in normalize_sku(value).split(";")])
+
+
+def _join_terms(values: list[str]) -> str:
+    return "; ".join(_unique(values))
+
+
+def _is_sleeve_term(value: Any) -> bool:
+    text = normalize_sku(value).lower().replace("ё", "е")
+    return "на рукав" in text or "нарукав" in text
+
+
 def _sku_parts(internal_sku: str) -> dict[str, str]:
     parts = [part for part in normalize_sku(internal_sku).split("_") if part]
     result = {
@@ -248,6 +264,66 @@ def _sku_parts(internal_sku: str) -> dict[str, str]:
             result["content_kind"] = "text"
         elif part.startswith("pict") or part == "pict":
             result["content_kind"] = "pict"
+    return result
+
+
+def _should_suppress_sleeve_seo(internal_sku: str) -> bool:
+    parts = _sku_parts(internal_sku)
+    return (
+        parts["product_type"] == "chev"
+        and parts["wear_position"] == "nr"
+        and parts["theme_group"] not in SLEEVE_SEO_ALLOWED_THEMES
+    )
+
+
+def _seo_target_for_audit(seo_target: dict[str, Any] | None, internal_sku: str) -> dict[str, Any] | None:
+    if not seo_target:
+        return None
+    if not _should_suppress_sleeve_seo(internal_sku):
+        return seo_target
+
+    result = dict(seo_target)
+    result["placement_terms"] = _join_terms(
+        [term for term in _split_terms(result.get("placement_terms")) if not _is_sleeve_term(term)]
+    )
+    result["excluded_terms"] = _join_terms(
+        [
+            *_split_terms(result.get("excluded_terms")),
+            "шеврон на рукав",
+        ]
+    )
+
+    clusters = dict(result.get("target_query_clusters") or {})
+    clusters["placement"] = [term for term in _split_terms(clusters.get("placement")) if not _is_sleeve_term(term)]
+    clusters["exclude"] = _unique([*_split_terms(clusters.get("exclude")), "шеврон на рукав"])
+    result["target_query_clusters"] = clusters
+
+    confirmed_rows = [
+        row
+        for row in (result.get("confirmed_query_rows") or [])
+        if not (
+            normalize_sku(row.get("role")) == "placement_terms"
+            and (_is_sleeve_term(row.get("query")) or _is_sleeve_term(row.get("matched_term")))
+        )
+    ]
+    result["confirmed_query_rows"] = confirmed_rows
+
+    rows_by_marketplace: dict[str, list[dict[str, Any]]] = {}
+    rows_by_role: dict[str, list[dict[str, Any]]] = {}
+    for row in confirmed_rows:
+        marketplace = normalize_sku(row.get("marketplace"))
+        role = normalize_sku(row.get("role"))
+        if marketplace:
+            rows_by_marketplace.setdefault(marketplace, []).append(row)
+        if role:
+            rows_by_role.setdefault(role, []).append(row)
+    result["confirmed_query_rows_by_marketplace"] = rows_by_marketplace
+    result["confirmed_query_rows_by_role"] = rows_by_role
+    result["sleeve_seo_suppressed"] = True
+    result["sleeve_seo_suppressed_reason"] = (
+        "For thematic/non-uniform Vital Shevron chevrons, internal `nr` is not enough "
+        "to use sleeve placement in title, hashtags, tags or demand SEO."
+    )
     return result
 
 
@@ -454,6 +530,7 @@ def build_card_audit_packages(
         wb_vendor_code = _first_text(row.get("wb_vendor_code"), content_row.get("wb_vendor_code"))
         internal_sku = _first_text(row.get("internal_sku"), content_row.get("internal_sku"))
         seo_target = seo_by_id.get(internal_product_id) or seo_by_sku.get(normalize_sku(internal_sku))
+        seo_target = _seo_target_for_audit(seo_target, internal_sku)
         seo_status = (seo_target or {}).get("query_pack_status", "missing")
         if seo_targets_available and seo_status not in seo_allowed_statuses:
             excluded_rows.append(
@@ -504,6 +581,8 @@ def build_card_audit_packages(
             "wb_confirmed_queries": (seo_target or {}).get("wb_confirmed_queries", ""),
             "ozon_frequency_sum": (seo_target or {}).get("ozon_frequency_sum", ""),
             "wb_frequency_sum": (seo_target or {}).get("wb_frequency_sum", ""),
+            "sleeve_seo_suppressed": (seo_target or {}).get("sleeve_seo_suppressed", False),
+            "sleeve_seo_suppressed_reason": (seo_target or {}).get("sleeve_seo_suppressed_reason", ""),
             "routing_note": (
                 "Use ready targets for SEO recommendations; ready_broad_only needs explicit limitation; "
                 "needs_manual_review/excluded_non_patch_assortment must not be treated as complete SEO evidence. "

@@ -44,6 +44,31 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   -m seller_agent.cli tasks show --task seo-query-pack
 ```
 
+Быстрый индекс карточных write-маршрутов и команд:
+
+```text
+data/planning/card_ops/quick_access.md
+```
+
+Карточные команды, уже добавленные в `TaskRegistry`:
+
+- `plan-seller-sku-update`;
+- `apply-seller-sku-update`;
+- `plan-card-content-update`;
+- `apply-card-content-update`;
+- `apply-approved-card`;
+- `apply-approved-cards`;
+
+`apply-approved-cards` использовать после согласования владельцем пачки
+карточек: команда объединяет content update, seller SKU replacement и WB create
+в один batch-run с общим отчетом. Не запускать одноштучный `apply-approved-card`
+по кругу, если согласовано несколько карточек.
+
+Следующие карточные команды должны быть добавлены в `TaskRegistry`, когда
+будут реализованы в CLI:
+
+- позже: `plan-ozon-card-create`, `apply-ozon-card-create`.
+
 Фильтры:
 
 ```bash

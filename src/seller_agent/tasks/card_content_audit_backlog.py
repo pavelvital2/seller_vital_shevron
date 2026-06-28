@@ -291,9 +291,9 @@ def _business_score_and_reasons(signals: dict[str, Any]) -> tuple[int, list[str]
     visible_queries = _float_value(signals.get("parser_visible_queries"))
 
     if sales_units is not None and sales_units > 0:
-        score += 25
+        score += 5
         reasons.append("sales_positive")
-        focus_parts.append("business_priority")
+        focus_parts.append("sales_monitoring")
 
     if stock_total is not None:
         if stock_total > 0:
@@ -324,13 +324,51 @@ def _business_score_and_reasons(signals: dict[str, Any]) -> tuple[int, list[str]
     return score, reasons, ";".join(dict.fromkeys(focus_parts))
 
 
-def _business_priority(signals: dict[str, Any], business_reasons: list[str]) -> str:
+def _content_or_seo_problem_reasons(reasons: list[str]) -> list[str]:
+    problem_reasons = {
+        "title_mismatch",
+        "ozon_photo_lt5",
+        "wb_photo_lt5",
+        "ozon_description_missing",
+        "wb_description_missing",
+        "ozon_attributes_missing",
+        "wb_attributes_missing",
+        "ozon_hashtags_missing",
+    }
+    return [reason for reason in reasons if reason in problem_reasons]
+
+
+def _underperforming_stock_score_and_reasons(signals: dict[str, Any], reasons: list[str]) -> tuple[int, list[str], str]:
+    stock_total = _float_value(signals.get("stock_total"))
+    sales_units = _float_value(signals.get("sales_units_30d"))
+    best_position = _float_value(signals.get("parser_best_position"))
+    visible_queries = _float_value(signals.get("parser_visible_queries"))
+    content_problems = _content_or_seo_problem_reasons(reasons)
+    if stock_total is None or stock_total <= 0:
+        return 0, [], ""
+    no_or_low_sales = sales_units is None or sales_units <= 0
+    weak_visibility = best_position is None or best_position > 30
+    if no_or_low_sales and (content_problems or weak_visibility or not visible_queries):
+        result_reasons = ["stock_underperforming_bad_card"]
+        if content_problems:
+            result_reasons.append("content_seo_problem")
+        if weak_visibility:
+            result_reasons.append("search_visibility_weak")
+        return 45, result_reasons, "seo_recovery"
+    return 0, [], ""
+
+
+def _business_priority(signals: dict[str, Any], business_reasons: list[str], reasons: list[str]) -> str:
     stock_total = _float_value(signals.get("stock_total"))
     best_position = _float_value(signals.get("parser_best_position"))
     sales_units = _float_value(signals.get("sales_units_30d"))
     if stock_total is not None and stock_total <= 0:
         return "blocked_by_stock"
-    if (sales_units is not None and sales_units > 0) or (best_position is not None and best_position <= 30):
+    if "stock_underperforming_bad_card" in business_reasons:
+        return "now"
+    if sales_units is not None and sales_units > 0:
+        return "watch"
+    if best_position is not None and best_position <= 30 and stock_total is not None and stock_total > 0 and _content_or_seo_problem_reasons(reasons):
         return "now"
     if business_reasons:
         return "watch"
@@ -405,6 +443,15 @@ def _score_and_reasons(row: dict[str, str], signals: dict[str, Any] | None = Non
     if business_focus:
         focus_parts.extend(business_focus.split(";"))
 
+    recovery_score, recovery_reasons, recovery_focus = _underperforming_stock_score_and_reasons(signals or {}, reasons)
+    if recovery_score:
+        score += recovery_score
+    if recovery_reasons:
+        business_reasons.extend(recovery_reasons)
+        reasons.extend(recovery_reasons)
+    if recovery_focus:
+        focus_parts.append(recovery_focus)
+
     if not reasons:
         return 0, [], "ready_for_visual_seo_audit", []
     return score, reasons, ";".join(dict.fromkeys(focus_parts)), business_reasons
@@ -421,6 +468,8 @@ def _priority(score: int) -> str:
 def _next_step(row: dict[str, str], reasons: list[str]) -> str:
     if "stock_zero" in reasons:
         return "Проверить актуальный остаток и не начинать SEO/перенос до решения по наличию."
+    if "stock_underperforming_bad_card" in reasons:
+        return "Поставить в первую очередь SEO/content-аудита: есть остаток, но продаж нет/мало и карточка или видимость слабые."
     if "sales_positive" in reasons or "parser_top30_visible" in reasons:
         return "Поставить в ближайший визуальный SEO-аудит: есть продажи или видимость в parser."
     if "content_snapshot_missing" in reasons:
@@ -486,7 +535,7 @@ def build_card_content_audit_backlog(
                 parser_visible_queries=_format_number(signals.get("parser_visible_queries")),
                 parser_top30_queries=_format_number(signals.get("parser_top30_queries")),
                 parser_max_query_popularity_7d=_format_number(signals.get("parser_max_query_popularity_7d")),
-                business_priority=_business_priority(signals, business_reasons),
+                business_priority=_business_priority(signals, business_reasons, reasons),
                 business_reasons=";".join(business_reasons),
                 reasons=";".join(reasons) if reasons else "ready_for_visual_seo_audit",
                 next_step=_next_step(row, reasons),
@@ -523,6 +572,7 @@ def build_card_content_audit_backlog(
         "parser_visible_rows": sum(1 for row in backlog if "parser_" in row.business_reasons),
         "business_priority_now_rows": sum(1 for row in backlog if row.business_priority == "now"),
         "business_priority_blocked_by_stock_rows": sum(1 for row in backlog if row.business_priority == "blocked_by_stock"),
+        "stock_underperforming_bad_card_rows": sum(1 for row in backlog if "stock_underperforming_bad_card" in row.business_reasons),
         "include_low": include_low,
     }
     return backlog, summary

@@ -19,6 +19,12 @@ from seller_agent.reports.writer import ensure_dir, write_json
 WB_TITLE_MAX_LEN = 60
 WB_BARCODE_PLACEHOLDER = "GENERATE_AT_APPLY"
 DIMENSION_CHARACTERISTIC_IDS = {88952, 90745, 90846, 90849}
+OWNER_APPROVED_PASSPORT_STATUSES = {
+    "owner_approved",
+    "owner_approved_pending_apply",
+    "owner_approved_pending_batch_apply",
+    "applied_verified",
+}
 WB_FORBIDDEN_SYMBOL_PATTERN = re.compile(
     "["
     "\U00002600-\U000027BF"
@@ -320,13 +326,234 @@ def _images(ozon_attrs: dict[str, Any]) -> list[str]:
     return result
 
 
+def _passport_attr_value(passport: dict[str, Any], field: str) -> str:
+    for item in (passport.get("wb") or {}).get("attributes") or []:
+        if str(item.get("field") or "").strip().lower() == field.lower():
+            return str(item.get("value") or "").strip()
+    return ""
+
+
+def _split_values(value: str) -> list[str]:
+    parts = re.split(r"[;,]", value or "")
+    return [part.strip().lower() for part in parts if part.strip()]
+
+
+def _parse_wb_dimensions(value: str, weight_g: Any) -> dict[str, Any]:
+    numbers = re.findall(r"\d+(?:[.,]\d+)?", value or "")
+    dims = [max(1, int(round(float(item.replace(",", "."))))) for item in numbers[:3]]
+    while len(dims) < 3:
+        dims.append(1)
+    try:
+        weight = round(float(weight_g or 0) / 1000, 3)
+    except (TypeError, ValueError):
+        weight = 0.01
+    return {"length": dims[0], "width": dims[1], "height": dims[2], "weightBrutto": weight or 0.01}
+
+
+def _passport_variant(
+    *,
+    passport: dict[str, Any],
+    ozon_info: dict[str, Any],
+    target: dict[str, Any],
+) -> dict[str, Any]:
+    identity = passport.get("identity") or {}
+    content = passport.get("content") or {}
+    physical = passport.get("physical") or {}
+    materials = passport.get("materials") or {}
+    classification = passport.get("classification") or {}
+    sku = str(identity.get("internal_sku") or "").strip()
+    title, _ = _shorten_wb_title(str(content.get("wb_title") or content.get("canonical_title") or sku))
+    description = _plain_text(str(content.get("wb_description") or content.get("canonical_description") or ""))
+    colors = _split_values(_passport_attr_value(passport, "Цвет"))
+    composition = _split_values(_passport_attr_value(passport, "Состав"))
+    if not composition:
+        composition = [str(item).strip().lower() for item in materials.get("composition") or [] if str(item).strip()]
+    quantity = _passport_attr_value(passport, "Количество предметов") or f"{physical.get('pack_qty') or 1} шт."
+    package_contents = _passport_attr_value(passport, "Комплектация") or str(content.get("package_contents") or "").strip()
+    decor_kind = _passport_attr_value(passport, "Вид декора для одежды") or "шеврон"
+    tnved = _passport_attr_value(passport, "ТНВЭД") or str(classification.get("tnved") or "").strip()
+    country = _passport_attr_value(passport, "Страна производства") or str(classification.get("country_of_origin") or "Россия")
+
+    characteristics: list[dict[str, Any]] = [
+        {"id": 15000000, "value": title},
+        {"id": 14177452, "value": description},
+        {"id": 15003293, "value": [sku]},
+        {"id": 14177453, "value": [WB_BARCODE_PLACEHOLDER]},
+        {"id": 14177449, "value": colors},
+        {"id": 14177450, "value": composition},
+        {"id": 14177451, "value": [country]},
+        {"id": 179792, "value": [quantity]},
+        {"id": 378533, "value": [package_contents]},
+        {"id": 384944, "value": [decor_kind]},
+        {"id": 15001405, "value": ["0"]},
+    ]
+    if tnved:
+        characteristics.append({"id": 15000001, "value": [tnved.split(" - ", 1)[0].strip()]})
+
+    return {
+        "vendorCode": sku,
+        "title": title,
+        "description": description,
+        "brand": "VitalEmb",
+        "dimensions": _parse_wb_dimensions(
+            str(physical.get("package_dimensions_wb_cm") or _passport_attr_value(passport, "Габариты и вес")),
+            physical.get("package_weight_g") or physical.get("item_weight_g"),
+        ),
+        "characteristics": [item for item in characteristics if item.get("value") not in (None, "", [], {})],
+        "sizes": [
+            {
+                "techSize": "0",
+                "wbSize": "",
+                "price": _price(ozon_info),
+                "skus": [WB_BARCODE_PLACEHOLDER],
+            }
+        ],
+    }
+
+
+def _passport_images(passport: dict[str, Any]) -> list[str]:
+    urls: list[str] = []
+    for item in (passport.get("media") or {}).get("target_assets") or []:
+        url = str(item.get("url") or "").strip()
+        if url and url not in urls:
+            urls.append(url)
+    return urls
+
+
+def _build_owner_approved_plan_items(
+    *,
+    data_dir: Path,
+    internal_skus: list[str],
+    ozon_info_by_offer: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    plan_items: list[dict[str, Any]] = []
+    approved_dir = data_dir / "catalog" / "master_passport" / "approved"
+    for sku in internal_skus:
+        passport_path = approved_dir / f"{sku}.json"
+        if not passport_path.exists():
+            raise FileNotFoundError(f"Approved master passport not found: {passport_path}")
+        passport = _read_json(passport_path)
+        identity = passport.get("identity") or {}
+        approval = passport.get("approval") or {}
+        if str(approval.get("status") or "").strip() not in OWNER_APPROVED_PASSPORT_STATUSES:
+            raise RuntimeError(f"Passport is not owner-approved: {sku}")
+        target = {
+            "action": "upload",
+            "confidence": "owner_approved_layer3",
+            "subject_id": 2367,
+            "subject_name": "Декор для одежды",
+            "imt_id": None,
+            "template_vendor_codes": [],
+        }
+        ozon_info = (
+            ozon_info_by_offer.get(str(identity.get("ozon_offer_id") or ""))
+            or ozon_info_by_offer.get(str(identity.get("internal_sku") or ""))
+            or {}
+        )
+        variant = _passport_variant(passport=passport, ozon_info=ozon_info, target=target)
+        missing = []
+        if not variant.get("title"):
+            missing.append({"name": "title", "required": True})
+        if not variant.get("description"):
+            missing.append({"name": "description", "required": True})
+        if not _passport_images(passport):
+            missing.append({"name": "media.target_assets", "required": True})
+        item = {
+            "master_sku": sku,
+            "title": variant["title"],
+            "ozon_title": str((passport.get("content") or {}).get("ozon_title") or variant["title"]),
+            "wb_title": variant["title"],
+            "title_shortened": len(variant["title"]) > WB_TITLE_MAX_LEN,
+            "wb_title_max_len": WB_TITLE_MAX_LEN,
+            "target": target,
+            "draft_variant": variant,
+            "images_from_ozon": _passport_images(passport),
+            "filled_characteristics_count": len(_filled_characteristic_ids(variant)),
+            "subject_characteristics_count": "",
+            "missing_characteristics": missing,
+            "needs_manual_review": bool(missing),
+            "manual_review_reason": "" if not missing else "Owner-approved passport is missing required WB create fields",
+            "source_passport": str(passport_path),
+            "source_audit": str(approval.get("source_review_html") or ""),
+            "owner_approval_source": str(approval.get("approved_by") or "owner-approved Layer 3 passport"),
+            "ozon_offer_id": str(identity.get("ozon_offer_id") or ""),
+            "safety_notes": [
+                "Built from owner-approved Layer 3 passport, not from legacy master_catalog.",
+                "WB barcode is generated by WB API at apply time.",
+                "Prices/stock/discounts/ads are not managed by this plan; size price is initial card payload value only.",
+            ],
+        }
+        plan_items.append(item)
+    return plan_items
+
+
+def _owner_approved_ozon_info_by_offer(
+    *,
+    credentials: AppCredentials,
+    data_dir: Path,
+    internal_skus: list[str],
+) -> dict[str, dict[str, Any]]:
+    approved_dir = data_dir / "catalog" / "master_passport" / "approved"
+    passports: list[dict[str, Any]] = []
+    for sku in internal_skus:
+        path = approved_dir / f"{sku}.json"
+        if path.exists():
+            passports.append(_read_json(path))
+
+    product_ids = [
+        str((passport.get("identity") or {}).get("ozon_product_id") or "").strip()
+        for passport in passports
+        if str((passport.get("identity") or {}).get("ozon_product_id") or "").strip()
+    ]
+    info_items: list[dict[str, Any]] = []
+    if product_ids and credentials.ozon_seller:
+        info_items = OzonSellerAdapter(credentials.ozon_seller).fetch_product_info(product_ids)
+
+    by_key: dict[str, dict[str, Any]] = {}
+    for item in info_items:
+        for key in ("offer_id", "id", "product_id"):
+            value = str(item.get(key) or "").strip()
+            if value:
+                by_key[value] = item
+
+    pricing_path = data_dir / "pricing" / "pricing_status.json"
+    pricing_rows: dict[str, dict[str, Any]] = {}
+    if pricing_path.exists():
+        pricing_payload = _read_json(pricing_path)
+        if isinstance(pricing_payload, list):
+            pricing_rows = {
+                str(row.get("internal_sku") or "").strip(): row
+                for row in pricing_payload
+                if isinstance(row, dict) and str(row.get("internal_sku") or "").strip()
+            }
+
+    for passport in passports:
+        identity = passport.get("identity") or {}
+        sku = str(identity.get("internal_sku") or "").strip()
+        offer_id = str(identity.get("ozon_offer_id") or "").strip()
+        current = by_key.get(offer_id) or by_key.get(sku) or {}
+        price_row = pricing_rows.get(sku) or {}
+        fallback = dict(current)
+        if not str(fallback.get("price") or "").strip() and str(price_row.get("ozon_price") or "").strip():
+            fallback["price"] = price_row["ozon_price"]
+        if not str(fallback.get("old_price") or "").strip() and str(price_row.get("ozon_old_price") or "").strip():
+            fallback["old_price"] = price_row["ozon_old_price"]
+        for key in (sku, offer_id, str(identity.get("ozon_product_id") or "").strip()):
+            if key:
+                by_key[key] = fallback
+
+    return by_key
+
+
 def run_wb_card_create_plan(
     *,
     credentials: AppCredentials,
     data_dir: Path = Path("data"),
     run_id: str | None = None,
+    internal_skus: list[str] | None = None,
 ) -> dict[str, Any]:
-    if not credentials.ozon_seller:
+    internal_skus = [sku for sku in (internal_skus or []) if str(sku).strip()]
+    if not internal_skus and not credentials.ozon_seller:
         raise RuntimeError("Ozon Seller credentials are required")
     if not credentials.wb:
         raise RuntimeError("Wildberries credentials are required")
@@ -334,7 +561,6 @@ def run_wb_card_create_plan(
     started_at = datetime.now()
     run_id = run_id or f"wb_card_create_plan_{started_at.strftime('%Y%m%dT%H%M%S')}"
     run_dir = ensure_dir(data_dir / "runs" / started_at.strftime("%Y-%m-%d") / run_id)
-    raw_dir = _latest_raw_dir(data_dir)
 
     master_rows: list[dict[str, str]] = []
     with (data_dir / "catalog" / "processed" / "master_catalog.csv").open(
@@ -343,15 +569,34 @@ def run_wb_card_create_plan(
         master_rows = list(csv.DictReader(handle))
 
     ozon_only = [row for row in master_rows if row.get("match_status") == "ozon_only"]
+    if internal_skus:
+        requested = set(internal_skus)
+        ozon_only = [
+            row
+            for row in ozon_only
+            if str(row.get("master_sku") or row.get("internal_sku") or "").strip() in requested
+        ]
     offer_ids = [row["ozon_offer_id"] for row in ozon_only if row.get("ozon_offer_id")]
 
-    ozon_info_items = _read_json(raw_dir / "ozon_product_info.json")
-    ozon_info_by_offer = {str(item.get("offer_id")): item for item in ozon_info_items}
-    wb_cards = _read_json(raw_dir / "wb_cards.json")
+    ozon_info_by_offer: dict[str, dict[str, Any]] = {}
+    wb_cards: list[dict[str, Any]] = []
+    if internal_skus:
+        ozon_info_by_offer = _owner_approved_ozon_info_by_offer(
+            credentials=credentials,
+            data_dir=data_dir,
+            internal_skus=internal_skus,
+        )
+    else:
+        raw_dir = _latest_raw_dir(data_dir)
+        ozon_info_items = _read_json(raw_dir / "ozon_product_info.json")
+        ozon_info_by_offer = {str(item.get("offer_id")): item for item in ozon_info_items}
+        wb_cards = _read_json(raw_dir / "wb_cards.json")
 
-    ozon = OzonSellerAdapter(credentials.ozon_seller)
     wb = WbContentAdapter(credentials.wb)
-    ozon_attrs_items = ozon.fetch_product_attributes(offer_ids)
+    ozon_attrs_items = []
+    if offer_ids and credentials.ozon_seller and not internal_skus:
+        ozon = OzonSellerAdapter(credentials.ozon_seller)
+        ozon_attrs_items = ozon.fetch_product_attributes(offer_ids)
     ozon_attrs_by_offer = {str(item.get("offer_id")): item for item in ozon_attrs_items}
 
     subject_ids = {2367, 5517}
@@ -364,7 +609,21 @@ def run_wb_card_create_plan(
     add_payloads: list[dict[str, Any]] = []
     plan_items: list[dict[str, Any]] = []
 
-    for row in ozon_only:
+    if internal_skus:
+        plan_items = _build_owner_approved_plan_items(
+            data_dir=data_dir,
+            internal_skus=internal_skus,
+            ozon_info_by_offer=ozon_info_by_offer,
+        )
+        for item in plan_items:
+            variant = item["draft_variant"]
+            target = item["target"]
+            if target["action"] == "upload_add":
+                add_payloads.append({"imtID": target["imt_id"], "cardsToAdd": [variant]})
+            else:
+                create_payload.append({"subjectID": target["subject_id"], "variants": [variant]})
+
+    for row in [] if internal_skus else ozon_only:
         sku = row["master_sku"]
         target = _infer_wb_target(sku, wb_cards)
         attrs = ozon_attrs_by_offer.get(sku, {})

@@ -113,7 +113,7 @@ def test_build_card_content_audit_backlog_enriches_business_signals() -> None:
     )
 
     assert summary["backlog_rows"] == 1
-    assert summary["business_priority_now_rows"] == 1
+    assert summary["business_priority_now_rows"] == 0
     assert rows[0].sales_units_30d == "4"
     assert rows[0].sales_revenue_30d == "1200"
     assert rows[0].stock_total == "11"
@@ -121,8 +121,47 @@ def test_build_card_content_audit_backlog_enriches_business_signals() -> None:
     assert rows[0].wb_stock_total == "3"
     assert rows[0].parser_best_position == "12"
     assert rows[0].parser_visible_queries == "5"
-    assert rows[0].business_priority == "now"
+    assert rows[0].business_priority == "watch"
     assert rows[0].business_reasons == "sales_positive;stock_positive;parser_top30_visible"
+
+
+def test_build_card_content_audit_backlog_prioritizes_stock_with_bad_card_and_no_sales() -> None:
+    signal_index = build_signal_index(
+        {
+            "stocks": [{"offer_id": "oz-1", "fbo_present": "24"}],
+            "sales": [{"offer_id": "oz-1", "ordered_units": "0"}],
+            "parser": [{"offer_id": "oz-1", "best_position": "145", "queries_found_count": "1"}],
+        }
+    )
+
+    rows, summary = build_card_content_audit_backlog(
+        [
+            {
+                "internal_product_id": "chev-1",
+                "product_name": "Шеврон с плохой карточкой",
+                "mapping_status": "confirmed",
+                "marketplace_presence": "ozon_wb",
+                "title_alignment_status": "mismatch",
+                "full_snapshot_status": "both_found",
+                "ozon_offer_id": "oz-1",
+                "wb_vendor_code": "wb-1",
+                "ozon_photo_count": "3",
+                "wb_photo_count": "4",
+                "ozon_description_present": "false",
+                "wb_description_present": "true",
+                "ozon_attribute_count": "10",
+                "wb_attribute_count": "8",
+                "cost_total": "85",
+            }
+        ],
+        signal_index=signal_index,
+    )
+
+    assert summary["business_priority_now_rows"] == 1
+    assert summary["stock_underperforming_bad_card_rows"] == 1
+    assert rows[0].business_priority == "now"
+    assert "stock_underperforming_bad_card" in rows[0].business_reasons
+    assert "SEO/content-аудита" in rows[0].next_step
 
 
 def test_card_content_audit_backlog_cli_writes_artifacts(tmp_path: Path, capsys) -> None:

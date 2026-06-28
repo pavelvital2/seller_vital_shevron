@@ -279,8 +279,16 @@ def build_content_master(
         ozon_content = card_content_by_product.get(("ozon", internal_product_id))
         wb_content = card_content_by_product.get(("wb", internal_product_id))
 
-        ozon_title = _first_text(ozon.get("title") if ozon else "", product.get("product_name") if ozon_offer_id else "")
-        wb_title = _first_text(wb.get("title") if wb else "", product.get("product_name") if wb_vendor_code else "")
+        ozon_title = _first_text(
+            ozon_content.get("title") if ozon_content else "",
+            ozon.get("title") if ozon else "",
+            product.get("product_name") if ozon_offer_id else "",
+        )
+        wb_title = _first_text(
+            wb_content.get("title") if wb_content else "",
+            wb.get("title") if wb else "",
+            product.get("product_name") if wb_vendor_code else "",
+        )
         canonical_title = _first_text(product.get("product_name"), ozon_title, wb_title)
         mapping_status = normalize_sku(product.get("mapping_status"))
         presence = _presence(product, ozon, wb)

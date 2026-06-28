@@ -121,6 +121,8 @@ PLACEMENT_KEYWORDS = [
 
 ROLE_NAMES = ("primary_target", "secondary_targets", "broad_identity_terms", "placement_terms")
 
+SLEEVE_SEO_ALLOWED_THEMES = {"form", "fsb", "fsin", "fso", "fssp", "gv", "mvd", "rg", "voisk"}
+
 
 @dataclass(frozen=True)
 class QueryMatch:
@@ -279,6 +281,14 @@ def _attachment_label(product_kind: str) -> str:
     return ""
 
 
+def _allow_placement_seo(product_kind: str, placement_code: str, theme_code: str) -> bool:
+    if placement_code != "nr":
+        return True
+    if product_kind != "chev":
+        return True
+    return theme_code in SLEEVE_SEO_ALLOWED_THEMES
+
+
 def _base_type_query(product_kind: str, kit_qty: int) -> str:
     label = TYPE_LABELS.get(product_kind, "шеврон")
     if kit_qty > 1:
@@ -371,7 +381,8 @@ def _query_cluster(row: dict[str, str]) -> dict[str, Any]:
         secondary.append(f"петлица {theme_label}")
 
     placement_terms: list[str] = []
-    if placement_label:
+    allow_placement_seo = _allow_placement_seo(product_kind, placement_code, theme_code)
+    if placement_label and allow_placement_seo:
         placement_terms.append(f"{single_type} {placement_label}")
         if theme_label and product_kind == "chev":
             placement_terms.append(f"шеврон {theme_label} {placement_label}")
@@ -384,6 +395,10 @@ def _query_cluster(row: dict[str, str]) -> dict[str, Any]:
     for code, label in PLACEMENT_LABELS.items():
         if placement_code and code != placement_code:
             excluded.append(f"шеврон {label}")
+    if placement_code == "nr" and not allow_placement_seo:
+        excluded.append("шеврон на рукав")
+        if theme_label and product_kind == "chev":
+            excluded.append(f"шеврон {theme_label} на рукав")
     if product_kind != "nash":
         excluded.append("нашивка без липучки")
     if product_kind != "loop":

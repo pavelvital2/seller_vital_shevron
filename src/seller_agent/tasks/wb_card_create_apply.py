@@ -237,8 +237,6 @@ def run_wb_card_create_apply(
 ) -> dict[str, Any]:
     if not confirmed_by_user:
         raise RuntimeError("Apply requires explicit user confirmation")
-    if not allow_manual_review:
-        raise RuntimeError("Apply requires --allow-manual-review for current WB plan")
     if not credentials.wb:
         raise RuntimeError("Wildberries credentials are required")
 
@@ -251,6 +249,9 @@ def run_wb_card_create_apply(
     plan_items = _read_json(plan_dir / "wb_card_create_plan.json")
     if not isinstance(plan_items, list) or not plan_items:
         raise RuntimeError(f"Plan has no items: {plan_dir}")
+    manual_review_items = [item for item in plan_items if item.get("needs_manual_review")]
+    if manual_review_items and not allow_manual_review:
+        raise RuntimeError("Apply requires --allow-manual-review for current WB plan")
 
     vendor_codes = [_vendor_code(item) for item in plan_items]
     if any(not vendor_code for vendor_code in vendor_codes):

@@ -118,10 +118,14 @@ def test_build_card_audit_packages_marks_visual_audit_pending() -> None:
     assert package["seo_query_pack"]["primary_target"] == "шеврон СВО"
     assert package["seo_query_pack"]["confirmed_query_rows"][0]["query"] == "шеврон сво"
     assert package["seo_query_pack"]["confirmed_query_rows"][0]["frequency"] == 100
+    assert package["seo_query_pack"]["placement_terms"] == ""
+    assert package["seo_query_pack"]["target_query_clusters"]["placement"] == []
+    assert package["seo_query_pack"]["sleeve_seo_suppressed"] is True
     assert package["master_product_passport_draft"]["values"]["search_queries"][:2] == [
         "шеврон СВО",
         "шеврон на липучке СВО",
     ]
+    assert all("рукав" not in query for query in package["master_product_passport_draft"]["values"]["search_queries"])
 
 
 def test_card_content_audit_packages_cli_writes_package_files(tmp_path: Path, capsys) -> None:

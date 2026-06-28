@@ -12,6 +12,52 @@
 Файл полного отчета прикреплять или указывать внизу Telegram-сообщения после
 основного вывода.
 
+## Отправка файлов в рабочий топик
+
+Для отправки файлов в рабочий Telegram-топик `seller_vital_shevron` использовать
+бота `@Koara_2_vps_bot`, потому что он состоит в группе `Koara_codex`.
+Не использовать для этого `Vital_Shevron_Manager_bot`: он может не видеть чат и
+Telegram вернет `Bad Request: chat not found`.
+
+Параметры топика:
+
+```text
+topic_url: https://t.me/c/3683440820/42336
+chat_id: -1003683440820
+message_thread_id: 42336
+```
+
+Токен брать из внешнего файла проекта Telegram-агента, не выводить и не
+сохранять в репозиторий:
+
+```text
+/home/pavel/projects/telegram-ai-agent/.env
+TELEGRAM_BOT_TOKEN
+```
+
+Шаблон отправки файла:
+
+```bash
+TOKEN="$(python3 - <<'PY'
+from pathlib import Path
+for line in Path('/home/pavel/projects/telegram-ai-agent/.env').read_text(encoding='utf-8').splitlines():
+    s = line.strip()
+    if s.startswith('TELEGRAM_BOT_TOKEN='):
+        print(s.split('=', 1)[1].strip().strip('"').strip("'"))
+        break
+PY
+)"
+
+curl -sS -X POST "https://api.telegram.org/bot${TOKEN}/sendDocument" \
+  -F "chat_id=-1003683440820" \
+  -F "message_thread_id=42336" \
+  -F "document=@/abs/path/to/file.html" \
+  -F "caption=Файл для проверки"
+```
+
+Проверенный пример: 2026-06-28 файл `chev_nr_bpla_pict0028.html` отправлен в
+этот топик через `@Koara_2_vps_bot`, Telegram вернул `message_id=72852`.
+
 ## Общий стандарт Telegram-отчета
 
 ### Обязательная структура

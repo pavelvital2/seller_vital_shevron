@@ -19,11 +19,13 @@ from seller_agent.bot.telegram_runner import (
 from seller_agent.config import load_credentials
 from seller_agent.core.run_manifest import find_run, latest_run, list_runs
 from seller_agent.tasks.approvals import run_approvals_close, run_approvals_status
+from seller_agent.tasks.approved_cards_apply import run_apply_approved_cards
 from seller_agent.tasks.card_content_audit_backlog import run_card_content_audit_backlog
 from seller_agent.tasks.card_content_audit_packages import run_card_content_audit_packages
 from seller_agent.tasks.card_content_parameter_inventory import run_card_content_parameter_inventory
 from seller_agent.tasks.card_content_signals import run_collect_card_signals
 from seller_agent.tasks.card_content_snapshot import run_card_content_snapshot
+from seller_agent.tasks.card_content_update import run_apply_approved_card, run_card_content_update_apply, run_card_content_update_plan
 from seller_agent.tasks.catalog_fetch import run_catalog_fetch
 from seller_agent.tasks.catalog_content_master import run_catalog_content_master
 from seller_agent.tasks.catalog_internal_sku_plan import run_internal_sku_plan
@@ -43,6 +45,7 @@ from seller_agent.tasks.reviews_questions import (
 )
 from seller_agent.tasks.registry import get_task_definition, list_task_definitions
 from seller_agent.tasks.seo_query_pack import build_seo_query_pack
+from seller_agent.tasks.seller_sku_update import run_seller_sku_update_apply, run_seller_sku_update_plan
 from seller_agent.tasks.status_preflight import run_status_preflight
 from seller_agent.tasks.wb_actions_discount_apply import run_wb_actions_discount_apply
 from seller_agent.tasks.wb_actions_discount_plan import run_wb_actions_discount_plan
@@ -1175,6 +1178,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional stable run id.",
     )
+    plan_wb_cards.add_argument(
+        "--internal-sku",
+        action="append",
+        default=[],
+        help="Owner-approved internal SKU to create on WB from Layer 3 passport. Can be repeated.",
+    )
 
     apply_wb_cards = subparsers.add_parser(
         "apply-wb-card-create",
@@ -1217,6 +1226,197 @@ def build_parser() -> argparse.ArgumentParser:
         default=30,
         help="Polling interval in seconds while waiting for WB nmID.",
     )
+
+    plan_seller_sku_update = subparsers.add_parser(
+        "plan-seller-sku-update",
+        help="Build dry-run plan for replacing Ozon/WB seller SKU with internal SKU.",
+    )
+    plan_seller_sku_update.add_argument(
+        "--data-dir",
+        default="data",
+        help="Project data directory.",
+    )
+    plan_seller_sku_update.add_argument(
+        "--run-id",
+        default=None,
+        help="Optional stable run id.",
+    )
+    plan_seller_sku_update.add_argument(
+        "--input",
+        default=None,
+        help="JSON operation package: list or {operations: [...]} with Ozon/WB old/new IDs.",
+    )
+    plan_seller_sku_update.add_argument(
+        "--internal-sku",
+        action="append",
+        default=[],
+        help="Internal SKU from data/catalog/unified/products.csv. Can be repeated.",
+    )
+    plan_seller_sku_update.add_argument(
+        "--products-path",
+        default=None,
+        help="Unified products CSV. Defaults to data/catalog/unified/products.csv.",
+    )
+    plan_seller_sku_update.add_argument(
+        "--skip-api",
+        action="store_true",
+        help="Do not call Ozon/WB APIs. Leaves rows for manual review and blocks apply.",
+    )
+
+    apply_seller_sku_update = subparsers.add_parser(
+        "apply-seller-sku-update",
+        help="Apply approved Ozon/WB seller SKU replacement plan and verify the result.",
+    )
+    apply_seller_sku_update.add_argument(
+        "--data-dir",
+        default="data",
+        help="Project data directory.",
+    )
+    apply_seller_sku_update.add_argument(
+        "--plan-run-id",
+        default=None,
+        help="Plan run id. Defaults to the latest seller_sku_update_plan_* run.",
+    )
+    apply_seller_sku_update.add_argument(
+        "--run-id",
+        default=None,
+        help="Optional stable run id.",
+    )
+    apply_seller_sku_update.add_argument(
+        "--confirmed-by-user",
+        action="store_true",
+        help="Required explicit confirmation for external Ozon/WB write operations.",
+    )
+    apply_seller_sku_update.add_argument(
+        "--wait-seconds",
+        type=int,
+        default=60,
+        help="How long to wait for WB vendorCode changes to become visible.",
+    )
+    apply_seller_sku_update.add_argument(
+        "--poll-interval",
+        type=int,
+        default=5,
+        help="Polling interval while waiting for WB vendorCode visibility.",
+    )
+    apply_seller_sku_update.add_argument(
+        "--skip-local-layer-update",
+        action="store_true",
+        help="Do not update local CSV/JSON catalog layers after verified marketplace apply.",
+    )
+
+    plan_card_content_update = subparsers.add_parser(
+        "plan-card-content-update",
+        help="Build dry-run plan for applying owner-approved card passport to existing Ozon/WB cards.",
+    )
+    plan_card_content_update.add_argument("--data-dir", default="data", help="Project data directory.")
+    plan_card_content_update.add_argument("--run-id", default=None, help="Optional stable run id.")
+    plan_card_content_update.add_argument(
+        "--passport",
+        action="append",
+        default=[],
+        help="Approved master passport JSON path. Can be repeated.",
+    )
+    plan_card_content_update.add_argument(
+        "--internal-sku",
+        action="append",
+        default=[],
+        help="Internal SKU from data/catalog/master_passport/approved. Can be repeated.",
+    )
+    plan_card_content_update.add_argument(
+        "--skip-api",
+        action="store_true",
+        help="Use local snapshots only. Intended for local smoke checks; apply must use approved ready plan.",
+    )
+
+    apply_card_content_update = subparsers.add_parser(
+        "apply-card-content-update",
+        help="Apply approved Ozon/WB card content update plan and verify submission.",
+    )
+    apply_card_content_update.add_argument("--data-dir", default="data", help="Project data directory.")
+    apply_card_content_update.add_argument(
+        "--plan-run-id",
+        default=None,
+        help="Plan run id. Defaults to the latest card_content_update_plan_* run.",
+    )
+    apply_card_content_update.add_argument("--run-id", default=None, help="Optional stable run id.")
+    apply_card_content_update.add_argument(
+        "--confirmed-by-user",
+        action="store_true",
+        help="Required explicit confirmation for external Ozon/WB write operations.",
+    )
+    apply_card_content_update.add_argument(
+        "--wait-seconds",
+        type=int,
+        default=180,
+        help="How long to wait for Ozon import task status.",
+    )
+    apply_card_content_update.add_argument(
+        "--poll-interval",
+        type=int,
+        default=10,
+        help="Polling interval for Ozon import task status.",
+    )
+
+    apply_approved_card = subparsers.add_parser(
+        "apply-approved-card",
+        help="Fast path: plan, apply and targeted-verify owner-approved existing card passports.",
+    )
+    apply_approved_card.add_argument("--data-dir", default="data", help="Project data directory.")
+    apply_approved_card.add_argument("--run-id", default=None, help="Optional stable base run id.")
+    apply_approved_card.add_argument(
+        "--passport",
+        action="append",
+        default=[],
+        help="Approved master passport JSON path. Can be repeated.",
+    )
+    apply_approved_card.add_argument(
+        "--internal-sku",
+        action="append",
+        default=[],
+        help="Internal SKU from data/catalog/master_passport/approved. Can be repeated.",
+    )
+    apply_approved_card.add_argument(
+        "--confirmed-by-user",
+        action="store_true",
+        help="Required explicit confirmation for external Ozon/WB write operations.",
+    )
+    apply_approved_card.add_argument(
+        "--wait-seconds",
+        type=int,
+        default=180,
+        help="How long to wait for Ozon import task status.",
+    )
+    apply_approved_card.add_argument(
+        "--poll-interval",
+        type=int,
+        default=10,
+        help="Polling interval for Ozon import task status.",
+    )
+
+    apply_approved_cards = subparsers.add_parser(
+        "apply-approved-cards",
+        help="Batch fast path: apply owner-approved content, seller SKU and WB-create stages for multiple cards.",
+    )
+    apply_approved_cards.add_argument("--data-dir", default="data", help="Project data directory.")
+    apply_approved_cards.add_argument("--run-id", default=None, help="Optional stable base run id.")
+    apply_approved_cards.add_argument(
+        "--internal-sku",
+        action="append",
+        required=True,
+        help="Owner-approved internal SKU. Repeat for each card in the approved batch.",
+    )
+    apply_approved_cards.add_argument(
+        "--confirmed-by-user",
+        action="store_true",
+        help="Required explicit confirmation for external Ozon/WB write operations.",
+    )
+    apply_approved_cards.add_argument("--content-wait-seconds", type=int, default=180)
+    apply_approved_cards.add_argument("--content-poll-interval", type=int, default=10)
+    apply_approved_cards.add_argument("--seller-sku-wait-seconds", type=int, default=60)
+    apply_approved_cards.add_argument("--seller-sku-poll-interval", type=int, default=5)
+    apply_approved_cards.add_argument("--wb-create-wait-seconds", type=int, default=600)
+    apply_approved_cards.add_argument("--wb-create-poll-interval", type=int, default=30)
 
     reviews_questions = subparsers.add_parser(
         "reviews-questions",
@@ -1637,6 +1837,7 @@ def main(argv: list[str] | None = None) -> int:
             credentials=load_credentials(),
             data_dir=Path(args.data_dir),
             run_id=args.run_id,
+            internal_skus=args.internal_sku,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
@@ -1843,6 +2044,89 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
+
+    if args.command == "plan-seller-sku-update":
+        result = run_seller_sku_update_plan(
+            credentials=load_credentials(),
+            data_dir=Path(args.data_dir),
+            input_path=Path(args.input) if args.input else None,
+            internal_skus=args.internal_sku,
+            products_path=Path(args.products_path) if args.products_path else None,
+            run_id=args.run_id,
+            skip_api=args.skip_api,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
+
+    if args.command == "apply-seller-sku-update":
+        result = run_seller_sku_update_apply(
+            credentials=load_credentials(),
+            data_dir=Path(args.data_dir),
+            plan_run_id=args.plan_run_id,
+            run_id=args.run_id,
+            confirmed_by_user=args.confirmed_by_user,
+            wait_seconds=args.wait_seconds,
+            poll_interval=args.poll_interval,
+            update_local_layers=not args.skip_local_layer_update,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
+
+    if args.command == "plan-card-content-update":
+        result = run_card_content_update_plan(
+            credentials=load_credentials(),
+            data_dir=Path(args.data_dir),
+            passport_paths=[Path(path) for path in args.passport],
+            internal_skus=args.internal_sku,
+            run_id=args.run_id,
+            skip_api=args.skip_api,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
+
+    if args.command == "apply-card-content-update":
+        result = run_card_content_update_apply(
+            credentials=load_credentials(),
+            data_dir=Path(args.data_dir),
+            plan_run_id=args.plan_run_id,
+            run_id=args.run_id,
+            confirmed_by_user=args.confirmed_by_user,
+            wait_seconds=args.wait_seconds,
+            poll_interval=args.poll_interval,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
+
+    if args.command == "apply-approved-card":
+        result = run_apply_approved_card(
+            credentials=load_credentials(),
+            data_dir=Path(args.data_dir),
+            passport_paths=[Path(path) for path in args.passport],
+            internal_skus=args.internal_sku,
+            run_id=args.run_id,
+            confirmed_by_user=args.confirmed_by_user,
+            wait_seconds=args.wait_seconds,
+            poll_interval=args.poll_interval,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
+
+    if args.command == "apply-approved-cards":
+        result = run_apply_approved_cards(
+            credentials=load_credentials(),
+            data_dir=Path(args.data_dir),
+            internal_skus=args.internal_sku,
+            run_id=args.run_id,
+            confirmed_by_user=args.confirmed_by_user,
+            content_wait_seconds=args.content_wait_seconds,
+            content_poll_interval=args.content_poll_interval,
+            seller_sku_wait_seconds=args.seller_sku_wait_seconds,
+            seller_sku_poll_interval=args.seller_sku_poll_interval,
+            wb_create_wait_seconds=args.wb_create_wait_seconds,
+            wb_create_poll_interval=args.wb_create_poll_interval,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
 
     if args.command == "reviews-questions":
         result = run_reviews_questions(

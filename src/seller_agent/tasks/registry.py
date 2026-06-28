@@ -541,6 +541,100 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_confirmation=True,
     ),
     RegisteredTask(
+        name="seller-sku-update-plan",
+        command="plan-seller-sku-update",
+        title="Plan seller SKU update",
+        description=(
+            "Build dry-run plan for replacing Ozon offer_id and WB vendorCode "
+            "with owner-approved internal SKU."
+        ),
+        mode="dry_run",
+        risk="high",
+        marketplaces=("ozon", "wb"),
+        runbook_path="data/planning/card_ops/02_seller_sku_update_ozon_wb.md",
+        requires_credentials=True,
+        requires_mapping=True,
+    ),
+    RegisteredTask(
+        name="seller-sku-update-apply",
+        command="apply-seller-sku-update",
+        title="Apply seller SKU update",
+        description=(
+            "Apply approved Ozon offer_id and WB vendorCode replacement plan, "
+            "verify marketplace state and update local catalog CSV/JSON layers."
+        ),
+        mode="apply",
+        risk="high",
+        marketplaces=("ozon", "wb"),
+        runbook_path="data/planning/card_ops/02_seller_sku_update_ozon_wb.md",
+        requires_credentials=True,
+        requires_mapping=True,
+        requires_confirmation=True,
+    ),
+    RegisteredTask(
+        name="card-content-update-plan",
+        command="plan-card-content-update",
+        title="Plan card content update",
+        description=(
+            "Build dry-run plan for applying owner-approved Layer 3 passport "
+            "fields to existing Ozon/WB cards."
+        ),
+        mode="dry_run",
+        risk="high",
+        marketplaces=("ozon", "wb"),
+        runbook_path="data/planning/card_ops/03_card_content_update_ozon_wb.md",
+        requires_credentials=True,
+        requires_mapping=True,
+    ),
+    RegisteredTask(
+        name="card-content-update-apply",
+        command="apply-card-content-update",
+        title="Apply card content update",
+        description=(
+            "Apply approved Ozon/WB title, description, dimensions and "
+            "attribute changes from a card content update plan."
+        ),
+        mode="apply",
+        risk="high",
+        marketplaces=("ozon", "wb"),
+        runbook_path="data/planning/card_ops/03_card_content_update_ozon_wb.md",
+        requires_credentials=True,
+        requires_mapping=True,
+        requires_confirmation=True,
+    ),
+    RegisteredTask(
+        name="approved-card-apply",
+        command="apply-approved-card",
+        title="Apply approved card",
+        description=(
+            "Fast owner-approved existing-card path: build targeted plan, apply "
+            "Ozon/WB changes and run targeted verify without full catalog refresh."
+        ),
+        mode="apply",
+        risk="high",
+        marketplaces=("ozon", "wb"),
+        runbook_path="data/planning/card_ops/03_card_content_update_ozon_wb.md",
+        requires_credentials=True,
+        requires_mapping=True,
+        requires_confirmation=True,
+    ),
+    RegisteredTask(
+        name="approved-cards-batch-apply",
+        command="apply-approved-cards",
+        title="Apply approved cards batch",
+        description=(
+            "Batch owner-approved card path: apply content updates, seller SKU "
+            "replacement and WB card creation for several cards in one run."
+        ),
+        mode="apply",
+        risk="high",
+        marketplaces=("ozon", "wb"),
+        runbook_path="data/planning/card_ops/quick_access.md",
+        requires_credentials=True,
+        requires_mapping=True,
+        requires_confirmation=True,
+    ),
+    RegisteredTask(
         name="reviews-questions",
         command="reviews-questions",
         title="Reviews and questions",

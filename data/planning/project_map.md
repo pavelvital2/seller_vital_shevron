@@ -127,6 +127,9 @@
 - `data/planning/product_card_data_layers_runbook.md` - контракт карточного
   контура: слой 1 source marketplace data, слой 2 agent audit, слой 3
   owner-approved master passport.
+- `data/planning/card_ops/quick_access.md` - быстрый вход для карточных
+  write-маршрутов: инструкции, команды, batch apply после согласования пачки,
+  статус автоматизации и ограничения.
 - `src/seller_agent/tasks/pricing_status.py` - read-only статус цен и
   готовности маржинального анализа: соединяет unified catalog с локальными или
   fresh API Ozon/WB price snapshots, Ozon Elastic dry-run и WB actions dry-run,
@@ -198,6 +201,10 @@
   согласованных ставок WB promotion через Promotion API с fresh report,
   drift-check и verify.
 - `scripts/` - JS/Bash helpers для ЛК, сессий, отзывов/вопросов и операций.
+- `scripts/card_reviews/prepare_owner_review.py` - быстрый сборщик
+  owner-review HTML из Layer 2 `audit.json`: применяет guardrail-правки
+  карточного аудита, встраивает фото в HTML, проверяет mobile/desktop
+  верстку через Playwright и пишет результат для отправки владельцу.
 - `scripts/lib/ozon_cdp_guard.js` - обязательный guard для Ozon LK/CDP
   сценариев: до `chromium.connectOverCDP` проверяет локальный порт `9544` и
   Chrome `--user-data-dir` Vital Shevron, чтобы не подключиться к TAKTERRA или
@@ -341,6 +348,9 @@ Ozon CDP port по умолчанию: `9544`.
   покарточной работы: просмотр всех фото, описание изображения/цветов/фона,
   правила липучки и пришивных нашивок, размеры/вес/упаковка,
   материал/состав, структура описания и формат review.
+- `data/planning/wb_card_create_runbook.md` - безопасное создание новой
+  WB-карточки из owner-approved Layer 3 паспорта, WB barcode, media upload,
+  verify и обновление локального каталожного контура.
 - `data/planning/ozon_product_card_content_runbook.md` - Ozon-инструкция по
   наполнению карточек: title, аннотация, атрибуты, материал/состав,
   цвет/название цвета, хештеги, фото, контент-рейтинг и API read-only/dry-run.

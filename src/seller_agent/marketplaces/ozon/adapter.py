@@ -140,6 +140,15 @@ class OzonSellerAdapter:
 
         return items
 
+    def update_offer_ids(self, rows: list[dict[str, str]]) -> dict[str, Any]:
+        return self.post("/v1/product/update/offer-id", {"update_offer_id": rows})
+
+    def import_products(self, items: list[dict[str, Any]]) -> dict[str, Any]:
+        return self.post("/v3/product/import", {"items": items})
+
+    def fetch_product_import_info(self, task_id: int | str) -> dict[str, Any]:
+        return self.post("/v1/product/import/info", {"task_id": int(task_id)})
+
     def fetch_description_category_attributes(
         self,
         *,
@@ -155,6 +164,29 @@ class OzonSellerAdapter:
                 "language": language,
             },
         )
+        result = data.get("result") if isinstance(data, dict) else []
+        return result if isinstance(result, list) else []
+
+    def fetch_description_category_attribute_values(
+        self,
+        *,
+        description_category_id: int,
+        type_id: int,
+        attribute_id: int,
+        value: str = "",
+        language: str = "RU",
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        payload: dict[str, Any] = {
+            "description_category_id": description_category_id,
+            "type_id": type_id,
+            "attribute_id": attribute_id,
+            "language": language,
+            "limit": limit,
+        }
+        if value:
+            payload["value"] = value
+        data = self.post("/v1/description-category/attribute/values", payload)
         result = data.get("result") if isinstance(data, dict) else []
         return result if isinstance(result, list) else []
 

@@ -126,6 +126,9 @@ class WbContentAdapter:
     def upload_add_cards(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self.post("/content/v2/cards/upload/add", payload)
 
+    def update_cards(self, payload: list[dict[str, Any]]) -> dict[str, Any]:
+        return self.post("/content/v2/cards/update", payload)
+
     def fetch_card_errors(self, *, limit: int = 100) -> dict[str, Any]:
         return self.post(
             "/content/v2/cards/error/list",
