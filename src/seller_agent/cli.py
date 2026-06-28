@@ -42,6 +42,7 @@ from seller_agent.tasks.reviews_questions import (
     run_reviews_questions_prepare_approved,
 )
 from seller_agent.tasks.registry import get_task_definition, list_task_definitions
+from seller_agent.tasks.seo_query_pack import build_seo_query_pack
 from seller_agent.tasks.status_preflight import run_status_preflight
 from seller_agent.tasks.wb_actions_discount_apply import run_wb_actions_discount_apply
 from seller_agent.tasks.wb_actions_discount_plan import run_wb_actions_discount_plan
@@ -316,6 +317,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Confirmed mapping CSV. Defaults to data/catalog/mapping/ozon_wb_internal_sku_confirmed.csv.",
     )
     build_unified_catalog.add_argument(
+        "--owner-review-path",
+        default=None,
+        help="Owner-approved internal SKU review CSV. Defaults to data/catalog/unified/internal_sku_assignment_owner_review.csv if present.",
+    )
+    build_unified_catalog.add_argument(
         "--ozon-catalog-path",
         default=None,
         help="Ozon processed catalog CSV. Defaults to data/catalog/ozon/processed/ozon_catalog.csv.",
@@ -374,6 +380,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--products-path",
         default=None,
         help="Unified products CSV. Defaults to data/catalog/unified/products.csv.",
+    )
+    content_master.add_argument(
+        "--owner-review-path",
+        default=None,
+        help="Owner-approved internal SKU review CSV. Defaults to data/catalog/unified/internal_sku_assignment_owner_review.csv if present.",
     )
     content_master.add_argument(
         "--ozon-catalog-path",
@@ -640,6 +651,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Product passport attribute mapping CSV path.",
     )
     card_audit_packages.add_argument(
+        "--seo-query-pack-path",
+        default=None,
+        help="SEO query pack card targets JSON path. Defaults to data/catalog/content/seo_query_pack/card_seo_targets.json if present.",
+    )
+    card_audit_packages.add_argument(
         "--output-dir",
         default=None,
         help="Output package directory. Defaults to data/catalog/content/card_audit_packages/<run-id>.",
@@ -654,6 +670,37 @@ def build_parser() -> argparse.ArgumentParser:
         "--business-priority",
         default="now",
         help="Backlog business_priority filter. Use 'all' to include all rows.",
+    )
+
+    seo_query_pack = subparsers.add_parser(
+        "seo-query-pack",
+        help="Build read-only SEO query pack and target query clusters for card auditors.",
+    )
+    seo_query_pack.add_argument(
+        "--data-dir",
+        default="data",
+        help="Project data directory.",
+    )
+    seo_query_pack.add_argument(
+        "--run-id",
+        default=None,
+        help="Optional stable run id.",
+    )
+    seo_query_pack.add_argument(
+        "--content-master-path",
+        default=None,
+        help="Content master CSV. Defaults to data/catalog/content/content_master.csv.",
+    )
+    seo_query_pack.add_argument(
+        "--query-source",
+        action="append",
+        default=[],
+        help="Query source CSV/JSON path. Can be repeated.",
+    )
+    seo_query_pack.add_argument(
+        "--output-dir",
+        default=None,
+        help="Latest SEO query pack output dir. Defaults to data/catalog/content/seo_query_pack.",
     )
 
     pricing_status = subparsers.add_parser(
@@ -1439,6 +1486,7 @@ def main(argv: list[str] | None = None) -> int:
         result = run_build_unified_catalog(
             data_dir=Path(args.data_dir),
             mapping_path=Path(args.mapping_path) if args.mapping_path else None,
+            owner_review_path=Path(args.owner_review_path) if args.owner_review_path else None,
             ozon_catalog_path=Path(args.ozon_catalog_path) if args.ozon_catalog_path else None,
             wb_catalog_path=Path(args.wb_catalog_path) if args.wb_catalog_path else None,
             output_dir=Path(args.output_dir) if args.output_dir else None,
@@ -1461,6 +1509,7 @@ def main(argv: list[str] | None = None) -> int:
         result = run_catalog_content_master(
             data_dir=Path(args.data_dir),
             products_path=Path(args.products_path) if args.products_path else None,
+            owner_review_path=Path(args.owner_review_path) if args.owner_review_path else None,
             ozon_catalog_path=Path(args.ozon_catalog_path) if args.ozon_catalog_path else None,
             wb_catalog_path=Path(args.wb_catalog_path) if args.wb_catalog_path else None,
             pricing_status_path=Path(args.pricing_status_path) if args.pricing_status_path else None,
@@ -1546,10 +1595,22 @@ def main(argv: list[str] | None = None) -> int:
             wb_content_path=Path(args.wb_content_path) if args.wb_content_path else None,
             passport_schema_path=Path(args.passport_schema_path) if args.passport_schema_path else None,
             attribute_mapping_path=Path(args.attribute_mapping_path) if args.attribute_mapping_path else None,
+            seo_query_pack_path=Path(args.seo_query_pack_path) if args.seo_query_pack_path else None,
             output_dir=Path(args.output_dir) if args.output_dir else None,
             run_id=args.run_id,
             limit=args.limit,
             business_priority=business_priority,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
+
+    if args.command == "seo-query-pack":
+        result = build_seo_query_pack(
+            data_dir=Path(args.data_dir),
+            content_master_path=Path(args.content_master_path) if args.content_master_path else Path("catalog/content/content_master.csv"),
+            query_source_paths=[Path(path) for path in args.query_source],
+            output_dir=Path(args.output_dir) if args.output_dir else Path(args.data_dir) / "catalog/content/seo_query_pack",
+            run_id=args.run_id,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["overall_status"] in {"ok", "warning"} else 2

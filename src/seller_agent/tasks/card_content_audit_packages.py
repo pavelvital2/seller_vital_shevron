@@ -20,7 +20,9 @@ DEFAULT_OZON_CONTENT_PATH = Path("catalog/content/ozon_card_content.json")
 DEFAULT_WB_CONTENT_PATH = Path("catalog/content/wb_card_content.json")
 DEFAULT_PASSPORT_SCHEMA_PATH = Path("catalog/content/product_passport/master_product_passport.schema.json")
 DEFAULT_ATTRIBUTE_MAPPING_PATH = Path("catalog/content/product_passport/passport_attribute_mapping.csv")
+DEFAULT_SEO_QUERY_PACK_PATH = Path("catalog/content/seo_query_pack/card_seo_targets.json")
 DEFAULT_OUTPUT_DIR = Path("catalog/content/card_audit_packages")
+DEFAULT_ALLOWED_SEO_STATUSES = {"ready", "ready_broad_only"}
 
 PACKAGE_INDEX_FIELDS = [
     "package_rank",
@@ -37,12 +39,30 @@ PACKAGE_INDEX_FIELDS = [
     "ozon_photo_count",
     "wb_photo_count",
     "total_photo_count",
+    "seo_query_pack_status",
+    "seo_manual_review_reason",
     "visual_audit_status",
     "passport_draft_status",
     "package_dir",
     "audit_report",
     "audit_package_json",
     "photos_html",
+]
+
+EXCLUDED_PACKAGE_INDEX_FIELDS = [
+    "backlog_rank",
+    "audit_priority",
+    "business_priority",
+    "internal_product_id",
+    "internal_sku",
+    "product_name",
+    "marketplace_presence",
+    "mapping_status",
+    "ozon_offer_id",
+    "wb_vendor_code",
+    "seo_query_pack_status",
+    "seo_manual_review_reason",
+    "exclude_reason",
 ]
 
 
@@ -78,6 +98,27 @@ def _index_by(rows: list[dict[str, str]], field: str) -> dict[str, dict[str, str
         if key and key not in result:
             result[key] = row
     return result
+
+
+def _load_seo_targets(raw: Any) -> list[dict[str, Any]]:
+    if isinstance(raw, dict) and isinstance(raw.get("card_targets"), list):
+        return [row for row in raw["card_targets"] if isinstance(row, dict)]
+    if isinstance(raw, list):
+        return [row for row in raw if isinstance(row, dict)]
+    return []
+
+
+def _index_seo_targets(rows: list[dict[str, Any]]) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    by_id: dict[str, dict[str, Any]] = {}
+    by_sku: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        internal_product_id = normalize_sku(row.get("internal_product_id"))
+        internal_sku = normalize_sku(row.get("internal_sku"))
+        if internal_product_id and internal_product_id not in by_id:
+            by_id[internal_product_id] = row
+        if internal_sku and internal_sku not in by_sku:
+            by_sku[internal_sku] = row
+    return by_id, by_sku
 
 
 def _index_ozon_content(ozon_content: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
@@ -179,6 +220,15 @@ def _first_text(*values: Any) -> str:
         if text:
             return text
     return ""
+
+
+def _unique(values: list[str]) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        text = normalize_sku(value)
+        if text and text not in result:
+            result.append(text)
+    return result
 
 
 def _sku_parts(internal_sku: str) -> dict[str, str]:
@@ -283,6 +333,7 @@ def _passport_draft(
     ozon_description: dict[str, Any] | None,
     wb_item: dict[str, Any] | None,
     media_assets: list[dict[str, Any]],
+    seo_target: dict[str, Any] | None,
 ) -> dict[str, Any]:
     internal_sku = _first_text(backlog_row.get("internal_sku"), content_row.get("internal_sku"))
     sku_parts = _sku_parts(internal_sku)
@@ -290,6 +341,15 @@ def _passport_draft(
     cost_total = _first_text(content_row.get("cost_total"), backlog_row.get("cost_total"))
     description = _description(ozon_description, ozon_item, wb_item)
     title = _first_text(content_row.get("canonical_title"), backlog_row.get("product_name"))
+    query_clusters = (seo_target or {}).get("target_query_clusters") or {}
+    search_queries = _unique(
+        [
+            *query_clusters.get("primary_target", []),
+            *query_clusters.get("secondary_target", []),
+            *query_clusters.get("broad_identity", []),
+            *query_clusters.get("placement", []),
+        ]
+    )
 
     values = {
         "internal_product_id": _first_text(backlog_row.get("internal_product_id"), content_row.get("internal_product_id")),
@@ -317,7 +377,7 @@ def _passport_draft(
         "tnved": "",
         "country_of_origin": "",
         "cost_total": float(cost_total.replace(",", ".")) if cost_total else None,
-        "search_queries": [],
+        "search_queries": search_queries,
         "ozon_hashtags": [],
         "media_assets": media_assets,
         "target_group_key": "",
@@ -348,7 +408,7 @@ def _passport_draft(
         "tnved": "needs_agent_review",
         "country_of_origin": "not_confirmed",
         "cost_total": "confirmed_from_content_master" if cost_total else "not_confirmed",
-        "search_queries": "not_loaded_in_package",
+        "search_queries": "loaded_from_seo_query_pack" if seo_target else "not_loaded_in_package",
         "ozon_hashtags": "current_snapshot_or_not_loaded",
         "media_assets": "urls_collected_visual_audit_pending",
         "target_group_key": "needs_grouping_audit",
@@ -364,12 +424,17 @@ def build_card_audit_packages(
     wb_content: list[dict[str, Any]],
     passport_schema: dict[str, Any] | None = None,
     attribute_mapping_rows: list[dict[str, str]] | None = None,
+    seo_target_rows: list[dict[str, Any]] | None = None,
+    seo_allowed_statuses: set[str] | None = None,
     limit: int | None = None,
     business_priority: str | None = "now",
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
     content_by_id = _index_by(content_rows, "internal_product_id")
     ozon_by_offer, ozon_desc_by_offer = _index_ozon_content(ozon_content)
     wb_by_vendor = _index_wb_content(wb_content)
+    seo_by_id, seo_by_sku = _index_seo_targets(seo_target_rows or [])
+    seo_targets_available = bool(seo_target_rows)
+    seo_allowed_statuses = seo_allowed_statuses or DEFAULT_ALLOWED_SEO_STATUSES
     ozon_names, wb_names = _attribute_names(attribute_mapping_rows or [])
     schema_fields = _schema_fields(passport_schema or {})
     selected: list[dict[str, str]] = []
@@ -381,11 +446,34 @@ def build_card_audit_packages(
             break
 
     packages: list[dict[str, Any]] = []
-    for package_rank, row in enumerate(selected, start=1):
+    excluded_rows: list[dict[str, Any]] = []
+    for row in selected:
         internal_product_id = normalize_sku(row.get("internal_product_id"))
         content_row = content_by_id.get(internal_product_id, {})
         ozon_offer_id = _first_text(row.get("ozon_offer_id"), content_row.get("ozon_offer_id"))
         wb_vendor_code = _first_text(row.get("wb_vendor_code"), content_row.get("wb_vendor_code"))
+        internal_sku = _first_text(row.get("internal_sku"), content_row.get("internal_sku"))
+        seo_target = seo_by_id.get(internal_product_id) or seo_by_sku.get(normalize_sku(internal_sku))
+        seo_status = (seo_target or {}).get("query_pack_status", "missing")
+        if seo_targets_available and seo_status not in seo_allowed_statuses:
+            excluded_rows.append(
+                {
+                    "backlog_rank": row.get("backlog_rank", ""),
+                    "audit_priority": row.get("audit_priority", ""),
+                    "business_priority": row.get("business_priority", ""),
+                    "internal_product_id": row.get("internal_product_id", ""),
+                    "internal_sku": row.get("internal_sku", ""),
+                    "product_name": row.get("product_name", ""),
+                    "marketplace_presence": row.get("marketplace_presence", ""),
+                    "mapping_status": row.get("mapping_status", ""),
+                    "ozon_offer_id": row.get("ozon_offer_id", ""),
+                    "wb_vendor_code": row.get("wb_vendor_code", ""),
+                    "seo_query_pack_status": seo_status,
+                    "seo_manual_review_reason": (seo_target or {}).get("manual_review_reason", ""),
+                    "exclude_reason": "seo_query_pack_status_not_allowed_for_mass_card_audit",
+                }
+            )
+            continue
         ozon_item = ozon_by_offer.get(ozon_offer_id)
         ozon_description = ozon_desc_by_offer.get(ozon_offer_id)
         wb_item = wb_by_vendor.get(wb_vendor_code)
@@ -397,10 +485,34 @@ def build_card_audit_packages(
             ozon_description=ozon_description,
             wb_item=wb_item,
             media_assets=media_assets,
+            seo_target=seo_target,
         )
+        seo_query_pack = {
+            "source_status": "found" if seo_target else "missing",
+            "query_pack_status": (seo_target or {}).get("query_pack_status", "missing"),
+            "manual_review_reason": (seo_target or {}).get("manual_review_reason", ""),
+            "target_query_clusters": (seo_target or {}).get("target_query_clusters") or {},
+            "confirmed_query_rows": (seo_target or {}).get("confirmed_query_rows") or [],
+            "confirmed_query_rows_by_marketplace": (seo_target or {}).get("confirmed_query_rows_by_marketplace") or {},
+            "confirmed_query_rows_by_role": (seo_target or {}).get("confirmed_query_rows_by_role") or {},
+            "primary_target": (seo_target or {}).get("primary_target", ""),
+            "secondary_targets": (seo_target or {}).get("secondary_targets", ""),
+            "broad_identity_terms": (seo_target or {}).get("broad_identity_terms", ""),
+            "placement_terms": (seo_target or {}).get("placement_terms", ""),
+            "excluded_terms": (seo_target or {}).get("excluded_terms", ""),
+            "ozon_confirmed_queries": (seo_target or {}).get("ozon_confirmed_queries", ""),
+            "wb_confirmed_queries": (seo_target or {}).get("wb_confirmed_queries", ""),
+            "ozon_frequency_sum": (seo_target or {}).get("ozon_frequency_sum", ""),
+            "wb_frequency_sum": (seo_target or {}).get("wb_frequency_sum", ""),
+            "routing_note": (
+                "Use ready targets for SEO recommendations; ready_broad_only needs explicit limitation; "
+                "needs_manual_review/excluded_non_patch_assortment must not be treated as complete SEO evidence. "
+                "Use confirmed_query_rows as row-level demand evidence; do not replace it with aggregate frequency sums."
+            ),
+        }
         packages.append(
             {
-                "package_rank": package_rank,
+                "package_rank": len(packages) + 1,
                 "source_status": "read_only_generated_package",
                 "audit_requires_agent_visual_review": True,
                 "visual_audit_status": "pending_agent_review",
@@ -442,6 +554,7 @@ def build_card_audit_packages(
                     },
                 },
                 "media_assets": media_assets,
+                "seo_query_pack": seo_query_pack,
                 "master_product_passport_draft": passport_draft,
                 "grouping_diagnostics": {
                     "ozon_model_info": (ozon_item or {}).get("model_info") or {},
@@ -465,6 +578,9 @@ def build_card_audit_packages(
         "input_content_rows": len(content_rows),
         "selected_rows": len(selected),
         "packages": len(packages),
+        "excluded_by_seo_status": len(excluded_rows),
+        "excluded_needs_manual_review": sum(1 for row in excluded_rows if row["seo_query_pack_status"] == "needs_manual_review"),
+        "excluded_non_patch_assortment": sum(1 for row in excluded_rows if row["seo_query_pack_status"] == "excluded_non_patch_assortment"),
         "business_priority_filter": business_priority if business_priority is not None else "all",
         "limit": limit if limit is not None else "",
         "high_priority_packages": by_priority.get("high", 0),
@@ -473,9 +589,14 @@ def build_card_audit_packages(
         "total_media_assets": sum(len(package["media_assets"]) for package in packages),
         "packages_with_ozon_snapshot": sum(1 for package in packages if package["current_marketplace_content"]["ozon"]["snapshot_status"] == "found"),
         "packages_with_wb_snapshot": sum(1 for package in packages if package["current_marketplace_content"]["wb"]["snapshot_status"] == "found"),
+        "packages_with_seo_query_pack": sum(1 for package in packages if package["seo_query_pack"]["source_status"] == "found"),
+        "packages_seo_ready": sum(1 for package in packages if package["seo_query_pack"]["query_pack_status"] == "ready"),
+        "packages_seo_broad_only": sum(1 for package in packages if package["seo_query_pack"]["query_pack_status"] == "ready_broad_only"),
+        "packages_seo_needs_manual_review": sum(1 for package in packages if package["seo_query_pack"]["query_pack_status"] == "needs_manual_review"),
+        "packages_seo_excluded_non_patch": sum(1 for package in packages if package["seo_query_pack"]["query_pack_status"] == "excluded_non_patch_assortment"),
         "visual_audit_completed": 0,
     }
-    return packages, summary
+    return packages, excluded_rows, summary
 
 
 def _write_photos_html(path: Path, package: dict[str, Any]) -> None:
@@ -530,6 +651,9 @@ def _write_package_report(path: Path, package: dict[str, Any]) -> None:
     backlog = package["backlog"]
     ozon = package["current_marketplace_content"]["ozon"]
     wb = package["current_marketplace_content"]["wb"]
+    seo = package.get("seo_query_pack") or {}
+    confirmed_query_rows = seo.get("confirmed_query_rows") or []
+    confirmed_query_sample = confirmed_query_rows[:8]
     lines = [
         "# Card Audit Package",
         "",
@@ -559,15 +683,42 @@ def _write_package_report(path: Path, package: dict[str, Any]) -> None:
         f"- Photos: `{sum(1 for item in package['media_assets'] if item.get('marketplace') == 'wb')}`",
         f"- Characteristics: `{len(wb.get('characteristics') or [])}`",
         "",
-        "## Grouping",
+        "## SEO Query Pack",
         "",
-        f"- Ozon model_info: `{json.dumps(package['grouping_diagnostics'].get('ozon_model_info') or {}, ensure_ascii=False)}`",
-        f"- WB imtID: `{package['grouping_diagnostics'].get('wb_imt_id')}`",
-        f"- Status: `{package['grouping_diagnostics'].get('grouping_review_status')}`",
-        "",
-        "## Next Agent Actions",
+        f"- Source: `{seo.get('source_status')}`",
+        f"- Status: `{seo.get('query_pack_status')}`",
+        f"- Manual review reason: `{seo.get('manual_review_reason')}`",
+        f"- Primary target: {seo.get('primary_target')}",
+        f"- Secondary targets: {seo.get('secondary_targets')}",
+        f"- Broad terms: {seo.get('broad_identity_terms')}",
+        f"- Placement terms: {seo.get('placement_terms')}",
+        f"- Ozon confirmed: {seo.get('ozon_confirmed_queries')}",
+        f"- WB confirmed: {seo.get('wb_confirmed_queries')}",
+        f"- Row-level confirmed queries: `{len(confirmed_query_rows)}`",
         "",
     ]
+    if confirmed_query_sample:
+        lines.extend(["### Row-Level Query Sample", ""])
+        for item in confirmed_query_sample:
+            lines.append(
+                "- "
+                f"`{item.get('marketplace')}` `{item.get('role')}` "
+                f"{item.get('query')} = `{item.get('frequency')}` "
+                f"period `{item.get('period')}` source `{item.get('source')}`"
+            )
+        lines.append("")
+    lines.extend(
+        [
+            "## Grouping",
+            "",
+            f"- Ozon model_info: `{json.dumps(package['grouping_diagnostics'].get('ozon_model_info') or {}, ensure_ascii=False)}`",
+            f"- WB imtID: `{package['grouping_diagnostics'].get('wb_imt_id')}`",
+            f"- Status: `{package['grouping_diagnostics'].get('grouping_review_status')}`",
+            "",
+            "## Next Agent Actions",
+            "",
+        ]
+    )
     for item in package["next_agent_actions"]:
         lines.append(f"- {item}")
     lines.extend(
@@ -611,6 +762,14 @@ def _write_run_report(path: Path, *, run_id: str, started_at: datetime, result: 
         )
     if result.get("package_sample_truncated"):
         lines.append(f"- truncated: {result['package_sample_truncated']} more rows")
+    lines.extend(["", "## Excluded Sample", ""])
+    for row in result.get("excluded_sample", [])[:30]:
+        lines.append(
+            f"- `{row.get('seo_query_pack_status')}` `{row.get('internal_product_id')}`: "
+            f"{row.get('product_name')} ({row.get('seo_manual_review_reason')})"
+        )
+    if result.get("excluded_sample_truncated"):
+        lines.append(f"- truncated: {result['excluded_sample_truncated']} more rows")
     lines.extend(["", "## Artifacts", ""])
     for key, value in sorted(result["artifacts"].items()):
         lines.append(f"- `{key}`: `{value}`")
@@ -637,6 +796,7 @@ def run_card_content_audit_packages(
     wb_content_path: Path | None = None,
     passport_schema_path: Path | None = None,
     attribute_mapping_path: Path | None = None,
+    seo_query_pack_path: Path | None = None,
     output_dir: Path | None = None,
     run_id: str | None = None,
     limit: int | None = None,
@@ -652,6 +812,7 @@ def run_card_content_audit_packages(
     wb_content_path = wb_content_path or data_dir / DEFAULT_WB_CONTENT_PATH
     passport_schema_path = passport_schema_path or data_dir / DEFAULT_PASSPORT_SCHEMA_PATH
     attribute_mapping_path = attribute_mapping_path or data_dir / DEFAULT_ATTRIBUTE_MAPPING_PATH
+    seo_query_pack_path = seo_query_pack_path or data_dir / DEFAULT_SEO_QUERY_PACK_PATH
     output_dir = ensure_dir(output_dir or data_dir / DEFAULT_OUTPUT_DIR / run_id)
 
     errors: dict[str, str] = {}
@@ -661,6 +822,8 @@ def run_card_content_audit_packages(
     wb_content: list[dict[str, Any]] = []
     passport_schema: dict[str, Any] = {}
     attribute_mapping_rows: list[dict[str, str]] = []
+    seo_target_rows: list[dict[str, Any]] = []
+    optional_warnings: dict[str, str] = {}
 
     for label, path in (
         ("backlog", backlog_path),
@@ -705,12 +868,25 @@ def run_card_content_audit_packages(
     except Exception as exc:  # noqa: BLE001
         errors["passport_schema"] = str(exc)
 
+    try:
+        raw = _read_json(seo_query_pack_path)
+        seo_target_rows = _load_seo_targets(raw)
+        if not seo_target_rows:
+            optional_warnings["seo_query_pack"] = "loaded but no card targets found"
+    except FileNotFoundError:
+        optional_warnings["seo_query_pack"] = "not found"
+    except Exception as exc:  # noqa: BLE001
+        optional_warnings["seo_query_pack"] = str(exc)
+
     packages: list[dict[str, Any]] = []
     summary: dict[str, Any] = {
         "input_backlog_rows": len(backlog_rows),
         "input_content_rows": len(content_rows),
         "selected_rows": 0,
         "packages": 0,
+        "excluded_by_seo_status": 0,
+        "excluded_needs_manual_review": 0,
+        "excluded_non_patch_assortment": 0,
         "business_priority_filter": business_priority if business_priority is not None else "all",
         "limit": limit if limit is not None else "",
         "high_priority_packages": 0,
@@ -719,21 +895,28 @@ def run_card_content_audit_packages(
         "total_media_assets": 0,
         "packages_with_ozon_snapshot": 0,
         "packages_with_wb_snapshot": 0,
+        "packages_with_seo_query_pack": 0,
+        "packages_seo_ready": 0,
+        "packages_seo_broad_only": 0,
+        "packages_seo_needs_manual_review": 0,
+        "packages_seo_excluded_non_patch": 0,
         "visual_audit_completed": 0,
     }
     if not errors:
-        packages, summary = build_card_audit_packages(
+        packages, excluded_rows, summary = build_card_audit_packages(
             backlog_rows=backlog_rows,
             content_rows=content_rows,
             ozon_content=ozon_content,
             wb_content=wb_content,
             passport_schema=passport_schema,
             attribute_mapping_rows=attribute_mapping_rows,
+            seo_target_rows=seo_target_rows,
             limit=limit,
             business_priority=business_priority,
         )
 
     package_index_rows: list[dict[str, Any]] = []
+    excluded_index_rows: list[dict[str, Any]] = []
     if not errors:
         for package in packages:
             backlog = package["backlog"]
@@ -765,6 +948,8 @@ def run_card_content_audit_packages(
                     "ozon_photo_count": ozon_photo_count,
                     "wb_photo_count": wb_photo_count,
                     "total_photo_count": ozon_photo_count + wb_photo_count,
+                    "seo_query_pack_status": package["seo_query_pack"]["query_pack_status"],
+                    "seo_manual_review_reason": package["seo_query_pack"]["manual_review_reason"],
                     "visual_audit_status": package["visual_audit_status"],
                     "passport_draft_status": package["passport_draft_status"],
                     "package_dir": str(package_dir),
@@ -773,14 +958,19 @@ def run_card_content_audit_packages(
                     "photos_html": str(photos_html_path),
                 }
             )
+        excluded_index_rows = excluded_rows
 
     package_index_csv_path = output_dir / "package_index.csv"
     package_index_json_path = output_dir / "package_index.json"
+    excluded_index_csv_path = output_dir / "excluded_package_index.csv"
+    excluded_index_json_path = output_dir / "excluded_package_index.json"
     report_path = run_dir / "card_content_audit_packages_report.md"
     summary_path = run_dir / "summary.json"
     if not errors:
         _write_csv(package_index_csv_path, package_index_rows, PACKAGE_INDEX_FIELDS)
         write_json(package_index_json_path, package_index_rows)
+        _write_csv(excluded_index_csv_path, excluded_index_rows, EXCLUDED_PACKAGE_INDEX_FIELDS)
+        write_json(excluded_index_json_path, excluded_index_rows)
 
     overall_status = "error" if errors else "warning" if packages else "ok"
     artifacts = {
@@ -788,6 +978,8 @@ def run_card_content_audit_packages(
         "output_dir": str(output_dir),
         "package_index_csv": str(package_index_csv_path),
         "package_index_json": str(package_index_json_path),
+        "excluded_package_index_csv": str(excluded_index_csv_path),
+        "excluded_package_index_json": str(excluded_index_json_path),
         "report": str(report_path),
         "summary": str(summary_path),
         "run_manifest": str(run_dir / "manifest.json"),
@@ -799,8 +991,11 @@ def run_card_content_audit_packages(
         "overall_status": overall_status,
         "summary": summary,
         "errors": errors,
+        "optional_warnings": optional_warnings,
         "package_sample": package_index_rows[:50],
         "package_sample_truncated": max(0, len(package_index_rows) - 50),
+        "excluded_sample": excluded_index_rows[:50],
+        "excluded_sample_truncated": max(0, len(excluded_index_rows) - 50),
         "inputs": {
             "backlog_path": str(backlog_path),
             "content_master_path": str(content_master_path),
@@ -808,6 +1003,7 @@ def run_card_content_audit_packages(
             "wb_content_path": str(wb_content_path),
             "passport_schema_path": str(passport_schema_path),
             "attribute_mapping_path": str(attribute_mapping_path),
+            "seo_query_pack_path": str(seo_query_pack_path),
             "business_priority": business_priority if business_priority is not None else "all",
             "limit": limit if limit is not None else "",
         },

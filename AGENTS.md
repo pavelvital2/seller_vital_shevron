@@ -123,6 +123,22 @@
 - `data/planning/master_product_passport_runbook.md` - архитектура целевого
   внутреннего паспорта товара, порядок запуска `design-product-passport`,
   generated artifacts и маппинг внутренних полей в Ozon/WB.
+- `data/planning/product_card_data_layers_runbook.md` - контракт трехслойного
+  карточного контура: source marketplace data, agent audit и
+  owner-approved master passport.
+- `data/planning/product_card_fill_template_runbook.md` - согласованный
+  шаблон целевого заполнения карточки: идентификация, название, описание,
+  материал/состав, размеры, упаковка, фото, SEO и Ozon/WB поля.
+- `data/planning/product_card_editor_field_map_runbook.md` - карта реальных
+  полей редакторов Ozon/WB для шевронов, нашивок, петлиц и комплектов:
+  пачное заполнение, поля `keep`, `do_not_touch`, review и HTML-аудит.
+- `data/planning/product_card_audit_orchestration_runbook.md` -
+  предварительная схема массового карточного аудита через оркестратора,
+  одноразовых fresh-аудиторов, fresh-проверяющих, HTML/JSON слой 2 и общий
+  индекс.
+- `data/planning/card_audit_agent_docs/README.md` - минимальный пакет
+  документов для fresh-аудиторов и fresh-проверяющих карточек: prompts,
+  краткие правила и контракт HTML/JSON результата без перегруза контекста.
 - `data/planning/product_card_work_runbook.md` - обязательный порядок
   покарточной работы: фото-аудит всех фото, липучка/нашивки, размеры, вес,
   упаковка, материал/состав, описание и правила review перед изменениями
@@ -146,6 +162,10 @@
   перехода Vital Shevron к управлению Ozon/WB через Telegram-бота.
 - `data/reference/takterra_development_docs/README.md` - read-only копия
   документов TAKTERRA по развитию проекта, архитектуре и боту.
+- `data/catalog/card_audits/README.md` - слой 2 карточного контура:
+  результаты личного аудита агента и рекомендации до согласования владельцем.
+- `data/catalog/master_passport/README.md` - слой 3 карточного контура:
+  owner-approved паспорта товаров для будущих dry-run и загрузок.
 - `.agents/skills/marketplace-analytics/SKILL.md` - короткий repo
   router-skill для выбора профильного Ozon/WB skill и runbook.
 - `.agents/skills/marketplace-reviews-questions/SKILL.md` - отзывы,

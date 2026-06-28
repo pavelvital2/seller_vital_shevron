@@ -238,6 +238,52 @@ NODE_PATH=/home/Codex/agent-tools/node/node_modules \
 
 ## Проверенные операции
 
+### Штатный apply 2026-06-26
+
+- Pending-пакет:
+  `data/pending/reviews_questions_20260626T_owner_request_pending`.
+- Approved-пакет:
+  `data/approved/reviews_questions_20260626T_owner_request_pending_approved/approved_apply_plan.json`.
+- Apply: `reviews_questions_apply_20260626T1050`.
+- Результат apply: WB ответы `1/1`, WB вопросы `0/0`, Ozon публичные ответы
+  `1/1`, Ozon отметки просмотренным `20/20`.
+- Ozon счетчик перед/после: `NOT_VIEWED 21 -> 0`, `PROCESSED 2635 -> 2636`,
+  `VIEWED 4157 -> 4177`.
+- Контрольный read-only: `reviews_questions_verify_20260626T1051`.
+- Verify: `items_count=0`, `actions_count=0`; WB Feedbacks API вернул `0`
+  отзывов/вопросов к обработке, Ozon LK/CDP fallback вернул `0` отзывов и
+  `0` вопросов к обработке.
+- Нулевой pending контрольного verify
+  `reviews_questions_verify_20260626T1051_pending` закрыт как
+  `no_actions_verify`, чтобы он не висел в статусах на согласование.
+- Медиа в исходном pending-пакете не было: `0` фото и `0` видео.
+- Ограничение источника: официальный Ozon Review API `/v1/review/count` и
+  `/v1/review/list` вернул `HTTP 403: not available with existing
+  subscription`, поэтому Ozon проверен через LK/CDP fallback.
+
+### Штатный apply 2026-06-25 вечер
+
+- Pending-пакет:
+  `data/pending/reviews_questions_20260625T184109_pending`.
+- Approved-пакет:
+  `data/approved/reviews_questions_20260625T184109_pending_approved/approved_apply_plan.json`.
+- Apply: `reviews_questions_apply_20260625T184529`.
+- Результат apply: WB ответы `1/1`, WB вопросы `0/0`, Ozon публичные ответы
+  `4/4`, Ozon отметки просмотренным `17/17`.
+- Ozon счетчик перед/после: `NOT_VIEWED 21 -> 0`, `PROCESSED 2631 -> 2635`,
+  `VIEWED 4140 -> 4157`.
+- Контрольный read-only: `reviews_questions_verify_20260625T1846`.
+- Verify: `items_count=0`, `actions_count=0`; WB Feedbacks API вернул `0`
+  отзывов/вопросов к обработке, Ozon LK/CDP fallback вернул `0` отзывов и `0`
+  вопросов к обработке.
+- Нулевой pending контрольного verify
+  `reviews_questions_verify_20260625T1846_pending` закрыт как
+  `no_actions_verify`, чтобы он не висел в статусах на согласование.
+- Медиа в исходном pending-пакете не было: `0` фото и `0` видео.
+- Ограничение источника: официальный Ozon Review API `/v1/review/count` и
+  `/v1/review/list` вернул `HTTP 403: not available with existing
+  subscription`, поэтому Ozon проверен через LK/CDP fallback.
+
 ### Штатный apply 2026-06-25
 
 - Pending-пакет:

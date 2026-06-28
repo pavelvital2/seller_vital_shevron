@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Vital Shevron Owner-Approved Master Product Passport",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "identity",
+    "approval",
+    "content",
+    "physical",
+    "materials",
+    "classification",
+    "ozon",
+    "wb"
+  ],
+  "properties": {
+    "identity": {
+      "type": "object",
+      "required": ["internal_product_id", "internal_sku", "marketplace_presence"],
+      "properties": {
+        "internal_product_id": {"type": "string"},
+        "internal_sku": {"type": "string"},
+        "marketplace_presence": {"type": "string"},
+        "ozon_offer_id": {"type": "string"},
+        "ozon_product_id": {"type": "string"},
+        "ozon_sku": {"type": "string"},
+        "wb_vendor_code": {"type": "string"},
+        "wb_nm_id": {"type": "string"}
+      }
+    },
+    "approval": {
+      "type": "object",
+      "required": ["status", "approved_at"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "owner_approved",
+            "owner_approved_for_dry_run",
+            "superseded"
+          ]
+        },
+        "approved_at": {"type": "string"},
+        "approved_by": {"type": "string"},
+        "source_audit_id": {"type": "string"},
+        "change_notes": {"type": "string"}
+      }
+    },
+    "content": {
+      "type": "object",
+      "required": [
+        "canonical_title",
+        "ozon_title",
+        "wb_title",
+        "canonical_description",
+        "ozon_description",
+        "wb_description"
+      ],
+      "properties": {
+        "canonical_title": {"type": "string", "maxLength": 60},
+        "ozon_title": {"type": "string"},
+        "wb_title": {"type": "string", "maxLength": 60},
+        "canonical_description": {"type": "string", "maxLength": 2000},
+        "ozon_description": {"type": "string"},
+        "wb_description": {"type": "string", "maxLength": 2000},
+        "image_subject": {"type": "string"},
+        "package_contents": {"type": "string"}
+      }
+    },
+    "physical": {
+      "type": "object",
+      "properties": {
+        "product_size_mm": {"type": "string"},
+        "package_dimensions_ozon_mm": {"type": "string"},
+        "package_dimensions_wb_cm": {"type": "string"},
+        "item_weight_g": {"type": "number"},
+        "package_weight_g": {"type": "number"},
+        "pack_qty": {"type": "integer"}
+      }
+    },
+    "materials": {
+      "type": "object",
+      "properties": {
+        "material": {"type": "string"},
+        "composition": {"type": "array", "items": {"type": "string"}},
+        "attachment_type": {"type": "string"}
+      }
+    },
+    "classification": {
+      "type": "object",
+      "properties": {
+        "tnved": {"type": "string"},
+        "country_of_origin": {"type": "string"}
+      }
+    },
+    "pricing": {
+      "type": "object",
+      "properties": {
+        "cost_total": {"type": "number"},
+        "min_price_ozon": {"type": "number"},
+        "min_price_wb": {"type": "number"}
+      }
+    },
+    "seo": {
+      "type": "object",
+      "properties": {
+        "search_queries": {"type": "array", "items": {"type": "string"}},
+        "ozon_hashtags": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "media": {
+      "type": "object",
+      "properties": {
+        "target_assets": {"type": "array", "items": {"type": "object"}},
+        "designer_tasks": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "grouping": {
+      "type": "object",
+      "properties": {
+        "target_group_key": {"type": "string"},
+        "decision": {"type": "string"}
+      }
+    },
+    "ozon": {
+      "type": "object",
+      "properties": {
+        "attributes": {"type": "array", "items": {"type": "object"}},
+        "export_status": {"type": "string"}
+      }
+    },
+    "wb": {
+      "type": "object",
+      "properties": {
+        "attributes": {"type": "array", "items": {"type": "object"}},
+        "export_status": {"type": "string"}
+      }
+    }
+  }
+}

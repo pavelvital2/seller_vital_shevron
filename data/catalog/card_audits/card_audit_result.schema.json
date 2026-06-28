@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Vital Shevron Card Audit Result",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "identity",
+    "source_refs",
+    "agent_audit",
+    "current_state",
+    "recommendations",
+    "owner_review"
+  ],
+  "properties": {
+    "identity": {
+      "type": "object",
+      "required": ["internal_product_id", "marketplace_presence"],
+      "properties": {
+        "internal_product_id": {"type": "string"},
+        "internal_sku": {"type": "string"},
+        "marketplace_presence": {"type": "string"},
+        "ozon_offer_id": {"type": "string"},
+        "ozon_product_id": {"type": "string"},
+        "ozon_sku": {"type": "string"},
+        "wb_vendor_code": {"type": "string"},
+        "wb_nm_id": {"type": "string"}
+      }
+    },
+    "source_refs": {
+      "type": "object",
+      "properties": {
+        "content_master_row": {"type": "string"},
+        "audit_package_json": {"type": "string"},
+        "photos_html": {"type": "string"},
+        "parser_report_refs": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "agent_audit": {
+      "type": "object",
+      "required": ["status", "audited_at", "all_photos_inspected"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "agent_audited",
+            "needs_agent_review",
+            "blocked",
+            "superseded"
+          ]
+        },
+        "audited_at": {"type": "string"},
+        "audited_by": {"type": "string"},
+        "all_photos_inspected": {"type": "boolean"},
+        "photos_count": {"type": "integer"},
+        "collage_path": {"type": "string"},
+        "html_report_path": {"type": "string"}
+      }
+    },
+    "current_state": {
+      "type": "object",
+      "properties": {
+        "ozon": {"type": "object"},
+        "wb": {"type": "object"},
+        "photo_notes": {"type": "array", "items": {"type": "object"}},
+        "grouping": {"type": "object"},
+        "seo_visibility": {"type": "object"}
+      }
+    },
+    "recommendations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["field", "current", "recommended", "reason", "status"],
+        "properties": {
+          "field": {"type": "string"},
+          "current": {},
+          "recommended": {},
+          "reason": {"type": "string"},
+          "status": {
+            "type": "string",
+            "enum": [
+              "recommended",
+              "needs_owner_review",
+              "needs_source_check",
+              "not_recommended"
+            ]
+          },
+          "batch_group_key": {"type": "string"}
+        }
+      }
+    },
+    "designer_tasks": {
+      "type": "array",
+      "items": {"type": "object"}
+    },
+    "owner_review": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "not_submitted",
+            "owner_review_needed",
+            "owner_approved",
+            "owner_rejected",
+            "partially_approved"
+          ]
+        },
+        "reviewed_at": {"type": "string"},
+        "owner_notes": {"type": "string"}
+      }
+    }
+  }
+}

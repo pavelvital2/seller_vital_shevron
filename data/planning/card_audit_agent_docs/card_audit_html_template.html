@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Аудит карточки {{ internal_sku }}</title>
+<style>
+:root {
+  --bg:#f5f6f8; --panel:#fff; --text:#171a1f; --muted:#667085; --line:#d9dee7;
+  --accent:#1769aa; --high:#b42318; --medium:#925a00; --low:#286c2f;
+  --soft-high:#fff1f0; --soft-medium:#fff7e8; --soft-low:#eef9ef;
+}
+* { box-sizing:border-box; }
+html, body { margin:0; max-width:100%; overflow-x:hidden; }
+body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif; background:var(--bg); color:var(--text); line-height:1.45; }
+a { color:var(--accent); overflow-wrap:anywhere; }
+header { background:var(--panel); border-bottom:1px solid var(--line); padding:14px 16px; position:sticky; top:0; z-index:2; }
+h1 { font-size:20px; line-height:1.2; margin:0 0 8px; overflow-wrap:anywhere; }
+h2 { font-size:18px; margin:0 0 12px; }
+h3 { font-size:15px; margin:0; }
+main { max-width:980px; margin:0 auto; padding:12px; }
+section, details { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px; margin:12px 0; }
+summary { cursor:pointer; font-weight:700; font-size:17px; }
+.meta { display:flex; flex-wrap:wrap; gap:8px; }
+.chip { border:1px solid var(--line); border-radius:999px; padding:5px 9px; background:#fafbfc; font-size:13px; }
+.summary-box { border-left:4px solid var(--accent); }
+.ids, .field-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+.idbox, .field, .desc-block, .photo-card, .param { border:1px solid var(--line); border-radius:8px; padding:10px; background:#fafbfc; min-width:0; }
+.idbox b, .field span, .flow b, .param small { display:block; color:var(--muted); font-size:12px; font-weight:600; margin-bottom:4px; }
+.idbox span, .field b, .param p { overflow-wrap:anywhere; word-break:break-word; }
+.media-scroll { max-width:100%; overflow-x:auto; border:1px solid var(--line); border-radius:8px; background:#fff; }
+.collage { display:block; width:100%; min-width:860px; height:auto; }
+.hint { color:var(--muted); font-size:13px; margin:8px 0 0; }
+.rec-grid, .desc-grid { display:grid; gap:10px; }
+.rec { border:1px solid var(--line); border-radius:10px; padding:12px; }
+.rec.high { background:var(--soft-high); border-color:#ffc9c2; }
+.rec.medium { background:var(--soft-medium); border-color:#ffdca8; }
+.rec.low { background:var(--soft-low); border-color:#bfe8c4; }
+.rec-head { display:flex; justify-content:space-between; align-items:flex-start; gap:10px; margin-bottom:10px; }
+.rec-head span { border:1px solid currentColor; border-radius:999px; padding:3px 8px; font-size:12px; background:#fff; white-space:nowrap; }
+.rec.high .rec-head span { color:var(--high); }
+.rec.medium .rec-head span { color:var(--medium); }
+.rec.low .rec-head span { color:var(--low); }
+.flow { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.flow div { background:rgba(255,255,255,.72); border:1px solid rgba(0,0,0,.07); border-radius:8px; padding:9px; min-width:0; }
+.flow p, .why, .photo-card p { margin:5px 0 0; font-size:14px; white-space:pre-wrap; overflow-wrap:anywhere; }
+.desc-block b { display:block; margin-bottom:5px; color:var(--accent); }
+.param-list, .photo-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-top:12px; }
+.param p { margin:4px 0 0; font-size:14px; white-space:pre-wrap; }
+.warn { background:#fff7ed; border:1px solid #fed7aa; border-radius:8px; padding:10px; }
+.footer { color:var(--muted); font-size:12px; padding:10px 2px 28px; }
+@media (max-width: 760px) {
+  header { position:static; padding:12px; }
+  main { padding:8px; }
+  section, details { padding:12px; border-radius:8px; margin:10px 0; }
+  .ids, .field-grid, .flow, .param-list, .photo-grid { grid-template-columns:1fr; }
+  .collage { min-width:720px; }
+  .rec-head { display:block; }
+  .rec-head span { display:inline-block; margin-top:6px; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Аудит карточки: {{ internal_sku }}</h1>
+  <div class="meta">
+    <span class="chip">Layer 2</span>
+    <span class="chip">read-only</span>
+    <span class="chip">{{ marketplace_presence }}</span>
+    <span class="chip">{{ priority_label }}</span>
+  </div>
+</header>
+<main>
+  <section class="summary-box">
+    <h2>Краткий вывод</h2>
+    {{ summary_html }}
+  </section>
+
+  <section>
+    <h2>Идентификаторы и ссылки</h2>
+    <div class="ids">{{ identity_cards_html }}</div>
+  </section>
+
+  <section>
+    <h2>Фото</h2>
+    <div class="media-scroll"><img class="collage" src="{{ embedded_collage_data_uri }}" alt="Коллаж всех фото карточки"></div>
+    <p class="hint">{{ photo_collage_hint }}</p>
+  </section>
+
+  <section>
+    <h2>Фото-аудит</h2>
+    <div class="photo-grid">{{ photo_audit_cards_html }}</div>
+  </section>
+
+  <section>
+    <h2>SEO query pack</h2>
+    <div class="field-grid">{{ seo_fields_html }}</div>
+  </section>
+
+  <section>
+    <h2>Рекомендованное описание: 3 блока</h2>
+    <div class="desc-grid">{{ description_blocks_html }}</div>
+    <p class="warn"><b>Правило:</b> упаковку, размеры упаковки и вес не пишем в продающем описании. Эти значения показываются ниже в параметрах и рекомендациях.</p>
+  </section>
+
+  <section>
+    <h2>Целевые параметры для пачного заполнения</h2>
+    <p class="hint">Показывать только релевантные поля редакторов Ozon/WB для шевронов, нашивок, петлиц и комплектов. Формат: сейчас → рекомендую → статус → почему.</p>
+    {{ target_editor_fields_html }}
+  </section>
+
+  <section>
+    <h2>Рекомендации: сейчас → рекомендую → почему</h2>
+    <div class="rec-grid">{{ recommendation_cards_html }}</div>
+  </section>
+
+  <details open>
+    <summary>Все текущие параметры Ozon</summary>
+    {{ ozon_parameters_html }}
+  </details>
+
+  <details open>
+    <summary>Все текущие параметры WB</summary>
+    {{ wb_parameters_html }}
+  </details>
+
+  <section>
+    <h2>Решение владельца</h2>
+    <p>Варианты ответа: <b>да</b>, <b>нет</b>, <b>поменять ...</b>, <b>отложить</b>, <b>дизайнеру</b>, <b>ручная проверка</b>.</p>
+    <p class="hint">Этот HTML является read-only аудитом. Apply и dry-run изменений не выполнялись.</p>
+  </section>
+  <p class="footer">{{ footer_text }}</p>
+</main>
+</body>
+</html>

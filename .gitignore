@@ -23,6 +23,12 @@ data/catalog/unified/*
 !data/catalog/unified/README.md
 data/catalog/content/*
 !data/catalog/content/README.md
+data/catalog/card_audits/*
+!data/catalog/card_audits/README.md
+!data/catalog/card_audits/*.schema.json
+data/catalog/master_passport/*
+!data/catalog/master_passport/README.md
+!data/catalog/master_passport/*.schema.json
 data/runs/*
 data/pending/*
 data/approved/*

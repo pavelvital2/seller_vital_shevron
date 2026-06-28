@@ -61,6 +61,42 @@ def test_build_unified_products_combines_confirmed_mapping_and_marketplace_only_
     assert by_status["wb_only"].active_ozon == "false"
 
 
+def test_build_unified_products_applies_owner_review_to_marketplace_only_rows() -> None:
+    products, issues, summary = build_unified_products(
+        ozon_rows=[
+            {
+                "offer_id": "back0018",
+                "product_id": "2161557598",
+                "sku": "2432512033",
+                "title": "Шеврон Полиция",
+                "status": "visible",
+            },
+        ],
+        wb_rows=[],
+        mapping_rows=[],
+        owner_review_rows=[
+            {
+                "review_status": "owner_confirmed_internal_sku",
+                "source_marketplace": "ozon",
+                "source_id": "back0018",
+                "current_internal_product_id": "ozon:back0018",
+                "approved_internal_sku": "chev_back_mvd_text0004",
+            }
+        ],
+        unit_cost_rub=Decimal("85"),
+    )
+
+    assert issues == []
+    assert summary["owner_review_applied_products"] == 1
+    assert products[0].internal_product_id == "ozon:back0018"
+    assert products[0].internal_sku == "chev_back_mvd_text0004"
+    assert products[0].product_group == "chev"
+    assert products[0].pack_qty == "1"
+    assert products[0].cost_total == "85"
+    assert products[0].mapping_status == "ozon_only"
+    assert products[0].notes == "owner_approved_internal_sku;not_cross_marketplace_mapped"
+
+
 def test_build_unified_products_reports_duplicate_confirmed_mapping_values() -> None:
     _products, issues, summary = build_unified_products(
         ozon_rows=[{"offer_id": "oz-1", "title": "Ozon"}],

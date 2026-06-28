@@ -261,3 +261,63 @@ Apply выполняет:
 Повторный apply по
 `wb_actions_discount_plan_70-55-55_actions_check_20260623` не выполнять:
 idempotency marker сохранен в `data/approved/applied/`.
+
+## Штатный apply 2026-06-26
+
+Подтвержденный сценарий по схеме `70-55-55`:
+
+- approved dry-run:
+  `wb_actions_discount_plan_70-55-55_actions_check_20260626`;
+- apply:
+  `wb_actions_discount_apply_70-55-55_actions_check_20260626`;
+- fresh preflight: `status_preflight_20260626T102102`, статус `ok`;
+- fresh dry-run:
+  `wb_actions_discount_plan_70-55-55_20260626T102141`;
+- drift-check: `partial_apply_unchanged_rows`, `approved_payload_rows=183`,
+  `fresh_payload_rows=183`, `eligible_payload_rows=183`, skipped/drift `0`;
+- отправлено в WB: `183` строки;
+- WB upload ID: `169512510`;
+- verify: `ok`, history показал `183/183` successful goods;
+- отчет результата:
+  `data/runs/2026-06-26/wb_actions_discount_apply_70-55-55_actions_check_20260626/wb_actions_discount_apply_result.md`.
+
+Подтвержденные причины по исходному payload:
+
+- превышение порога `70%`, привести к fallback `55%`: `55`;
+- участие в акции с меньшей требуемой скидкой: `128`;
+- отсутствие в активных акциях: `0` строк к изменению, потому что найденные
+  `62` товара уже не требовали загрузки нового payload.
+
+Повторный apply по
+`wb_actions_discount_plan_70-55-55_actions_check_20260626` не выполнять:
+idempotency marker сохранен в `data/approved/applied/`.
+
+## Штатный apply 2026-06-27
+
+Подтвержденный сценарий по схеме `70-55-55`:
+
+- approved dry-run:
+  `wb_actions_discount_plan_70-55-55_20260627T161836`;
+- apply:
+  `wb_actions_discount_apply_70-55-55_20260627T162808`;
+- fresh preflight: `status_preflight_20260627T162808`, статус `ok`;
+- fresh dry-run:
+  `wb_actions_discount_plan_70-55-55_20260627T162847`;
+- drift-check: `partial_apply_unchanged_rows`, `approved_payload_rows=193`,
+  `fresh_payload_rows=193`, `eligible_payload_rows=193`, skipped/drift `0`;
+- отправлено в WB: `193` строки;
+- WB upload ID: `169956946`;
+- verify: `ok`, history показал `193/193` successful goods;
+- отчет результата:
+  `data/runs/2026-06-27/wb_actions_discount_apply_70-55-55_20260627T162808/wb_actions_discount_apply_result.md`.
+
+Подтвержденные причины по исходному payload:
+
+- превышение порога `70%`, привести к fallback `55%`: `22`;
+- участие в акции с меньшей требуемой скидкой: `171`;
+- отсутствие в активных акциях: `0` строк к изменению, потому что найденные
+  `62` товара уже не требовали загрузки нового payload.
+
+Повторный apply по
+`wb_actions_discount_plan_70-55-55_20260627T161836` не выполнять:
+idempotency marker сохранен в `data/approved/applied/`.

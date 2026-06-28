@@ -39,6 +39,11 @@ description: "Use for Ozon Messenger and notification workflows: buyer chats, un
   Messenger websocket health.
 - Marketplace notifications can be marked read through `/v2/chat/read` when the
   runbook confirms `chat_id` and `from_message_id`.
+- If an owner-approved customer gratitude/no-question item must be closed
+  without a reply and `/v2/chat/read` returns Premium Plus `403`, use the
+  documented LK/CDP fallback to open the target chat in the Vital Shevron
+  contour without sending a message, then verify through `/v3/chat/history`
+  that no `Customer is_read=false` remains.
 
 ## Output
 

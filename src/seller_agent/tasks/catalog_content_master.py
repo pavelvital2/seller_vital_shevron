@@ -8,12 +8,18 @@ import re
 from pathlib import Path
 from typing import Any
 
+from seller_agent.catalog.internal_sku_owner_review import (
+    apply_owner_internal_sku_assignment,
+    build_owner_internal_sku_assignments,
+    owner_assignment_note,
+)
 from seller_agent.catalog.loader import normalize_sku
 from seller_agent.core.run_manifest import write_summary_run_manifest
 from seller_agent.reports.writer import ensure_dir, write_json
 
 
 DEFAULT_UNIFIED_PRODUCTS_PATH = Path("catalog/unified/products.csv")
+DEFAULT_OWNER_REVIEW_PATH = Path("catalog/unified/internal_sku_assignment_owner_review.csv")
 DEFAULT_OZON_CATALOG_PATH = Path("catalog/ozon/processed/ozon_catalog.csv")
 DEFAULT_WB_CATALOG_PATH = Path("catalog/wb/processed/wb_catalog.csv")
 DEFAULT_PRICING_STATUS_PATH = Path("pricing/pricing_status.csv")
@@ -253,7 +259,9 @@ def build_content_master(
     wb_rows: list[dict[str, str]],
     pricing_rows: list[dict[str, str]] | None = None,
     card_content_rows: list[dict[str, str]] | None = None,
+    owner_review_rows: list[dict[str, str]] | None = None,
 ) -> tuple[list[ContentMasterRow], list[dict[str, str]], dict[str, Any]]:
+    owner_assignments, owner_issues, owner_summary = build_owner_internal_sku_assignments(owner_review_rows or [])
     ozon_by_offer = _index_by(ozon_rows, "offer_id")
     wb_by_vendor = _index_by(wb_rows, "vendor_code")
     pricing_by_id = _pricing_by_product(pricing_rows or [])
@@ -304,10 +312,33 @@ def build_content_master(
             transfer_direction = "create_on_wb_candidate"
         elif presence == "wb_only":
             transfer_direction = "create_on_ozon_candidate"
+        internal_sku, assignment_source = apply_owner_internal_sku_assignment(
+            internal_product_id=internal_product_id,
+            current_internal_sku=product.get("internal_sku", ""),
+            assignments=owner_assignments,
+        )
+        notes = owner_assignment_note(product.get("notes", ""), assignment_source)
+        if assignment_source == "conflict":
+            audit_rows.append(
+                {
+                    "priority": "high",
+                    "issue": "owner_review_internal_sku_conflict",
+                    "internal_product_id": internal_product_id,
+                    "internal_sku": normalize_sku(product.get("internal_sku")),
+                    "mapping_status": mapping_status,
+                    "product_name": normalize_sku(product.get("product_name")),
+                    "ozon_offer_id": ozon_offer_id,
+                    "ozon_current_title": ozon_title,
+                    "wb_vendor_code": wb_vendor_code,
+                    "wb_current_title": wb_title,
+                    "details": owner_assignments.get(internal_product_id, ""),
+                    "next_step": "Разобрать конфликт owner-review и unified catalog до карточных dry-run.",
+                }
+            )
 
         row = ContentMasterRow(
             internal_product_id=internal_product_id,
-            internal_sku=normalize_sku(product.get("internal_sku")),
+            internal_sku=internal_sku,
             product_name=normalize_sku(product.get("product_name")),
             mapping_status=mapping_status,
             product_group=normalize_sku(product.get("product_group")),
@@ -352,7 +383,7 @@ def build_content_master(
                 ozon_content=ozon_content,
                 wb_content=wb_content,
             ),
-            notes=normalize_sku(product.get("notes")),
+            notes=notes,
         )
         content_rows.append(row)
 
@@ -398,10 +429,34 @@ def build_content_master(
         "photo_count_lt5_rows": sum(
             1 for row in content_rows if row.photo_audit_status == "photo_count_lt5_not_inspected"
         ),
+        "owner_review_rows": owner_summary["owner_review_rows"],
+        "owner_review_approved_rows": owner_summary["owner_review_approved_rows"],
+        "owner_review_assignments": owner_summary["owner_review_assignments"],
+        "owner_review_applied_rows": sum(
+            1 for row in content_rows if "owner_approved_internal_sku" in row.notes.split(";")
+        ),
+        "owner_review_issue_count": len(owner_issues),
         "high_priority_rows": by_priority.get("high", 0),
         "normal_priority_rows": by_priority.get("normal", 0),
-        "audit_rows": len(audit_rows),
+        "audit_rows": len(audit_rows) + len(owner_issues),
     }
+    for issue in owner_issues:
+        audit_rows.append(
+            {
+                "priority": "high",
+                "issue": issue.get("kind", "owner_review_issue"),
+                "internal_product_id": issue.get("value", ""),
+                "internal_sku": "",
+                "mapping_status": "",
+                "product_name": "",
+                "ozon_offer_id": "",
+                "ozon_current_title": "",
+                "wb_vendor_code": "",
+                "wb_current_title": "",
+                "details": issue.get("details", ""),
+                "next_step": "Разобрать owner-review конфликт до карточных dry-run.",
+            }
+        )
     return content_rows, audit_rows, summary
 
 
@@ -455,6 +510,7 @@ def run_catalog_content_master(
     *,
     data_dir: Path = Path("data"),
     products_path: Path | None = None,
+    owner_review_path: Path | None = None,
     ozon_catalog_path: Path | None = None,
     wb_catalog_path: Path | None = None,
     pricing_status_path: Path | None = None,
@@ -467,6 +523,7 @@ def run_catalog_content_master(
     run_dir = ensure_dir(data_dir / "runs" / started_at.strftime("%Y-%m-%d") / run_id)
 
     products_path = products_path or data_dir / DEFAULT_UNIFIED_PRODUCTS_PATH
+    owner_review_path = owner_review_path or data_dir / DEFAULT_OWNER_REVIEW_PATH
     ozon_catalog_path = ozon_catalog_path or data_dir / DEFAULT_OZON_CATALOG_PATH
     wb_catalog_path = wb_catalog_path or data_dir / DEFAULT_WB_CATALOG_PATH
     pricing_status_path = pricing_status_path or data_dir / DEFAULT_PRICING_STATUS_PATH
@@ -479,6 +536,7 @@ def run_catalog_content_master(
     wb_rows: list[dict[str, str]] = []
     pricing_rows: list[dict[str, str]] = []
     card_content_rows: list[dict[str, str]] = []
+    owner_review_rows: list[dict[str, str]] = []
 
     for label, path, required in (
         ("products", products_path, True),
@@ -503,6 +561,11 @@ def run_catalog_content_master(
         except Exception as exc:  # noqa: BLE001 - task report must capture missing/bad inputs
             if required:
                 errors[label] = str(exc)
+    if owner_review_path.exists():
+        try:
+            owner_review_rows = _read_csv(owner_review_path)
+        except Exception as exc:  # noqa: BLE001 - optional input errors should be visible
+            errors["owner_review"] = str(exc)
 
     content_rows: list[ContentMasterRow] = []
     audit_rows: list[dict[str, str]] = []
@@ -513,6 +576,11 @@ def run_catalog_content_master(
         "wb_catalog_rows": len(wb_rows),
         "pricing_rows": len(pricing_rows),
         "card_content_rows": len(card_content_rows),
+        "owner_review_rows": len(owner_review_rows),
+        "owner_review_approved_rows": 0,
+        "owner_review_assignments": 0,
+        "owner_review_applied_rows": 0,
+        "owner_review_issue_count": 0,
         "confirmed_rows": 0,
         "ozon_only_rows": 0,
         "wb_only_rows": 0,
@@ -532,6 +600,7 @@ def run_catalog_content_master(
             wb_rows=wb_rows,
             pricing_rows=pricing_rows,
             card_content_rows=card_content_rows,
+            owner_review_rows=owner_review_rows,
         )
 
     content_dicts = [asdict(row) for row in content_rows]
@@ -571,6 +640,7 @@ def run_catalog_content_master(
         "audit_sample_truncated": max(0, len(audit_rows) - len(audit_sample)),
         "inputs": {
             "products_path": str(products_path),
+            "owner_review_path": str(owner_review_path),
             "ozon_catalog_path": str(ozon_catalog_path),
             "wb_catalog_path": str(wb_catalog_path),
             "pricing_status_path": str(pricing_status_path),

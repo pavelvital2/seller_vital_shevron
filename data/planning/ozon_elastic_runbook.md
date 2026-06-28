@@ -471,6 +471,42 @@ Read-only/dry-run проверка без применения изменени�
 - отчет результата:
   `data/runs/2026-06-25/ozon_elastic_apply_actions_check_20260625/ozon_elastic_apply_result.md`.
 
+Подтвержденный apply Ozon Elastic 2026-06-26:
+
+- approved dry-run: `ozon_elastic_plan_actions_check_20260626`;
+- apply: `ozon_elastic_apply_actions_check_20260626`;
+- fresh preflight: `status_preflight_20260626T102005`, статус `ok`;
+- fresh dry-run перед записью: `ozon_elastic_plan_20260626T102045`;
+- drift-check: `partial_apply_unchanged_rows`;
+- применено: `40` строк activate/update и `5` строк deactivate;
+- Ozon API rejected: `0`;
+- skipped/drift: `0` строк;
+- verify: `ok`, расхождений по ценам `0`, снятых строк, оставшихся в акции,
+  `0`;
+- после apply отдельно проверен `Супербустинг`:
+  `ozon_superboosting_verify_after_elastic_20260626T1025`, активных товаров
+  `91/91`, отсутствующих `0`, лишних `0`, расхождений по action price `0`;
+- отчет результата:
+  `data/runs/2026-06-26/ozon_elastic_apply_actions_check_20260626/ozon_elastic_apply_result.md`.
+
+Подтвержденный apply Ozon Elastic 2026-06-27:
+
+- approved dry-run: `ozon_elastic_plan_20260627T161836`;
+- apply: `ozon_elastic_apply_20260627T162711`;
+- fresh preflight: `status_preflight_20260627T162711`, статус `ok`;
+- fresh dry-run перед записью: `ozon_elastic_plan_20260627T162751`;
+- drift-check: `partial_apply_unchanged_rows`;
+- применено: `55` строк activate/update и `4` строки deactivate;
+- Ozon API rejected: `0`;
+- skipped/drift: `0` строк;
+- verify: `ok`, расхождений по ценам `0`, снятых строк, оставшихся в акции,
+  `0`;
+- после apply отдельно проверен `Супербустинг`:
+  `ozon_superboosting_verify_after_elastic_20260627T1633`, активных товаров
+  `91/91`, отсутствующих `0`, лишних `0`, расхождений по action price `0`;
+- отчет результата:
+  `data/runs/2026-06-27/ozon_elastic_apply_20260627T162711/ozon_elastic_apply_result.md`.
+
 ## Штатный apply 2026-06-16
 
 Последний подтвержденный штатный сценарий:

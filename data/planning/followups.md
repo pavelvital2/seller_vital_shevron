@@ -5,6 +5,44 @@
 
 ## Pending
 
+### FU-2026-06-26-001 - Массовый аудит карточек Ozon/WB
+
+Статус: `source_packages_ready_filtered`
+
+Где остановились:
+
+- задача: подготовка массового карточного аудита Vital Shevron перед
+  унификацией названий, описаний, характеристик, фото, группировки и будущего
+  мастер-паспорта;
+- свежий `seo_query_pack` собран и подключен к `card-content-audit-packages`;
+- полный запуск по всем строкам backlog:
+  `card_audit_packages_seo_filtered_all_20260626T0838`;
+- входных строк: `710`;
+- создано audit packages для fresh-аудиторов: `645`;
+- исключено из массового потока: `65`;
+- причины исключения: `needs_manual_review` - `3`,
+  `excluded_non_patch_assortment` - `62`;
+- индекс пакетов:
+  `data/catalog/content/card_audit_packages/card_audit_packages_seo_filtered_all_20260626T0838/package_index.csv`;
+- индекс исключенных:
+  `data/catalog/content/card_audit_packages/card_audit_packages_seo_filtered_all_20260626T0838/excluded_package_index.csv`;
+- правило: fresh-аудиторам выдавать только карточки со статусами
+  `ready` и `ready_broad_only`; `ready_broad_only` помечать как ограниченный
+  broad-demand SEO без точной тематической частотности;
+- статусы `needs_manual_review` и `excluded_non_patch_assortment` не выдавать
+  аудиторам до отдельного решения владельца;
+- write-операций с карточками Ozon/WB не было.
+
+Следующий практический шаг:
+
+1. Запускать fresh-аудиторов по `package_index.csv`, начиная с приоритета
+   `business_priority=now` / `audit_priority=high`, если владелец не задаст
+   другой порядок.
+2. Каждый аудит сохранять в слой 2 `data/catalog/card_audits/` и проверять
+   отдельным fresh-валидатором.
+3. Не формировать Layer 3 `master_passport` и не готовить marketplace write
+   dry-run до owner approval по результатам аудита.
+
 ### FU-2026-06-23-001 - Продолжить присвоение внутренних артикулов
 
 Статус: `done_current_assortment_non_current_deferred`
@@ -142,7 +180,7 @@
 
 ### FU-2026-06-19-001 - Контроль Ozon Супербустинг
 
-Статус: `second_control_done_partial_pending_review`
+Статус: `additional_control_done_pending_review`
 
 Связанная операция:
 
@@ -318,6 +356,62 @@
      `remove_candidate` - `74`;
    - снятие товаров из `Супербустинга` выполнять только через отдельный
      dry-run/review и явное подтверждение владельца.
+
+6. `2026-06-26` - дополнительный контроль Ozon Супербустинг при проверке
+   акций:
+
+   Статус: `done_full_day_control_pending_review`.
+
+   Результат 2026-06-26:
+
+   - контрольный run:
+     `data/runs/2026-06-26/ozon_superboosting_check_20260626T1015/ozon_superboosting_check_report.md`;
+   - сводный отчет по акциям:
+     `data/runs/2026-06-26/actions_check_20260626T1015/actions_check_report_2026-06-26.md`;
+   - активных товаров в супербустинге: `91` из `91`;
+   - пропавших ожидаемых товаров: `0`;
+   - лишних активных товаров: `0`;
+   - расхождений по цене: `0`;
+   - за полный день 2026-06-25: `16` заказанных штук,
+     `8923.00` руб. выручки;
+   - за неполный день 2026-06-26 на момент проверки: `3` заказанные штуки,
+     `1286.00` руб. выручки;
+   - предварительная классификация по товарам: `keep` - `10`,
+     `remove_candidate` - `81`;
+   - снятие товаров из `Супербустинга` выполнять только через отдельный
+     dry-run/review и явное подтверждение владельца.
+   - после применения Ozon Elastic `ozon_elastic_apply_actions_check_20260626`
+     выполнена отдельная проверка, что `Супербустинг` не затронут:
+     `data/runs/2026-06-26/ozon_superboosting_verify_after_elastic_20260626T1025/ozon_superboosting_verify_after_elastic_report.md`;
+     результат `ok`, активных товаров `91/91`, расхождений по цене `0`.
+
+7. `2026-06-27` - дополнительный контроль Ozon Супербустинг при проверке
+   акций:
+
+   Статус: `done_full_day_control_pending_review`.
+
+   Результат 2026-06-27:
+
+   - контрольный run:
+     `data/runs/2026-06-27/ozon_superboosting_check_20260627T1620/ozon_superboosting_check_report.md`;
+   - сводный отчет по акциям:
+     `data/runs/2026-06-27/actions_check_20260627T1625/actions_check_report.md`;
+   - активных товаров в супербустинге: `91` из `91`;
+   - пропавших ожидаемых товаров: `0`;
+   - лишних активных товаров: `0`;
+   - расхождений по цене: `0`;
+   - за полный день 2026-06-26: `12` заказанных штук,
+     `6546.00` руб. выручки;
+   - за неполный день 2026-06-27 на момент проверки: `20` заказанных штук,
+     `12307.00` руб. выручки;
+   - предварительная классификация по товарам: `keep` - `20`,
+     `remove_candidate` - `71`;
+   - снятие товаров из `Супербустинга` выполнять только через отдельный
+     dry-run/review и явное подтверждение владельца;
+   - после применения Ozon Elastic `ozon_elastic_apply_20260627T162711`
+     выполнена отдельная проверка, что `Супербустинг` не затронут:
+     `data/runs/2026-06-27/ozon_superboosting_verify_after_elastic_20260627T1633/ozon_superboosting_verify_after_elastic_report.md`;
+     результат `ok`, активных товаров `91/91`, расхождений по цене `0`.
 
 Критерий решения:
 

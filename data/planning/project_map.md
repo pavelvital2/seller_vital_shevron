@@ -58,17 +58,22 @@
   Telegram-label для будущего бота.
 - `tasks list|show` - CLI-команды просмотра `TaskRegistry`.
 - `src/seller_agent/tasks/catalog_unified.py` - read-only сборка внутреннего
-  общего product-level каталога из confirmed Ozon/WB mapping и обработанных
-  Ozon/WB каталогов; команда `build-unified-catalog` пишет
+  общего product-level каталога из confirmed Ozon/WB mapping, owner-approved
+  `internal_sku_assignment_owner_review.csv` для marketplace-only строк и
+  обработанных Ozon/WB каталогов; команда `build-unified-catalog` пишет
   `data/catalog/unified/products.csv/json`, issues-report и `RunManifest`.
+- `src/seller_agent/catalog/internal_sku_owner_review.py` - общий helper
+  наложения owner-approved внутренних артикулов на unified/content derived
+  слои без изменения Ozon `offer_id` и WB `vendorCode`.
 - `src/seller_agent/tasks/catalog_internal_sku_plan.py` - read-only план
   присвоения внутренних `internal_sku` товарам `ozon_only`/`wb_only` из
   unified catalog; команда `plan-internal-skus` формирует review CSV/JSON,
   не меняет Ozon `offer_id` и WB `vendorCode`.
 - `src/seller_agent/tasks/catalog_content_master.py` - read-only сборка
-  единого контентного слоя поверх unified catalog, processed Ozon/WB catalogs
-  optional `pricing-status` и optional card content index; команда
-  `build-content-master` пишет `data/catalog/content/content_master.csv/json`,
+  единого контентного слоя поверх unified catalog, owner-review internal SKU
+  overlay, processed Ozon/WB catalogs, optional `pricing-status` и optional
+  card content index; команда `build-content-master` пишет
+  `data/catalog/content/content_master.csv/json`,
   `data/catalog/content/content_audit.csv/json` и `RunManifest`, не меняет
   карточки Ozon/WB.
 - `src/seller_agent/tasks/card_content_snapshot.py` - read-only snapshot
@@ -102,10 +107,26 @@
 - `src/seller_agent/tasks/card_content_audit_packages.py` - read-only
   generator сохраненных карточных audit packages из backlog, Ozon/WB snapshots
   и master product passport schema; команда `card-content-audit-packages`
-  пишет `data/catalog/content/card_audit_packages/<run_id>/package_index.*`,
-  `audit_package.json`, `audit_report.md`, `photos.html` и `RunManifest`.
+  подключает latest `seo_query_pack` при наличии, включая row-level
+  `confirmed_query_rows` для спросового SEO, пишет
+  `data/catalog/content/card_audit_packages/<run_id>/package_index.*`,
+  `excluded_package_index.*`, `audit_package.json`, `audit_report.md`,
+  `photos.html` и `RunManifest`. Строки `seo_query_pack_status` со статусами
+  `needs_manual_review` и `excluded_non_patch_assortment` не выдаются
+  fresh-аудиторам и попадают только в `excluded_package_index.*`.
   Визуальный аудит и рекомендации остаются pending до ручного просмотра фото
   агентом.
+- `src/seller_agent/tasks/seo_query_pack.py` - read-only сборка
+  централизованного `seo_query_pack` для карточных аудиторов из top-query
+  источников Ozon/WB и `content_master`; команда `seo-query-pack` пишет
+  `source_queries.*`, `card_seo_targets.*`, `seo_query_pack.json`,
+  `RunManifest` и latest generated слой. `card_seo_targets.json` хранит
+  `confirmed_query_rows` с `query`, `marketplace`, `role`, `frequency`/
+  `popularity`, `period`, `source`, `seed_query`, `rank`, `collected_at`
+  `data/catalog/content/seo_query_pack/`.
+- `data/planning/product_card_data_layers_runbook.md` - контракт карточного
+  контура: слой 1 source marketplace data, слой 2 agent audit, слой 3
+  owner-approved master passport.
 - `src/seller_agent/tasks/pricing_status.py` - read-only статус цен и
   готовности маржинального анализа: соединяет unified catalog с локальными или
   fresh API Ozon/WB price snapshots, Ozon Elastic dry-run и WB actions dry-run,
@@ -191,6 +212,10 @@
   отправки уже согласованных Ozon Messenger ответов из approved package;
   использовать только после safety-цепочки и проверять результат через Seller
   API `/v3/chat/history`.
+- `scripts/search_queries/collect_seo_query_pack_sources.js` - read-only
+  helper для свежего сбора top-query источников Ozon/WB под карточный
+  `seo_query_pack`; Ozon использует CDP guard порта `9544`, WB использует
+  отдельный persistent profile, секреты и auth headers в артефакты не пишет.
 - `tests/` - тесты переносимого каркаса.
 
 ## Deploy
@@ -222,6 +247,13 @@ Ozon CDP port по умолчанию: `9544`.
   `card_content_audit_backlog.*`, generated card snapshots и
   `parameter_inventory/*.csv`, `product_passport/*`,
   `card_audit_packages/<run_id>/*`; не коммитить, кроме `README.md`.
+- `data/catalog/card_audits/` - слой 2 карточного контура: результаты
+  личного аудита агента, рекомендации `сейчас -> рекомендую`, группы
+  будущих пакетных правок и owner-review статусы; рабочие файлы не коммитить,
+  кроме `README.md` и схем.
+- `data/catalog/master_passport/` - слой 3 карточного контура:
+  согласованные владельцем мастер-паспорта товаров для marketplace-specific
+  dry-run; рабочие файлы не коммитить, кроме `README.md` и схем.
 - `data/runs/` - runtime reports, не коммитить.
 - `data/runs/index.jsonl` - runtime-индекс `RunManifest`, не коммитить.
 - `data/pending/` - pending packages перед approval, не коммитить.
@@ -289,6 +321,22 @@ Ozon CDP port по умолчанию: `9544`.
 - `data/planning/master_product_passport_runbook.md` - архитектура целевого
   внутреннего паспорта товара, порядок запуска `design-product-passport`,
   generated artifacts и маппинг внутренних полей в Ozon/WB.
+- `data/planning/product_card_data_layers_runbook.md` - контракт
+  трехслойной архитектуры карточек: исходники, аудит агента, согласованный
+  мастер-паспорт.
+- `data/planning/product_card_fill_template_runbook.md` - согласованный
+  шаблон целевого заполнения карточки и рекомендуемый pipeline автоматизации
+  приведения карточек Ozon/WB к шаблону с учетом SEO.
+- `data/planning/product_card_editor_field_map_runbook.md` - карта реальных
+  полей редакторов Ozon/WB для шевронов, нашивок, петлиц и комплектов:
+  что заполнять пачками, что оставлять, что требует отдельного review.
+- `data/planning/product_card_audit_orchestration_runbook.md` -
+  предварительная схема массового аудита карточек через оркестратора,
+  одноразовых fresh-аудиторов, fresh-проверяющих, проверенные HTML/JSON слоя 2
+  и общий индекс/дашборд.
+- `data/planning/card_audit_agent_docs/` - минимальный пакет документов для
+  одноразовых агентов карточного аудита: prompt аудитора, prompt
+  проверяющего, краткие правила карточки и контракт HTML/JSON результата.
 - `data/planning/product_card_work_runbook.md` - обязательная инструкция
   покарточной работы: просмотр всех фото, описание изображения/цветов/фона,
   правила липучки и пришивных нашивок, размеры/вес/упаковка,

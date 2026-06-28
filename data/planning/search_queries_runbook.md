@@ -12,6 +12,117 @@ Read-only сбор топа поисковых запросов из ЛК Ozon �
 Операция только read-only. Нельзя сохранять или выводить cookies, storage state,
 API tokens, внутренние auth headers ЛК и коды входа.
 
+## SEO query pack для карточных аудиторов
+
+Для массового аудита карточек поисковые запросы собирает оркестратор, а не
+fresh-аудиторы. Fresh-аудитор не должен самостоятельно ходить в ЛК Ozon/WB,
+искать запросы или проверять частотность.
+
+Перед запуском карточных аудиторов оркестратор должен подготовить
+`seo_query_pack`:
+
+- top-50 запросов Ozon за выбранный период с частотностью/популярностью,
+  источником и временем выгрузки;
+- top-50 запросов WB за выбранный период с частотностью/популярностью,
+  источником и временем выгрузки;
+- целевая разметка запросов по ролям:
+  `primary_target`, `secondary_target`, `broad_identity`, `placement`,
+  `exclude`;
+- при наличии - parser-позиции по конкретным запросам: `query`,
+  `marketplace`, native ID товара, `internal_sku`, позиция, run id/время
+  сбора;
+- релевантность запроса конкретной карточке и причина включения/исключения.
+
+Этот пакет используется аудиторами для `seo_demand_terms`, названия, описания,
+Ozon-хештегов и WB тегов. Первый проход карточек строится от целевого
+SEO-кластера товара, а parser-позиции используются как baseline и будущий
+контроль результата после изменений. Если в пакете есть только агрегаты вида
+`видимых запросов: N`, но нет конкретных запросов или top-query таблиц,
+спросовой SEO-блок карточки должен получить статус `blocked_no_query_list`.
+
+### Сбор и сборка пакета
+
+Свежие top-query источники Ozon/WB можно собрать read-only helper-ом:
+
+```bash
+NODE_PATH=/home/Codex/agent-tools/node/node_modules \
+node scripts/search_queries/collect_seo_query_pack_sources.js \
+  --output-dir data/runs/YYYY-MM-DD/<run-id> \
+  --limit 50
+```
+
+Ozon collector обязан использовать штатный CDP-контур Vital Shevron:
+порт `9544`, профиль `.sessions/ozon/chrome-profile` и guard
+`scripts/lib/ozon_cdp_guard.js`. WB collector использует отдельный
+persistent profile `.sessions/wb/browser-profile`. В артефакты нельзя
+сохранять cookies, tokens, storage state или auth headers.
+
+Из собранных источников оркестратор строит итоговый `seo_query_pack`:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli seo-query-pack \
+  --query-source data/runs/YYYY-MM-DD/<source-run>/ozon_top_queries.json \
+  --query-source data/runs/YYYY-MM-DD/<source-run>/wb_top_queries.json
+```
+
+Основные выходы:
+
+```text
+data/catalog/content/seo_query_pack/source_queries.json
+data/catalog/content/seo_query_pack/card_seo_targets.csv
+data/catalog/content/seo_query_pack/card_seo_targets.json
+data/catalog/content/seo_query_pack/seo_query_pack.json
+```
+
+`data/catalog/content/seo_query_pack/` - generated слой. Источником истины
+остаются run artifacts и исходные данные `content_master`.
+
+С 2026-06-28 `card_seo_targets.json` и `seo_query_pack.json` обязаны
+передавать fresh-аудиторам не только агрегаты `ozon_frequency_sum` и
+`wb_frequency_sum`, но и строковую таблицу `confirmed_query_rows`:
+
+- `query`;
+- `marketplace`;
+- `matched_term`;
+- `role` (`primary_target`, `secondary_targets`, `broad_identity_terms`,
+  `placement_terms`);
+- `seed_query`;
+- `rank`;
+- `frequency`/`popularity`;
+- `period`;
+- `source`;
+- `collected_at`.
+
+Агрегированные суммы без `confirmed_query_rows` не являются достаточным
+источником для спросового SEO-блока карточного аудита. Fresh-аудитор не должен
+ставить `partial` или `blocked_no_query_list`, если в переданном
+`seo_query_pack.confirmed_query_rows` есть релевантные строки с источником,
+периодом и частотностью.
+
+### Статусы `card_seo_targets`
+
+- `ready` - есть целевой кластер и подтверждение точного/релевантного запроса
+  из Ozon/WB top-query таблиц.
+- `ready_broad_only` - карточка распознана, но подтверждение есть только по
+  широким запросам. Аудитор может использовать broad terms осторожно, не
+  выдумывая точную частотность тематического запроса.
+- `needs_manual_review` - не распознана тема, место ношения или отсутствует
+  внутренний артикул. Такие строки нельзя отдавать в автоматический SEO-аудит
+  без ручного уточнения.
+- `excluded_non_patch_assortment` - товар не относится к текущему рабочему
+  ассортименту шевронов/нашивок/петлиц или не классифицирован как такой
+  товар. Не передавать карточным аудиторам шевронного контура.
+- `target_cluster_without_frequency` - целевой кластер сформирован, но в
+  переданных top-query таблицах не найдено подтвержденной частотности.
+- `blocked_no_query_tables` - источники запросов не загружены.
+
+При генерации `card-content-audit-packages` статусы
+`needs_manual_review` и `excluded_non_patch_assortment` должны исключаться из
+массового audit flow. Они остаются в `seo_query_pack` и отдельном
+`excluded_package_index.*` как контрольный список, но fresh-аудиторам не
+выдаются.
+
 ## WB
 
 ЛК:

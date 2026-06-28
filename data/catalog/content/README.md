@@ -2,6 +2,17 @@
 
 Рабочая папка для производных read-only файлов единого контентного слоя.
 
+Это слой 1 карточного контура: полные исходные данные Ozon/WB по товарам,
+названиям, описаниям, фото, характеристикам, параметрам и native IDs.
+
+Слои карточного контура:
+
+- слой 1 `data/catalog/content/` - source marketplace data;
+- слой 2 `data/catalog/card_audits/` - результат личного аудита агента по
+  источникам слоя 1;
+- слой 3 `data/catalog/master_passport/` - только согласованный владельцем
+  мастер-паспорт товара для будущих marketplace dry-run.
+
 Generated-файлы в этой папке не коммитятся:
 
 - `content_master.csv/json` - текущий снимок unified content master;
@@ -51,3 +62,5 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 `visual_audit_status=pending_agent_review`. Перед рекомендациями по конкретной
 карточке все фото нужно открыть, посмотреть и описать по
 `data/planning/product_card_work_runbook.md`.
+
+Подробный контракт слоев: `data/planning/product_card_data_layers_runbook.md`.

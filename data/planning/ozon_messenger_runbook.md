@@ -399,6 +399,45 @@ approved package.
 - После apply выполнен `ozon_session_keepalive_cdp.js`; контур Vital Shevron
   подтвержден, `stateExported=true`, `needsLogin=false`.
 
+Подтвержденный apply/cleanup 2026-06-26:
+
+- После owner approval по run `ozon_messenger_triage_20260626T1042`
+  выполнен apply `ozon_messenger_apply_20260626T1052`.
+- 11 площадочных уведомлений Ozon отмечены прочитанными через официальный
+  `/v2/chat/read` с payload
+  `{"chat_id": "...", "from_message_id": ...}`; verify по
+  `/v3/chat/history` показал `0` непрочитанных `NotificationUser`.
+- По одному покупательскому сообщению-благодарности владелец согласовал
+  закрытие без ответа. Официальный `/v2/chat/read` вернул `HTTP 403`
+  Premium Plus для `Customer`-чата.
+- Без отправки сообщения применен LK/CDP fallback: открыть целевой чат в
+  правильном контуре Vital Shevron `127.0.0.1:9544`,
+  `.sessions/ozon/chrome-profile`. После открытия повторный
+  `/v3/chat/history` показал `0` непрочитанных `Customer`.
+- Полный обход `/v3/chat/list` после cleanup: `318` чатов, `0` строк с
+  `unread_count > 0`, фактических непрочитанных по историям `0`. Общий
+  `total_unread_count=1` остался нестрогим счетчиком Ozon и не считается
+  блокером, если строки списка и истории чистые.
+- Pending `ozon_messenger_triage_20260626T1042_pending` закрыт как
+  `applied_verified_cleanup`.
+
+Подтвержденный apply/cleanup 2026-06-27:
+
+- После owner approval по run `ozon_messenger_triage_20260627T1644`
+  выполнена отметка `7` площадочных уведомлений Ozon прочитанными через
+  официальный `/v2/chat/read` с payload
+  `{"chat_id": "...", "from_message_id": ...}`.
+- Локальный apply-скрипт завершился технической ошибкой при сохранении
+  `summary.json` из-за JSON-сериализации счетчика с tuple-ключами уже после
+  API-вызовов. В такой ситуации нельзя повторять write вслепую: сначала нужно
+  выполнить read-only verify через `/v3/chat/list` и `/v3/chat/history`.
+- Verify `ozon_messenger_verify_after_apply_20260627T165011` показал
+  `319` проверенных чатов, `0` строк с `unread_count > 0` и `0` фактически
+  непрочитанных сообщений в историях. Общий `total_unread_count=1` остался
+  нестрогим счетчиком Ozon и не считается блокером при чистых строках/историях.
+- Pending `ozon_messenger_triage_20260627T1644_pending` закрыт как
+  `applied_verified_cleanup`; applied-marker сохранен в `data/approved/applied/`.
+
 Важное ограничение LK-страницы Messenger: общий `document.body.innerText`
 содержит не только открытый диалог, но и список соседних чатов. Поэтому нельзя
 определять блокировку или статус целевого чата поиском фраз вроде

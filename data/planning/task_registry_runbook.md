@@ -37,6 +37,13 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   -m seller_agent.cli tasks show --task reviews-questions
 ```
 
+SEO-pack для карточных аудиторов также зарегистрирован как read-only задача:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli tasks show --task seo-query-pack
+```
+
 Фильтры:
 
 ```bash

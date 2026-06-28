@@ -12,6 +12,21 @@
 данных, куда аудит карточки должен сохранять подтвержденный единый вариант
 товара и отдельные площадочные представления.
 
+## Место в трехслойной архитектуре карточек
+
+Подробный контракт слоев: `data/planning/product_card_data_layers_runbook.md`.
+
+Кратко:
+
+- слой 1 `data/catalog/content/` - исходные данные Ozon/WB без выводов;
+- слой 2 `data/catalog/card_audits/` - личный аудит агента, рекомендации,
+  группировка будущих пакетных правок и статус согласования;
+- слой 3 `data/catalog/master_passport/` - только согласованный владельцем
+  окончательный паспорт товара.
+
+`master product passport` относится к слою 3. Нельзя записывать в него
+рекомендации, которые владелец еще не согласовал.
+
 ## Правильная последовательность
 
 ```text
@@ -20,7 +35,9 @@ fetch-card-content
 -> doc-review / card_content_standards_runbook
 -> design-product-passport
 -> saved card audit packages
+-> agent audit saved to layer 2
 -> owner review
+-> owner-approved passport saved to layer 3
 -> marketplace-specific dry-run
 -> approved
 -> apply
@@ -72,6 +89,22 @@ read-only artifacts и по умолчанию не коммитятся. Пос
 
 ## Структура паспорта
 
+Согласованные паспорта сохраняются в:
+
+```text
+data/catalog/master_passport/
+```
+
+Контрольная схема:
+
+```text
+data/catalog/master_passport/master_product_passport_approved.schema.json
+```
+
+Рабочие паспорта товаров в этой папке не коммитятся. В git хранится только
+README и схема, чтобы не смешивать операционные данные карточек с постоянной
+документацией проекта.
+
 Паспорт должен иметь разделы:
 
 - `identity` - внутренний товар, `internal_sku`, presence, marketplace IDs;
@@ -89,6 +122,52 @@ read-only artifacts и по умолчанию не коммитятся. Пос
 
 Нельзя сводить `ozon_attributes` и `wb_attributes` в один общий список:
 названия, типы, обязательность, единицы измерения и API-поля отличаются.
+
+## Правило стартовой унификации названия и описания
+
+Правило владельца от 2026-06-25: первый этап контентной унификации строится
+по самому строгому общему ограничению WB, чтобы убрать путаницу между
+паспортом, Ozon и WB.
+
+В паспорте должны быть отдельные поля:
+
+```text
+canonical_title
+ozon_title
+wb_title
+canonical_description
+ozon_description
+wb_description
+```
+
+Но на стартовом этапе значения должны совпадать:
+
+```text
+ozon_title = wb_title = canonical_title
+ozon_description = wb_description = canonical_description
+```
+
+Правила для `canonical_title`:
+
+- максимум `60` символов;
+- структура: `тип изделия + способ крепления + тематика/структура + место
+  ношения`;
+- размер не указывать по умолчанию, если он уже заполнен в характеристиках,
+  инфографике, описании и паспорте;
+- размер можно добавить только если он нужен для различения вариантов,
+  группировки или подтвержденного поискового спроса.
+
+Правила для `canonical_description`:
+
+- максимум `2000` символов на стартовом этапе;
+- три блока: подробное описание товара; из чего и как сделан/качество;
+  короткий блок о магазине;
+- без спама ключами, чужих брендов, неподтвержденных claims и перечисления
+  нерелевантных вариантов.
+
+Позже `ozon_title` и `ozon_description` можно расширять относительно
+`canonical_*` только как отдельную SEO-оптимизацию по parser/поисковым данным,
+через review и dry-run.
 
 ## Маппинг ключевых полей
 
@@ -129,9 +208,47 @@ subjectName=Декор для одежды
 | `ozon_model_group_key` | `9048 Название модели...` | WB grouping через `imtID`/`moveNm` |
 | `ozon_similar_group_key` | `22390 Объединить в похожие товары` | нет прямого WB-аналога |
 
+## Правило упаковки в паспорте
+
+В разделе `physical` хранить:
+
+```text
+product_size_mm
+package_dimensions_ozon_mm
+package_dimensions_wb_cm
+package_dimension_rule
+package_dimension_review_status
+```
+
+Стандартные упаковки Vital Shevron:
+
+| Тип/место | Ozon, мм | WB, см |
+| --- | --- | --- |
+| Нарукавный | `100*100*10` | `10*10*1` |
+| На кепку | `100*60*10` | `10*6*1` |
+| Нагрудный | `130*50*10` | `13*5*1` |
+| На спину | `300*100*10` | `30*10*1` |
+| Петлицы | `100*40*10` | сначала `10*4*1`, fallback `10*5*1`, затем `10*6*1` |
+
+Петлицы: 1 товарная единица - это две неразрезанные петлицы размером
+`80*30*5 мм`; для упаковки считать как один физический слой толщиной `10 мм`.
+
+Комплекты: длина/ширина упаковки = максимальные длина/ширина среди изделий
+комплекта; толщина = количество физических изделий * `10 мм`. WB-габариты
+получать переводом Ozon мм в см и проверять на dry-run/API или в ЛК. Для
+петлиц использовать fallback только если WB не принимает минимальный размер.
+
 ## Важные ограничения
 
 - `content_master.csv` остается индексом и очередью, а не финальным паспортом.
+- Перед генерацией backlog/audit packages нужно пересобрать
+  `build-unified-catalog` и `build-content-master`, чтобы owner-approved
+  `internal_sku` из
+  `data/catalog/unified/internal_sku_assignment_owner_review.csv` попали в
+  `products.csv` и `content_master.csv`.
+- У marketplace-only товаров `internal_product_id` остается native-ключом
+  `ozon:<offer_id>` или `wb:<vendorCode>`, а утвержденный владельцем
+  внутренний артикул хранится в `internal_sku`.
 - `card_content_index.csv` хранит производные snapshot-счетчики, но не
   заменяет визуальный просмотр фото.
 - `design-product-passport` не дает рекомендаций по конкретной карточке и не
@@ -146,19 +263,43 @@ subjectName=Декор для одежды
 ## Как использовать в следующем слое
 
 Следующий слой реализован командой `card-content-audit-packages` - read-only
-generator сохраненных карточных отчетов. Он должен:
+generator сохраненных карточных исходников. Он должен:
 
 1. Читать `card_content_audit_backlog.csv`.
 2. Для каждой выбранной строки подтягивать Ozon/WB snapshots и текущие фото.
-3. Создавать draft `master_product_passport` по JSON Schema.
+3. Создавать draft структуры будущего `master_product_passport` по JSON
+   Schema.
 4. Заполнять `ozon_attributes` и `wb_attributes` отдельно.
 5. Отмечать каждое поле как:
    - `confirmed`;
    - `recommended`;
    - `needs_owner_review`;
    - `not_confirmed`.
-6. Сохранять отчет карточки и коллаж фото.
-7. Не готовить apply без отдельного dry-run и approval.
+6. Сохранять исходный отчет карточки и коллаж/HTML фото.
+7. Не считать карточку проверенной без личного просмотра фото агентом.
+8. Не готовить apply без отдельного dry-run и approval.
+
+После личного аудита агент сохраняет результат в слой 2:
+
+```text
+data/catalog/card_audits/
+data/catalog/card_audits/card_audit_result.schema.json
+```
+
+Только после согласования владельцем принятые изменения переносятся в слой 3:
+
+```text
+data/catalog/master_passport/
+data/catalog/master_passport/master_product_passport_approved.schema.json
+```
+
+Marketplace-specific dry-run можно готовить только из слоя 3, либо из
+отдельного owner-approved пакета, который явно ссылается на слой 3.
+
+Если нужно включить не только `business_priority=now`, но и уже начатые или
+watch-строки, запускать с `--business-priority all`. При пересборке 2026-06-25
+owner-sync all-пакет сохранил 710 строк, включая `back0012`, `back0016` и
+`back0018` с owner-approved `internal_sku`.
 
 Команда:
 
@@ -197,4 +338,6 @@ data/runs/<date>/<run_id>/card_content_audit_packages_report.md
 - run report сохраняется в `data/runs`;
 - полный pytest проходит;
 - следующий агент может открыть сохраненный карточный audit package и начать
-  настоящий визуальный аудит без повторного проектирования структуры.
+  настоящий визуальный аудит без повторного проектирования структуры;
+- результат настоящего аудита можно сохранить в слой 2, а согласованный
+  владельцем вариант - в слой 3.

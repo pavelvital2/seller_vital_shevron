@@ -61,6 +61,7 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 
 ```text
 data/catalog/mapping/ozon_wb_internal_sku_confirmed.csv
+data/catalog/unified/internal_sku_assignment_owner_review.csv
 data/catalog/ozon/processed/ozon_catalog.csv
 data/catalog/wb/processed/wb_catalog.csv
 ```
@@ -77,6 +78,25 @@ data/runs/<date>/<run_id>/unified_catalog_issues.json
 `products.csv/json` - внутренний слой проекта. Он не меняет Ozon `offer_id` и
 WB `vendorCode`, не является разрешением на переименование артикулов продавца
 и не должен использоваться для marketplace write без проверки native IDs.
+
+С 2026-06-25 `build-unified-catalog` дополнительно читает
+`data/catalog/unified/internal_sku_assignment_owner_review.csv`, если файл
+существует. Для строк со статусом `owner_confirmed_internal_sku` или
+`owner_corrected_internal_sku` и заполненным `approved_internal_sku` команда
+накладывает внутренний артикул на marketplace-only товары:
+
+- `internal_product_id` остается стабильным native-ключом вида
+  `ozon:<offer_id>` или `wb:<vendorCode>`;
+- `internal_sku`, `product_group`, `pack_qty`, `cost_total` и `cost_per_unit`
+  заполняются из утвержденного внутреннего артикула;
+- в `notes` ставится
+  `owner_approved_internal_sku;not_cross_marketplace_mapped`;
+- Ozon `offer_id` и WB `vendorCode` не меняются.
+
+В summary нужно проверять счетчики `owner_review_approved_rows`,
+`owner_review_assignments`, `owner_review_applied_products` и `issue_count`.
+Любой `owner_review_*conflict*` или duplicate approved SKU нужно разобрать до
+карточных dry-run и до cross-marketplace write-операций.
 
 ## Использование в отчетах и боте
 
@@ -542,6 +562,21 @@ data/catalog/unified/internal_sku_assignment_owner_review.csv
 - после согласования агент сразу записывает результат в
   `data/catalog/unified/internal_sku_assignment_owner_review.csv`, пересчитывая
   свободные номера и проверяя дубли.
+
+После записи owner-review CSV нужно пересобрать derived-слои:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli build-unified-catalog
+
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli build-content-master
+```
+
+Если дальше идет карточный аудит, затем пересобрать
+`card-content-audit-backlog` и `card-content-audit-packages`. Иначе новые
+`internal_sku` будут сохранены в owner-review CSV, но не попадут в
+`products.csv`, `content_master.csv` и audit packages.
 
 Дополнительный ручной режим для остатка WB-only: владелец может запросить
 изображения несопоставленных WB-товаров без подбора пары Ozon агентом. В этом

@@ -92,6 +92,47 @@ def test_build_content_master_flags_title_mismatch_and_marketplace_only() -> Non
     assert {row["issue"] for row in audit_rows} == {"title_mismatch", "marketplace_only", "missing_cost"}
 
 
+def test_build_content_master_overlays_owner_review_internal_sku() -> None:
+    rows, _audit_rows, summary = build_content_master(
+        products=[
+            {
+                "internal_product_id": "ozon:back0018",
+                "internal_sku": "",
+                "product_name": "Шеврон Полиция",
+                "mapping_status": "ozon_only",
+                "ozon_offer_id": "back0018",
+                "active_ozon": "true",
+                "active_wb": "false",
+                "notes": "not_confirmed_in_mapping",
+            }
+        ],
+        ozon_rows=[
+            {
+                "offer_id": "back0018",
+                "product_id": "2161557598",
+                "sku": "2432512033",
+                "status": "visible",
+                "title": "Шеврон Полиция",
+            }
+        ],
+        wb_rows=[],
+        owner_review_rows=[
+            {
+                "review_status": "owner_corrected_internal_sku",
+                "source_marketplace": "ozon",
+                "source_id": "back0018",
+                "current_internal_product_id": "ozon:back0018",
+                "approved_internal_sku": "chev_back_mvd_text0004",
+            }
+        ],
+    )
+
+    assert rows[0].internal_product_id == "ozon:back0018"
+    assert rows[0].internal_sku == "chev_back_mvd_text0004"
+    assert rows[0].notes == "owner_approved_internal_sku;not_cross_marketplace_mapped"
+    assert summary["owner_review_applied_rows"] == 1
+
+
 def test_content_master_cli_writes_artifacts(tmp_path: Path, capsys) -> None:
     data_dir = tmp_path / "data"
     products_path = data_dir / "catalog" / "unified" / "products.csv"

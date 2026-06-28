@@ -9,6 +9,11 @@ import re
 from pathlib import Path
 from typing import Any
 
+from seller_agent.catalog.internal_sku_owner_review import (
+    apply_owner_internal_sku_assignment,
+    build_owner_internal_sku_assignments,
+    owner_assignment_note,
+)
 from seller_agent.catalog.loader import normalize_sku
 from seller_agent.catalog.schema import UNIFIED_CATALOG_FIELDS, UnifiedCatalogProduct
 from seller_agent.core.run_manifest import write_summary_run_manifest
@@ -16,6 +21,7 @@ from seller_agent.reports.writer import ensure_dir, write_json
 
 
 DEFAULT_MAPPING_PATH = Path("catalog/mapping/ozon_wb_internal_sku_confirmed.csv")
+DEFAULT_OWNER_REVIEW_PATH = Path("catalog/unified/internal_sku_assignment_owner_review.csv")
 DEFAULT_OZON_CATALOG_PATH = Path("catalog/ozon/processed/ozon_catalog.csv")
 DEFAULT_WB_CATALOG_PATH = Path("catalog/wb/processed/wb_catalog.csv")
 DEFAULT_OUTPUT_DIR = Path("catalog/unified")
@@ -132,13 +138,15 @@ def build_unified_products(
     ozon_rows: list[dict[str, str]],
     wb_rows: list[dict[str, str]],
     mapping_rows: list[dict[str, str]],
+    owner_review_rows: list[dict[str, str]] | None = None,
     unit_cost_rub: Decimal = DEFAULT_UNIT_COST_RUB,
 ) -> tuple[list[UnifiedCatalogProduct], list[dict[str, str]], dict[str, Any]]:
     confirmed_mapping_rows = [row for row in mapping_rows if _is_confirmed_mapping(row)]
+    owner_assignments, owner_issues, owner_summary = build_owner_internal_sku_assignments(owner_review_rows or [])
     ozon_by_offer = _index_by(ozon_rows, "offer_id")
     wb_by_vendor = _index_by(wb_rows, "vendor_code")
     products: list[UnifiedCatalogProduct] = []
-    issues: list[dict[str, str]] = []
+    issues: list[dict[str, str]] = [*owner_issues]
 
     for field in ("internal_sku", "ozon_offer_id", "wb_vendor_code"):
         for value in _duplicate_values(confirmed_mapping_rows, field):
@@ -206,35 +214,57 @@ def build_unified_products(
     for offer_id, row in sorted(ozon_by_offer.items(), key=lambda item: item[0].lower()):
         if offer_id in mapped_ozon:
             continue
+        internal_product_id = f"ozon:{offer_id}"
+        internal_sku, assignment_source = apply_owner_internal_sku_assignment(
+            internal_product_id=internal_product_id,
+            current_internal_sku="",
+            assignments=owner_assignments,
+        )
+        pack_qty = parse_pack_qty(internal_sku)
         products.append(
             UnifiedCatalogProduct(
-                internal_product_id=f"ozon:{offer_id}",
+                internal_product_id=internal_product_id,
+                internal_sku=internal_sku,
                 product_name=_first_text(row.get("title"), offer_id),
-                product_group="ozon_only",
+                product_group=product_group_from_internal_sku(internal_sku) if internal_sku else "ozon_only",
+                pack_qty=str(pack_qty),
+                cost_total=_money(unit_cost_rub * pack_qty) if internal_sku else "",
+                cost_per_unit=_money(unit_cost_rub) if internal_sku else "",
                 ozon_offer_id=offer_id,
                 ozon_product_id=normalize_sku(row.get("product_id")),
                 ozon_sku=normalize_sku(row.get("sku")),
                 mapping_status="ozon_only",
                 active_ozon=_is_active_marketplace_row(row),
                 active_wb="false",
-                notes="not_confirmed_in_mapping",
+                notes=owner_assignment_note("not_confirmed_in_mapping", assignment_source),
             )
         )
 
     for vendor_code, row in sorted(wb_by_vendor.items(), key=lambda item: item[0].lower()):
         if vendor_code in mapped_wb:
             continue
+        internal_product_id = f"wb:{vendor_code}"
+        internal_sku, assignment_source = apply_owner_internal_sku_assignment(
+            internal_product_id=internal_product_id,
+            current_internal_sku="",
+            assignments=owner_assignments,
+        )
+        pack_qty = parse_pack_qty(internal_sku)
         products.append(
             UnifiedCatalogProduct(
-                internal_product_id=f"wb:{vendor_code}",
+                internal_product_id=internal_product_id,
+                internal_sku=internal_sku,
                 product_name=_first_text(row.get("title"), vendor_code),
-                product_group="wb_only",
+                product_group=product_group_from_internal_sku(internal_sku) if internal_sku else "wb_only",
+                pack_qty=str(pack_qty),
+                cost_total=_money(unit_cost_rub * pack_qty) if internal_sku else "",
+                cost_per_unit=_money(unit_cost_rub) if internal_sku else "",
                 wb_vendor_code=vendor_code,
                 wb_nm_id=normalize_sku(row.get("nm_id")),
                 mapping_status="wb_only",
                 active_ozon="false",
                 active_wb=_is_active_marketplace_row(row),
-                notes="not_confirmed_in_mapping",
+                notes=owner_assignment_note("not_confirmed_in_mapping", assignment_source),
             )
         )
 
@@ -249,6 +279,12 @@ def build_unified_products(
         ),
         "ozon_only_products": sum(1 for product in products if product.mapping_status == "ozon_only"),
         "wb_only_products": sum(1 for product in products if product.mapping_status == "wb_only"),
+        "owner_review_rows": owner_summary["owner_review_rows"],
+        "owner_review_approved_rows": owner_summary["owner_review_approved_rows"],
+        "owner_review_assignments": owner_summary["owner_review_assignments"],
+        "owner_review_applied_products": sum(
+            1 for product in products if "owner_approved_internal_sku" in product.notes.split(";")
+        ),
         "issue_count": len(issues),
     }
     return products, issues, summary
@@ -303,6 +339,7 @@ def run_build_unified_catalog(
     *,
     data_dir: Path = Path("data"),
     mapping_path: Path | None = None,
+    owner_review_path: Path | None = None,
     ozon_catalog_path: Path | None = None,
     wb_catalog_path: Path | None = None,
     output_dir: Path | None = None,
@@ -313,6 +350,7 @@ def run_build_unified_catalog(
     run_dir = ensure_dir(data_dir / "runs" / started_at.strftime("%Y-%m-%d") / run_id)
 
     mapping_path = mapping_path or data_dir / DEFAULT_MAPPING_PATH
+    owner_review_path = owner_review_path or data_dir / DEFAULT_OWNER_REVIEW_PATH
     ozon_catalog_path = ozon_catalog_path or data_dir / DEFAULT_OZON_CATALOG_PATH
     wb_catalog_path = wb_catalog_path or data_dir / DEFAULT_WB_CATALOG_PATH
     output_dir = output_dir or data_dir / DEFAULT_OUTPUT_DIR
@@ -322,6 +360,7 @@ def run_build_unified_catalog(
     ozon_rows: list[dict[str, str]] = []
     wb_rows: list[dict[str, str]] = []
     mapping_rows: list[dict[str, str]] = []
+    owner_review_rows: list[dict[str, str]] = []
 
     for label, path in (
         ("mapping", mapping_path),
@@ -338,6 +377,11 @@ def run_build_unified_catalog(
                 wb_rows = rows
         except Exception as exc:  # noqa: BLE001 - task report must capture missing/bad local inputs
             errors[label] = str(exc)
+    if owner_review_path.exists():
+        try:
+            owner_review_rows = _read_csv(owner_review_path)
+        except Exception as exc:  # noqa: BLE001 - optional input errors should be visible
+            errors["owner_review"] = str(exc)
 
     products: list[UnifiedCatalogProduct] = []
     issues: list[dict[str, str]] = []
@@ -350,6 +394,10 @@ def run_build_unified_catalog(
         "confirmed_products": 0,
         "ozon_only_products": 0,
         "wb_only_products": 0,
+        "owner_review_rows": len(owner_review_rows),
+        "owner_review_approved_rows": 0,
+        "owner_review_assignments": 0,
+        "owner_review_applied_products": 0,
         "issue_count": 0,
     }
     if not errors:
@@ -357,6 +405,7 @@ def run_build_unified_catalog(
             ozon_rows=ozon_rows,
             wb_rows=wb_rows,
             mapping_rows=mapping_rows,
+            owner_review_rows=owner_review_rows,
         )
         summary["issue_count"] = len(issues)
 
@@ -391,6 +440,7 @@ def run_build_unified_catalog(
         "issues": issues,
         "inputs": {
             "mapping_path": str(mapping_path),
+            "owner_review_path": str(owner_review_path),
             "ozon_catalog_path": str(ozon_catalog_path),
             "wb_catalog_path": str(wb_catalog_path),
         },

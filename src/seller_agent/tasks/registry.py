@@ -314,6 +314,20 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_mapping=True,
     ),
     RegisteredTask(
+        name="seo-query-pack",
+        command="seo-query-pack",
+        title="SEO query pack",
+        description=(
+            "Build read-only Ozon/WB search query tables and target query clusters "
+            "for product card auditors."
+        ),
+        mode="read_only",
+        risk="low",
+        marketplaces=("ozon", "wb"),
+        runbook_path="data/planning/search_queries_runbook.md",
+        requires_mapping=True,
+    ),
+    RegisteredTask(
         name="pricing-status",
         command="pricing-status",
         title="Pricing status",
