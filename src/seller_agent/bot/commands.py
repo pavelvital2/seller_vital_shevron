@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from seller_agent.config import AppCredentials, load_credentials
+from seller_agent.core.job_service import JobService
+from seller_agent.core.job_store import DEFAULT_RUNTIME_DB, JobStore
 from seller_agent.core.run_manifest import latest_run
 from seller_agent.core.workflow_runner import WorkflowRunner
 from seller_agent.tasks.ozon_elastic_apply import run_ozon_elastic_apply
@@ -20,6 +22,7 @@ from seller_agent.tasks.wb_actions_discount_plan import run_wb_actions_discount_
 SUPPORTED_COMMANDS = {
     "/elastic",
     "/help",
+    "/jobs",
     "/status",
     "/today",
     "/reviews",
@@ -34,6 +37,7 @@ TELEGRAM_TITLES = {
     "/catalog": "Каталог",
     "/elastic": "Ozon Elastic",
     "/help": "Помощь",
+    "/jobs": "Runtime jobs",
     "/reviews": "Отзывы и вопросы",
     "/runs": "Запуски",
     "/status": "Статус проекта",
@@ -62,6 +66,7 @@ def handle_telegram_command(
     data_dir: Path = Path("data"),
     live_today: bool = False,
     live_status: bool = False,
+    runtime_db: Path = DEFAULT_RUNTIME_DB,
     credentials: AppCredentials | None = None,
 ) -> TelegramCommandResult:
     command, argument = _parse_command(message)
@@ -71,6 +76,16 @@ def handle_telegram_command(
         return _ozon_elastic_plan(data_dir=data_dir, credentials=credentials)
     if command in {"/wb-actions", "/wb_actions", "/wb-actions-70-55-55"}:
         return _wb_actions_plan(data_dir=data_dir, credentials=credentials)
+    if command == "/jobs":
+        return _jobs(runtime_db=runtime_db)
+    if command == "/job" and argument:
+        return _job_show(argument, runtime_db=runtime_db)
+    if command.startswith("/job_"):
+        return _job_show(command.removeprefix("/job_"), runtime_db=runtime_db)
+    if command == "/cancel" and argument:
+        return _job_cancel(argument, runtime_db=runtime_db)
+    if command.startswith("/cancel_"):
+        return _job_cancel(command.removeprefix("/cancel_"), runtime_db=runtime_db)
     if command == "/status":
         if live_status:
             return _fresh_status_preflight(data_dir=data_dir, credentials=credentials)
@@ -1136,6 +1151,130 @@ def _runs(*, data_dir: Path) -> TelegramCommandResult:
     )
 
 
+def _jobs(*, runtime_db: Path) -> TelegramCommandResult:
+    store = JobStore(runtime_db)
+    jobs = store.list_jobs(limit=10)
+    status_counts: dict[str, int] = {}
+    for job in jobs:
+        status_counts[job.status] = status_counts.get(job.status, 0) + 1
+    lines = [
+        "Runtime jobs",
+        "",
+        "Итог: последние job из SQLite runtime-очереди.",
+        "",
+        f"Runtime DB: `{runtime_db}`",
+        "",
+        "Статусы в последних 10:",
+    ]
+    if status_counts:
+        for status, count in sorted(status_counts.items()):
+            lines.append(f"- `{status}`: `{count}`")
+    else:
+        lines.append("- job нет")
+    lines.extend(["", "Последние job:"])
+    if not jobs:
+        lines.append("- нет строк")
+    for job in jobs:
+        lines.append(f"- `{job.job_id}`: `{job.task_id}` / `{job.status}`")
+    lines.extend(
+        [
+            "",
+            "Команды:",
+            "- `/job_<job_id>` - подробности job",
+            "- `/cancel_<job_id>` - отменить только `created/queued` job",
+            "",
+            "Изменений в Ozon/WB не выполнял.",
+        ]
+    )
+    return TelegramCommandResult(command="/jobs", ok=True, mode="maintenance", text="\n".join(lines))
+
+
+def _job_show(job_id: str, *, runtime_db: Path) -> TelegramCommandResult:
+    clean_job_id = _clean_job_id(job_id)
+    if not clean_job_id:
+        return TelegramCommandResult(
+            command="/job",
+            ok=False,
+            mode="maintenance",
+            blocked_reason="invalid_job_id",
+            text="Runtime job\n\nИтог: не могу показать job - некорректный `job_id`.",
+        )
+    store = JobStore(runtime_db)
+    job = store.get_job(clean_job_id)
+    if job is None:
+        return TelegramCommandResult(
+            command="/job",
+            ok=False,
+            mode="maintenance",
+            blocked_reason="unknown_job",
+            text=f"Runtime job\n\nИтог: job не найдена.\n\nJob ID: `{clean_job_id}`",
+        )
+    events = store.list_events(clean_job_id)
+    lines = [
+        "Runtime job",
+        "",
+        f"Job ID: `{job.job_id}`",
+        f"Task: `{job.task_id}`",
+        f"Статус: `{job.status}`",
+        f"Actor: `{job.actor}`",
+        f"Создана: `{job.created_at}`",
+        f"Обновлена: `{job.updated_at}`",
+    ]
+    if job.started_at:
+        lines.append(f"Старт: `{job.started_at}`")
+    if job.finished_at:
+        lines.append(f"Финиш: `{job.finished_at}`")
+    if job.error:
+        lines.append(f"Ошибка: `{job.error}`")
+    lines.extend(["", "События:"])
+    for event in events[-6:]:
+        lines.append(f"- `{event.created_at}` `{event.event_type}` {event.message}".rstrip())
+    if len(events) > 6:
+        lines.append(f"- ... еще `{len(events) - 6}`")
+    lines.extend(["", "Изменений в Ozon/WB не выполнял."])
+    return TelegramCommandResult(command="/job", ok=True, mode="maintenance", text="\n".join(lines))
+
+
+def _job_cancel(job_id: str, *, runtime_db: Path) -> TelegramCommandResult:
+    clean_job_id = _clean_job_id(job_id)
+    if not clean_job_id:
+        return TelegramCommandResult(
+            command="/cancel",
+            ok=False,
+            mode="maintenance",
+            blocked_reason="invalid_job_id",
+            text="Runtime job cancel\n\nИтог: отмена не выполнена - некорректный `job_id`.",
+        )
+    service = JobService(store=JobStore(runtime_db), data_dir=Path("data"), runtime_db=runtime_db)
+    try:
+        result = service.cancel(clean_job_id, reason="cancelled_from_telegram_command")
+    except KeyError:
+        return TelegramCommandResult(
+            command="/cancel",
+            ok=False,
+            mode="maintenance",
+            blocked_reason="unknown_job",
+            text=f"Runtime job cancel\n\nИтог: job не найдена.\n\nJob ID: `{clean_job_id}`",
+        )
+    lines = [
+        "Runtime job cancel",
+        "",
+        f"Итог: {'job отменена' if result.ok else 'отмена заблокирована'}.",
+        f"Job ID: `{result.job.job_id}`",
+        f"Статус: `{result.job.status}`",
+    ]
+    if result.message:
+        lines.append(f"Причина: `{result.message}`")
+    lines.extend(["", "Изменений в Ozon/WB не выполнял."])
+    return TelegramCommandResult(
+        command="/cancel",
+        ok=result.ok,
+        mode="maintenance",
+        blocked_reason="" if result.ok else "cancel_blocked",
+        text="\n".join(lines),
+    )
+
+
 def _safe_artifacts(run: dict[str, Any]) -> dict[str, str]:
     artifacts = run.get("artifacts")
     if not isinstance(artifacts, dict):
@@ -1266,6 +1405,17 @@ def _valid_wb_actions_plan_id(value: str) -> bool:
     if not text.startswith("wb_actions_discount_plan_"):
         return False
     return all(char.isalnum() or char in {"_", "-"} for char in text)
+
+
+def _clean_job_id(value: str) -> str:
+    text = str(value or "").strip().strip("`")
+    if not text.startswith("job_"):
+        return ""
+    if len(text) > 160:
+        return ""
+    if not all(char.isalnum() or char in {"_", "-"} for char in text):
+        return ""
+    return text
 
 
 def _safe_error(exc: BaseException) -> str:

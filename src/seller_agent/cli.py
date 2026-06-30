@@ -1770,6 +1770,7 @@ def main(argv: list[str] | None = None) -> int:
                 data_dir=data_dir,
                 live_today=args.live_today,
                 live_status=args.live_status,
+                runtime_db=Path(args.runtime_db),
             )
             if args.json:
                 print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
@@ -1800,6 +1801,7 @@ def main(argv: list[str] | None = None) -> int:
                 data_dir=data_dir,
                 live_today=args.live_today,
                 live_status=args.live_status,
+                runtime_db=Path(args.runtime_db),
             )
         else:
             try:

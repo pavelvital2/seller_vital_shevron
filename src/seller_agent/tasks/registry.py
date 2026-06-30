@@ -145,6 +145,8 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         mode="maintenance",
         risk="low",
         runbook_path="data/planning/runtime_job_store_plan.md",
+        telegram_enabled=True,
+        telegram_button_label="/jobs",
     ),
     RegisteredTask(
         name="approvals",

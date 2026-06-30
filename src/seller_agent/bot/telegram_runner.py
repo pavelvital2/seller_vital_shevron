@@ -204,6 +204,7 @@ def send_preview_command(
     thread_id: int | None = None,
     live_today: bool = False,
     live_status: bool = False,
+    runtime_db: Path = DEFAULT_RUNTIME_DB,
     api_request: ApiRequest = telegram_api_request,
     document_api_request: DocumentApiRequest = telegram_api_document_request,
 ) -> dict[str, Any]:
@@ -212,6 +213,7 @@ def send_preview_command(
         data_dir=data_dir,
         live_today=live_today,
         live_status=live_status,
+        runtime_db=runtime_db,
     )
     send_results = send_telegram_text(
         token=token,
@@ -378,6 +380,7 @@ def poll_once(
                 data_dir=data_dir,
                 live_today=live_today,
                 live_status=live_status,
+                runtime_db=runtime_db,
             )
         send_results = send_telegram_text(
             token=token,

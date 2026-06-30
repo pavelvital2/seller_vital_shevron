@@ -257,7 +257,8 @@ worker/job runner -> result -> send final report
   еще не переведен на JobService;
 - dedup by `update_id` - выполнено для message updates в режиме
   `--runtime-jobs`;
-- команды `/jobs`, `/job_<id>`, `/cancel_<id>`;
+- команды `/jobs`, `/job_<id>`, `/cancel_<id>` - выполнено как
+  maintenance-команды Telegram;
 - безопасную отправку report files через существующий attachment policy.
 
 Реализовано в первом optional-слое:
@@ -266,6 +267,8 @@ worker/job runner -> result -> send final report
 - `bot poll-once|poll-loop --runtime-jobs --runtime-db ...`;
 - `bot run-job-next` выполняет первый queued job и отправляет итог в исходный
   Telegram chat/thread;
+- `/jobs`, `/job_<id>`, `/cancel_<id>` показывают и безопасно отменяют только
+  `created/queued` runtime job;
 - `/status` + `--live-status --runtime-jobs` создает job
   `status-preflight`;
 - `/today` + `--live-today --runtime-jobs` создает job
@@ -274,7 +277,8 @@ worker/job runner -> result -> send final report
 
 Ограничение: постоянный auto worker/timer пока не подключен; после постановки
 в очередь job нужно выполнить вручную через `bot run-job-next` или будущий
-timer/worker.
+timer/worker. Apply callbacks Ozon Elastic/WB actions пока не переведены на
+JobService.
 
 ### Этап 6. Атомарные approvals и resource leases
 

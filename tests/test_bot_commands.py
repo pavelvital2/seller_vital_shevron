@@ -30,6 +30,7 @@ def test_bot_help_lists_read_only_mvp_commands() -> None:
     assert "`/approvals`" in result.text
     assert "`/elastic`" in result.text
     assert "`/wb-actions`" in result.text
+    assert "`/jobs`" in result.text
 
 
 def test_bot_status_uses_latest_run_manifest(tmp_path: Path) -> None:
@@ -854,6 +855,7 @@ def test_send_preview_command_forwards_live_status(
             "data_dir": tmp_path,
             "live_today": False,
             "live_status": True,
+            "runtime_db": Path("runtime/runtime.db"),
         }
     ]
 
@@ -943,6 +945,31 @@ def test_runtime_job_dispatch_queues_live_status_and_deduplicates(tmp_path: Path
     assert updates is not None
     assert updates.processing_status == "queued"
     assert updates.job_id == jobs[0].job_id
+
+
+def test_bot_jobs_show_and_cancel_runtime_jobs(tmp_path: Path) -> None:
+    runtime_db = tmp_path / "runtime.db"
+    store = JobStore(runtime_db)
+    job = store.create_job(
+        task_id="status-preflight",
+        actor="telegram:123",
+        job_id="job_status-preflight_test_001",
+        status="queued",
+    )
+
+    jobs_result = dispatch_message("/jobs", runtime_db=runtime_db)
+    show_result = dispatch_message(f"/job_{job.job_id}", runtime_db=runtime_db)
+    cancel_result = dispatch_message(f"/cancel_{job.job_id}", runtime_db=runtime_db)
+    after_cancel = store.get_job(job.job_id)
+
+    assert jobs_result.ok is True
+    assert job.job_id in jobs_result.text
+    assert show_result.ok is True
+    assert "status-preflight" in show_result.text
+    assert cancel_result.ok is True
+    assert "job отменена" in cancel_result.text
+    assert after_cancel is not None
+    assert after_cancel.status == "cancelled"
 
 
 def test_poll_once_runtime_jobs_queues_live_today(tmp_path: Path) -> None:

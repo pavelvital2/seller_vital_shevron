@@ -73,6 +73,8 @@
 - `src/seller_agent/bot/job_notifier.py` - Telegram notifier для завершенных
   runtime job-ов: находит исходный `telegram_updates` по `job_id`, отправляет
   итог в тот же chat/thread и прикрепляет безопасный `artifacts.report`.
+- Telegram commands `/jobs`, `/job_<job_id>`, `/cancel_<job_id>` - просмотр
+  SQLite runtime job-ов и безопасная отмена только `created/queued` job.
 - `src/seller_agent/tasks/registry.py` - единый `TaskRegistry`: метаданные
   текущих CLI-команд, режимы `read_only/dry_run/apply/maintenance`, риск,
   marketplace, runbook, требования к credentials/LK/mapping/confirmation и

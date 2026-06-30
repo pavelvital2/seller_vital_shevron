@@ -217,6 +217,11 @@ Service должен включаться только после:
   `data/runs/index.jsonl`.
 - `/reviews` - последний `reviews-questions` из `data/runs/index.jsonl`.
 - `/approvals` - текущий обзор `approvals status`.
+- `/jobs` - последние runtime job из SQLite `runtime/runtime.db`, статусы и
+  команды для просмотра/отмены.
+- `/job_<job_id>` - подробности runtime job и последние события.
+- `/cancel_<job_id>` - отменяет только `created/queued` runtime job; running
+  или завершенные job не отменяются.
 - `/catalog` - последний `catalog-build-unified` из `data/runs/index.jsonl`;
   Telegram-summary показывает ключевые цифры unified catalog из безопасного
   `summary` artifact.
