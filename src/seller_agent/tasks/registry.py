@@ -7,6 +7,7 @@ from seller_agent.core.run_manifest import ManifestMode, ManifestRisk
 
 
 TaskHandler = Callable[..., dict[str, Any]]
+TaskExecutor = str
 
 
 @dataclass(frozen=True)
@@ -27,6 +28,15 @@ class RegisteredTask:
     telegram_button_label: str = ""
     handler: TaskHandler | None = None
     aliases: tuple[str, ...] = field(default_factory=tuple)
+    executor: TaskExecutor = "script"
+    parameter_schema: dict[str, Any] = field(default_factory=dict)
+    result_schema: dict[str, Any] = field(default_factory=dict)
+    timeout_seconds: int = 0
+    lock_keys: tuple[str, ...] = field(default_factory=tuple)
+    source_plan_task: str = ""
+    verify_task: str = ""
+    supports_cancel: bool = False
+    enabled: bool = True
 
     @property
     def is_read_only(self) -> bool:
@@ -41,9 +51,28 @@ class RegisteredTask:
         data.pop("handler", None)
         data["marketplaces"] = list(self.marketplaces)
         data["aliases"] = list(self.aliases)
+        data["lock_keys"] = list(self.lock_keys)
         data["is_read_only"] = self.is_read_only
         data["is_write"] = self.is_write
+        data["policy_issues"] = self.policy_issues()
         return data
+
+    def policy_issues(self) -> list[str]:
+        issues: list[str] = []
+        if self.mode == "apply":
+            if not self.requires_confirmation:
+                issues.append("apply_requires_confirmation")
+            if not self.source_plan_task:
+                issues.append("apply_missing_source_plan_task")
+            if not self.verify_task:
+                issues.append("apply_missing_verify_task")
+            if not self.lock_keys:
+                issues.append("apply_missing_lock_keys")
+        if self.telegram_enabled and not self.telegram_button_label:
+            issues.append("telegram_missing_button_label")
+        if self.executor not in {"script", "agent", "hybrid"}:
+            issues.append("invalid_executor")
+        return issues
 
 
 class TaskRegistry:
@@ -97,6 +126,21 @@ class TaskRegistry:
 
     def to_list(self, **filters: Any) -> list[dict[str, Any]]:
         return [task.to_dict() for task in self.list(**filters)]
+
+    def policy_issues(self) -> list[dict[str, Any]]:
+        issues: list[dict[str, Any]] = []
+        for task in self.list():
+            for issue in task.policy_issues():
+                issues.append(
+                    {
+                        "task": task.name,
+                        "command": task.command,
+                        "mode": task.mode,
+                        "risk": task.risk,
+                        "issue": issue,
+                    }
+                )
+        return issues
 
 
 def default_task_registry() -> TaskRegistry:

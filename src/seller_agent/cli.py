@@ -50,7 +50,7 @@ from seller_agent.tasks.reviews_questions import (
     run_reviews_questions_apply,
     run_reviews_questions_prepare_approved,
 )
-from seller_agent.tasks.registry import get_task_definition, list_task_definitions
+from seller_agent.tasks.registry import default_task_registry, get_task_definition, list_task_definitions
 from seller_agent.tasks.seo_query_pack import build_seo_query_pack
 from seller_agent.tasks.seller_sku_update import run_seller_sku_update_apply, run_seller_sku_update_plan
 from seller_agent.tasks.ozon_messenger_workflow import run_ozon_messenger_workflow
@@ -134,7 +134,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     tasks.add_argument(
         "action",
-        choices=("list", "show"),
+        choices=("list", "show", "policy"),
         help="Task registry action.",
     )
     tasks.add_argument(
@@ -1756,10 +1756,12 @@ def main(argv: list[str] | None = None) -> int:
                     telegram_only=args.telegram_only,
                 )
             }
-        else:
+        elif args.action == "show":
             if not args.task:
                 parser.error("tasks show requires --task")
             result = {"task": get_task_definition(args.task)}
+        else:
+            result = {"rows": default_task_registry().policy_issues()}
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
 

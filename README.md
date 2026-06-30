@@ -42,6 +42,7 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli sta
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli runs list
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli runs latest --task status-preflight
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli tasks list
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli tasks policy
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli jobs list
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli bot run-job-next --token-file /home/pavel/.secrets/vital_shevron_telegram_bot_token
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli bot run-job-loop --max-iterations 5 --token-file /home/pavel/.secrets/vital_shevron_telegram_bot_token

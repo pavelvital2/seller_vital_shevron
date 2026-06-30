@@ -37,6 +37,13 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   -m seller_agent.cli tasks show --task reviews-questions
 ```
 
+Проверить пробелы v2 safety metadata:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli tasks policy
+```
+
 SEO-pack для карточных аудиторов также зарегистрирован как read-only задача:
 
 ```bash
@@ -134,11 +141,27 @@ audit/HTML. После смены seller SKU запускает нормализ
   "requires_confirmation": false,
   "telegram_enabled": false,
   "telegram_button_label": "",
+  "executor": "script|agent|hybrid",
+  "parameter_schema": {},
+  "result_schema": {},
+  "timeout_seconds": 0,
+  "lock_keys": [],
+  "source_plan_task": "",
+  "verify_task": "",
+  "supports_cancel": false,
+  "enabled": true,
   "aliases": [],
   "is_read_only": true,
-  "is_write": false
+  "is_write": false,
+  "policy_issues": []
 }
 ```
+
+На 2026-06-30 v2-поля добавлены совместимо и не блокируют существующие
+команды. `tasks policy` показывает незаполненные обязательные элементы для
+будущего жесткого apply-gate: `source_plan_task`, `verify_task`, `lock_keys`.
+Перед переводом Ozon Elastic/WB actions apply callbacks на `JobService` эти
+поля нужно заполнить хотя бы для соответствующих apply-задач.
 
 ## Safety-правила
 

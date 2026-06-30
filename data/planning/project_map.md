@@ -80,8 +80,11 @@
 - `src/seller_agent/tasks/registry.py` - единый `TaskRegistry`: метаданные
   текущих CLI-команд, режимы `read_only/dry_run/apply/maintenance`, риск,
   marketplace, runbook, требования к credentials/LK/mapping/confirmation и
-  Telegram-label для бота. Telegram-enabled dry-run задачи: `/elastic` для
-  Ozon Elastic и `/wb-actions` для WB акций `70-55-55`.
+  Telegram-label для бота. Начат v2 metadata слой с полями executor,
+  parameter/result schema, timeout, lock keys, source plan task, verify task,
+  cancel support и enabled; CLI `tasks policy` показывает пробелы apply-gate.
+  Telegram-enabled dry-run задачи: `/elastic` для Ozon Elastic и
+  `/wb-actions` для WB акций `70-55-55`.
 - `tasks list|show` - CLI-команды просмотра `TaskRegistry`.
 - `src/seller_agent/tasks/catalog_unified.py` - read-only сборка внутреннего
   общего product-level каталога из confirmed Ozon/WB mapping, owner-approved

@@ -198,6 +198,8 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 
 ### Этап 3. TaskRegistry v2 contract
 
+Статус: начат совместимый v2 metadata слой.
+
 Расширить metadata задач:
 
 - `executor`: `script|agent|hybrid`;
@@ -211,6 +213,21 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 - `telegram_menu_path`;
 - `supports_cancel`;
 - `enabled`.
+
+Реализовано:
+
+- v2-поля добавлены в `RegisteredTask` с безопасными дефолтами;
+- `policy_issues()` показывает незаполненные элементы apply-gate без
+  принудительной блокировки существующих задач;
+- CLI `tasks policy` выводит текущие пробелы `source_plan_task`,
+  `verify_task`, `lock_keys`.
+
+Еще не сделано:
+
+- заполнить `source_plan_task`, `verify_task`, `lock_keys`, timeout и schemas
+  для всех apply-задач;
+- включить жесткое policy validation для write-кнопок после заполнения
+  metadata.
 
 Добавить policy validation:
 

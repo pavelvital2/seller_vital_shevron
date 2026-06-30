@@ -23,6 +23,8 @@ def test_task_registry_contains_safety_metadata_for_write_tasks() -> None:
     assert write_tasks
     assert all(task.requires_confirmation for task in write_tasks)
     assert all(task.risk in {"low", "high"} for task in write_tasks)
+    assert all(task.executor == "script" for task in write_tasks)
+    assert any("apply_missing_source_plan_task" in task.policy_issues() for task in write_tasks)
 
 
 def test_task_registry_filters_and_alias_lookup() -> None:
@@ -32,6 +34,9 @@ def test_task_registry_filters_and_alias_lookup() -> None:
     assert any(row["command"] == "apply-ozon-cpc-bids" for row in ozon_apply)
     assert task["name"] == "ozon-cpc-bids-apply"
     assert task["requires_confirmation"] is True
+    assert "executor" in task
+    assert "lock_keys" in task
+    assert "policy_issues" in task
 
 
 def test_bot_dispatcher_uses_default_task_registry() -> None:
@@ -53,6 +58,11 @@ def test_cli_tasks_list_and_show(capsys: pytest.CaptureFixture[str]) -> None:
     show_output = json.loads(capsys.readouterr().out)
     assert show_output["task"]["command"] == "reviews-questions"
     assert show_output["task"]["runbook_path"] == "data/planning/reviews_questions_runbook.md"
+
+    assert main(["tasks", "policy"]) == 0
+    policy_output = json.loads(capsys.readouterr().out)
+    assert policy_output["rows"]
+    assert any(row["issue"] == "apply_missing_source_plan_task" for row in policy_output["rows"])
 
 
 def _parser_commands() -> set[str]:
