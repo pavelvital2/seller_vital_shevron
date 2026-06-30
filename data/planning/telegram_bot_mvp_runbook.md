@@ -17,7 +17,8 @@ command layer. Adapter умеет отправить preview-ответ, оди�
 `WorkflowRunner` для совместимости. С 2026-06-30 добавлен опциональный режим
 `--runtime-jobs`: polling ставит `/today` и `/status` в SQLite `JobStore`,
 дедуплицирует `telegram_updates.update_id` и сразу возвращает `job_id`; запуск
-очереди выполняется отдельным `jobs run-next` или будущим worker/timer.
+очереди и отправка результата выполняются отдельной командой
+`bot run-job-next` или будущим worker/timer.
 
 С 2026-06-30 подключены точечные write-кнопки: Ozon Elastic и WB акции
 `70-55-55`. Команды `/elastic` и `/wb-actions` строят fresh dry-run,
@@ -36,6 +37,7 @@ production-запуском.
 ```text
 src/seller_agent/bot/commands.py
 src/seller_agent/bot/dispatcher.py
+src/seller_agent/bot/job_notifier.py
 src/seller_agent/bot/runtime_jobs.py
 src/seller_agent/bot/telegram_runner.py
 src/seller_agent/core/job_service.py
@@ -180,11 +182,13 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   -m seller_agent.cli jobs list
 
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
-  -m seller_agent.cli jobs run-next
+  -m seller_agent.cli bot run-job-next \
+  --token-file /home/pavel/.secrets/vital_shevron_telegram_bot_token
 ```
 
-Ограничение текущего слоя: итоговый отчет после завершения job еще не
-отправляется автоматически в Telegram. Это следующий шаг worker/notifier.
+`bot run-job-next` выполняет первый queued job и, если job была создана из
+Telegram update, отправляет итоговый Telegram-summary в исходный chat/thread и
+прикрепляет безопасный `report`-файл через тот же attachment policy.
 
 Systemd user service template:
 

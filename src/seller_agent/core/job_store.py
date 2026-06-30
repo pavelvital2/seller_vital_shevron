@@ -255,6 +255,20 @@ class JobStore:
             ).fetchone()
         return _telegram_update_from_row(row) if row is not None else None
 
+    def get_telegram_update_by_job_id(self, job_id: str) -> TelegramUpdateRecord | None:
+        self.initialize()
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM telegram_updates
+                WHERE job_id = ?
+                ORDER BY received_at DESC, update_id DESC
+                LIMIT 1
+                """,
+                (job_id,),
+            ).fetchone()
+        return _telegram_update_from_row(row) if row is not None else None
+
     def acquire_resource_lease(
         self,
         *,

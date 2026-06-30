@@ -237,7 +237,8 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   задач, которые уже поддерживает текущий `WorkflowRunner`;
 - Telegram получает `job_id` сразу - выполнено для live `/status` и `/today`
   в опциональном режиме `bot poll-once|poll-loop --runtime-jobs`;
-- итоговый report отправляется после завершения;
+- итоговый report отправляется после завершения - выполнено для Telegram job
+  через `bot run-job-next` и безопасный `artifacts.report`;
 - все запуски видны в `jobs` и `job_events`;
 - `RunManifest` продолжает писаться как artifact.
 
@@ -263,14 +264,17 @@ worker/job runner -> result -> send final report
 
 - `src/seller_agent/bot/runtime_jobs.py`;
 - `bot poll-once|poll-loop --runtime-jobs --runtime-db ...`;
+- `bot run-job-next` выполняет первый queued job и отправляет итог в исходный
+  Telegram chat/thread;
 - `/status` + `--live-status --runtime-jobs` создает job
   `status-preflight`;
 - `/today` + `--live-today --runtime-jobs` создает job
   `daily-morning-report`;
 - повторный Telegram `update_id` не создает второй job.
 
-Ограничение: auto worker/notifier пока не подключен; после постановки в
-очередь job нужно выполнить через `jobs run-next` или будущий timer/worker.
+Ограничение: постоянный auto worker/timer пока не подключен; после постановки
+в очередь job нужно выполнить вручную через `bot run-job-next` или будущий
+timer/worker.
 
 ### Этап 6. Атомарные approvals и resource leases
 

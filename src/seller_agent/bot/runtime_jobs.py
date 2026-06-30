@@ -13,6 +13,7 @@ def dispatch_runtime_job_message(
     *,
     update_id: int,
     chat_id: int,
+    thread_id: int | None = None,
     data_dir: Path = Path("data"),
     runtime_db: Path = DEFAULT_RUNTIME_DB,
     live_today: bool = False,
@@ -32,7 +33,7 @@ def dispatch_runtime_job_message(
         update_id=update_id,
         chat_id=str(chat_id),
         command=command,
-        payload={"message": message, "params": params},
+        payload={"message": message, "params": params, "thread_id": thread_id},
         processing_status="received",
     )
     if not registered:

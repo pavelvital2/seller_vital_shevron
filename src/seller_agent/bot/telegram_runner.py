@@ -366,6 +366,7 @@ def poll_once(
                 text,
                 update_id=update_id,
                 chat_id=chat_id,
+                thread_id=thread_id,
                 data_dir=data_dir,
                 runtime_db=runtime_db,
                 live_today=live_today,

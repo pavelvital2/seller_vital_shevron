@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from seller_agent.bot.dispatcher import dispatch_callback, dispatch_message
+from seller_agent.bot.job_notifier import notify_telegram_job_result
 from seller_agent.bot.runtime_jobs import dispatch_runtime_job_message
 from seller_agent.bot.telegram_runner import (
     load_telegram_bot_token,
@@ -987,6 +988,63 @@ def test_poll_once_runtime_jobs_queues_live_today(tmp_path: Path) -> None:
     assert len(jobs) == 1
     assert jobs[0].task_id == "daily-morning-report"
     assert jobs[0].params == {"refresh_preflight": True, "seller_v2": False, "seller_v3": True}
+
+
+def test_notify_telegram_job_result_sends_text_and_safe_report(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    report_path = data_dir / "runs" / "2026-06-30" / "job_test" / "report.md"
+    report_path.parent.mkdir(parents=True)
+    report_path.write_text("# report", encoding="utf-8")
+    runtime_db = tmp_path / "runtime.db"
+    store = JobStore(runtime_db)
+    job = store.create_job(
+        task_id="status-preflight",
+        actor="telegram:123",
+        job_id="job_notify_test",
+        status="queued",
+    )
+    store.register_telegram_update(
+        update_id=501,
+        chat_id="123",
+        command="/status",
+        job_id=job.job_id,
+        payload={"thread_id": 55},
+        processing_status="queued",
+    )
+    store.update_job_status(
+        job.job_id,
+        "success",
+        result={"status": "ok", "artifacts": {"report": str(report_path)}},
+    )
+    calls: list[tuple[str, str, dict]] = []
+    docs: list[tuple[str, str, dict, Path]] = []
+
+    def fake_api(token: str, method: str, payload: dict) -> dict:
+        calls.append((token, method, payload))
+        return {"ok": True, "result": {"message_id": 31}}
+
+    def fake_doc_api(token: str, method: str, payload: dict, document_path: Path) -> dict:
+        docs.append((token, method, payload, document_path))
+        return {"ok": True, "result": {"message_id": 32}}
+
+    result = notify_telegram_job_result(
+        token="secret-token",
+        job_id=job.job_id,
+        store=store,
+        data_dir=data_dir,
+        api_request=fake_api,
+        document_api_request=fake_doc_api,
+    )
+
+    assert result.ok is True
+    assert result.chat_id == 123
+    assert result.thread_id == 55
+    assert calls[0][1] == "sendMessage"
+    assert "job_notify_test" in calls[0][2]["text"]
+    assert calls[0][2]["message_thread_id"] == 55
+    assert docs[0][1] == "sendDocument"
+    assert docs[0][2]["message_thread_id"] == 55
+    assert docs[0][3] == report_path.resolve()
 
 
 def test_poll_once_dispatches_callback_query(

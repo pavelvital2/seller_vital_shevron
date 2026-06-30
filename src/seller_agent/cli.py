@@ -17,6 +17,7 @@ from seller_agent.bot.telegram_runner import (
     poll_once,
     send_preview_command,
 )
+from seller_agent.bot.job_notifier import notify_telegram_job_result
 from seller_agent.config import load_credentials
 from seller_agent.core.job_runner import JobRunner
 from seller_agent.core.job_service import JobService
@@ -170,7 +171,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     bot.add_argument(
         "action",
-        choices=("preview", "send-preview", "poll-once", "poll-loop"),
+        choices=("preview", "send-preview", "poll-once", "poll-loop", "run-job-next"),
         help="Bot action.",
     )
     bot.add_argument(
@@ -1816,7 +1817,29 @@ def main(argv: list[str] | None = None) -> int:
                 print(json.dumps(result, ensure_ascii=False, indent=2))
                 return 2
         result: dict
-        if args.action == "poll-loop":
+        if args.action == "run-job-next":
+            runtime_db = Path(args.runtime_db)
+            store = JobStore(runtime_db)
+            service = JobService(store=store, data_dir=data_dir, runtime_db=runtime_db)
+            runner_result = JobRunner(service).run_next()
+            notification = None
+            if runner_result.job is not None:
+                notification = notify_telegram_job_result(
+                    token=token,
+                    job_id=runner_result.job.job_id,
+                    store=store,
+                    runtime_db=runtime_db,
+                    data_dir=data_dir,
+                )
+            result = {
+                "ok": runner_result.ok and (notification.ok if notification else True),
+                "ran": runner_result.ran,
+                "message": runner_result.message,
+                "job": asdict(runner_result.job) if runner_result.job else None,
+                "notification": asdict(notification) if notification else None,
+                "artifacts": {"runtime_db": str(runtime_db)},
+            }
+        elif args.action == "poll-loop":
             result = poll_loop(
                 token=token,
                 data_dir=data_dir,

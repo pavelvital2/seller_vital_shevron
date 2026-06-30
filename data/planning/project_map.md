@@ -70,6 +70,9 @@
   в режиме `bot poll-once|poll-loop --runtime-jobs` live `/status` и `/today`
   регистрируются в `telegram_updates`, дедуплицируются по `update_id` и
   ставятся в `JobStore` как queued jobs без выполнения внутри polling.
+- `src/seller_agent/bot/job_notifier.py` - Telegram notifier для завершенных
+  runtime job-ов: находит исходный `telegram_updates` по `job_id`, отправляет
+  итог в тот же chat/thread и прикрепляет безопасный `artifacts.report`.
 - `src/seller_agent/tasks/registry.py` - единый `TaskRegistry`: метаданные
   текущих CLI-команд, режимы `read_only/dry_run/apply/maintenance`, риск,
   marketplace, runbook, требования к credentials/LK/mapping/confirmation и
@@ -373,7 +376,8 @@ Ozon CDP port по умолчанию: `9544`.
   deduplication, atomic approvals/resource leases и перевод Telegram в
   dispatcher job-ов. Этапы 1-2 начаты в `feature/runtime-job-store`:
   добавлены `JobStore`, `JobService`, `JobRunner`, CLI `jobs`, optional
-  Telegram `--runtime-jobs` для `/status`/`/today` и tests.
+  Telegram `--runtime-jobs` для `/status`/`/today`, `bot run-job-next`
+  notifier и tests.
 - `data/planning/daily_morning_report_runbook.md`
 - `data/planning/reviews_questions_runbook.md`
 - `data/planning/ozon_messenger_runbook.md` - Ozon Messenger/уведомления:

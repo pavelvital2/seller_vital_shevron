@@ -62,11 +62,17 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   -m seller_agent.cli jobs run-next
+
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli bot run-job-next \
+  --token-file /home/pavel/.secrets/vital_shevron_telegram_bot_token
 ```
 
 `jobs` - maintenance-команда для проверки и ручного запуска нового SQLite
 runtime-контура. Она не заменяет `RunManifest`: job store хранит оперативное
-состояние, а `RunManifest` остается audit/export artifact.
+состояние, а `RunManifest` остается audit/export artifact. `bot run-job-next`
+использовать для Telegram-origin job-ов: команда выполняет первый queued job и
+отправляет итоговый summary/report обратно в исходный chat/thread.
 
 Карточные команды, уже добавленные в `TaskRegistry`:
 
