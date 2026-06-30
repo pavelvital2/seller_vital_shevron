@@ -92,6 +92,8 @@ draft -> pending_review -> approved -> applying
 
 ### Этап 0. Чистая точка
 
+Статус: выполнено 2026-06-30.
+
 1. Провести ревизию текущей ветки.
 2. Запустить релевантные тесты.
 3. Закоммитить завершенные изменения.
@@ -105,6 +107,8 @@ feature/runtime-job-store
 с карточным apply, supply planning, reviews, actions и external review.
 
 ### Этап 1. SQLite Job Store MVP
+
+Статус: реализован MVP в ветке `feature/runtime-job-store`.
 
 Добавить:
 
@@ -127,7 +131,20 @@ MVP-функции:
 
 Ограничение: на этом этапе не менять marketplace write-операции.
 
+Реализовано:
+
+- SQLite schema с таблицами `jobs`, `job_events`, `task_requests`,
+  `approvals`, `resource_leases`, `telegram_updates`;
+- `JobStore.create_job()`, `update_job_status()`, `append_event()`;
+- `JobStore.register_telegram_update()` с dedup по `update_id`;
+- `JobStore.acquire_resource_lease()` / `release_resource_lease()`;
+- `JobStore.create_approval()` и атомарный
+  `reserve_approval_for_apply(approved -> applying)`;
+- тесты `tests/test_job_store.py`.
+
 ### Этап 2. JobService / JobRunner v1
+
+Статус: реализован первый read-only MVP в ветке `feature/runtime-job-store`.
 
 Добавить:
 
@@ -147,6 +164,37 @@ get_status(job_id) -> JobStatus
 ```
 
 На первом проходе поддержать только script executor для read-only задач.
+
+Реализовано:
+
+- `JobService.submit(task_id, params, actor)` создает queued job;
+- `JobService.run(job_id)` запускает только read-only задачи через текущий
+  `WorkflowRunner`;
+- apply-задачи в JobService v1 безопасно блокируются как `failed`;
+- `JobService.cancel(job_id)` отменяет только `created/queued`;
+- `JobRunner.run_next()` выполняет первый queued job;
+- CLI-команды `jobs list/show/submit/run/run-next/cancel`;
+- тесты `tests/test_job_service.py`.
+
+Еще не сделано:
+
+- Telegram routing через JobService;
+- worker/timer;
+- поддержка dry-run/apply через approvals/resource leases.
+
+CLI:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli jobs list
+
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli jobs submit --task status-preflight \
+  --params-json '{"skip_lk": true}'
+
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli jobs run-next
+```
 
 ### Этап 3. TaskRegistry v2 contract
 
@@ -185,7 +233,8 @@ get_status(job_id) -> JobStatus
 
 Критерий готовности:
 
-- CLI может создать job и дождаться результата;
+- CLI может создать job и дождаться результата - выполнено для read-only
+  задач, которые уже поддерживает текущий `WorkflowRunner`;
 - Telegram получает `job_id` сразу;
 - итоговый report отправляется после завершения;
 - все запуски видны в `jobs` и `job_events`;

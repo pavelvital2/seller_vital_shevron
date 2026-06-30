@@ -52,6 +52,20 @@
   запуск задач через `TaskRegistry`, блокировка не-read-only задач,
   per-task locks под `.sessions/workflows/`, safe error и handler-и для
   `daily-morning-report` и `status-preflight`.
+- `src/seller_agent/core/job_models.py` - dataclass-модели runtime job
+  контура: job status, approval status, job events, Telegram updates и
+  resource leases.
+- `src/seller_agent/core/job_store.py` - SQLite Job Store MVP:
+  `jobs/job_events/task_requests/approvals/resource_leases/telegram_updates`,
+  dedup Telegram `update_id`, resource leases с TTL и атомарный reserve
+  approval `approved -> applying`.
+- `src/seller_agent/core/job_service.py` - первый JobService v1:
+  `submit(task_id, params, actor)`, `run(job_id)` для read-only задач через
+  текущий `WorkflowRunner`, безопасная блокировка apply-задач и cancel queued.
+- `src/seller_agent/core/job_runner.py` - минимальный runner queued job-ов:
+  `run(job_id)` и `run_next()`.
+- `jobs list|show|submit|run|run-next|cancel` - CLI-команды нового SQLite
+  runtime-контура для создания, запуска и проверки job-ов без Telegram.
 - `src/seller_agent/tasks/registry.py` - единый `TaskRegistry`: метаданные
   текущих CLI-команд, режимы `read_only/dry_run/apply/maintenance`, риск,
   marketplace, runbook, требования к credentials/LK/mapping/confirmation и
@@ -353,7 +367,9 @@ Ozon CDP port по умолчанию: `9544`.
 - `data/planning/runtime_job_store_plan.md` - план runtime hardening:
   SQLite Job Store, JobService/JobRunner, TaskRegistry v2, Telegram update
   deduplication, atomic approvals/resource leases и перевод Telegram в
-  dispatcher job-ов.
+  dispatcher job-ов. Этапы 1-2 начаты в `feature/runtime-job-store`:
+  добавлены `JobStore`, `JobService`, `JobRunner`, CLI `jobs` и tests без
+  подключения к Telegram.
 - `data/planning/daily_morning_report_runbook.md`
 - `data/planning/reviews_questions_runbook.md`
 - `data/planning/ozon_messenger_runbook.md` - Ozon Messenger/уведомления:

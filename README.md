@@ -42,6 +42,7 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli sta
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli runs list
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli runs latest --task status-preflight
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli tasks list
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli jobs list
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli bot preview --message /help
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli bot poll-once --allowed-chat-id 123456789 --token-file /home/pavel/.secrets/vital_shevron_telegram_bot_token
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli bot poll-loop --live-today --live-status --allowed-chat-id 123456789 --max-iterations 1 --token-file /home/pavel/.secrets/vital_shevron_telegram_bot_token
@@ -73,6 +74,8 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli ins
   индекс `data/runs/index.jsonl`.
 - `task_registry_runbook.md` - единый реестр задач для CLI, fresh-агентов и
   будущего Telegram-бота.
+- `runtime_job_store_plan.md` - SQLite Job Store, JobService/JobRunner и
+  будущий async-контур Telegram/timers.
 - `telegram_bot_mvp_runbook.md` - read-only Telegram MVP, preview CLI,
   Telegram adapter и safe report attachment без write-операций через бот.
 - `workflow_runner_runbook.md` - единый read-only запуск live задач для

@@ -138,6 +138,15 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         telegram_button_label="/runs",
     ),
     RegisteredTask(
+        name="jobs",
+        command="jobs",
+        title="Runtime jobs",
+        description="Submit, run and inspect SQLite runtime jobs.",
+        mode="maintenance",
+        risk="low",
+        runbook_path="data/planning/runtime_job_store_plan.md",
+    ),
+    RegisteredTask(
         name="approvals",
         command="approvals",
         title="Approvals lifecycle",

@@ -50,6 +50,24 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 data/planning/card_ops/quick_access.md
 ```
 
+Runtime Job Store CLI:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli jobs list
+
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli jobs submit --task status-preflight \
+  --params-json '{"skip_lk": true}'
+
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli jobs run-next
+```
+
+`jobs` - maintenance-команда для проверки и ручного запуска нового SQLite
+runtime-контура. Она не заменяет `RunManifest`: job store хранит оперативное
+состояние, а `RunManifest` остается audit/export artifact.
+
 Карточные команды, уже добавленные в `TaskRegistry`:
 
 - `plan-seller-sku-update`;
@@ -179,6 +197,7 @@ audit/HTML. После смены seller SKU запускает нормализ
 Ветка `feature/task-registry` регистрирует все текущие CLI-команды:
 
 - `runs`;
+- `jobs`;
 - `tasks`;
 - `approvals`;
 - `fetch-catalog`;

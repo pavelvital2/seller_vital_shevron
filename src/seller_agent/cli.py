@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
 from decimal import Decimal
 import json
 import os
@@ -17,6 +18,9 @@ from seller_agent.bot.telegram_runner import (
     send_preview_command,
 )
 from seller_agent.config import load_credentials
+from seller_agent.core.job_runner import JobRunner
+from seller_agent.core.job_service import JobService
+from seller_agent.core.job_store import JobStore
 from seller_agent.core.run_manifest import find_run, latest_run, list_runs
 from seller_agent.tasks.approvals import run_approvals_close, run_approvals_status
 from seller_agent.tasks.approved_cards_apply import run_apply_approved_cards
@@ -101,6 +105,26 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Run id for runs show.",
     )
+
+    jobs = subparsers.add_parser(
+        "jobs",
+        help="Submit, run and inspect SQLite runtime jobs.",
+    )
+    jobs.add_argument(
+        "action",
+        choices=("list", "show", "submit", "run", "run-next", "cancel"),
+        help="Runtime job action.",
+    )
+    jobs.add_argument("--runtime-db", default="runtime/runtime.db", help="SQLite runtime DB path.")
+    jobs.add_argument("--data-dir", default="data", help="Project data directory.")
+    jobs.add_argument("--job-id", default=None, help="Job id for show/run/cancel.")
+    jobs.add_argument("--task", default=None, help="Task id for submit.")
+    jobs.add_argument("--actor", default="cli", help="Actor label stored in job request.")
+    jobs.add_argument("--source", default="cli", help="Request source stored in task_requests.")
+    jobs.add_argument("--params-json", default="{}", help="JSON object with task parameters.")
+    jobs.add_argument("--status", default=None, help="Optional status filter for jobs list.")
+    jobs.add_argument("--limit", type=int, default=20, help="Maximum rows for jobs list.")
+    jobs.add_argument("--reason", default="cancelled_by_cli", help="Cancel reason.")
 
     tasks = subparsers.add_parser(
         "tasks",
@@ -1608,6 +1632,16 @@ def _allowed_chat_ids(values: list[int] | None) -> set[int] | None:
     return result or None
 
 
+def _json_object_arg(raw: str, label: str) -> dict[str, object]:
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{label} must be a JSON object") from exc
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must be a JSON object")
+    return value
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -1633,6 +1667,72 @@ def main(argv: list[str] | None = None) -> int:
             }
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result.get("run") is not None or result.get("rows") is not None else 2
+
+    if args.command == "jobs":
+        runtime_db = Path(args.runtime_db)
+        store = JobStore(runtime_db)
+        service = JobService(store=store, data_dir=Path(args.data_dir), runtime_db=runtime_db)
+        if args.action == "list":
+            result = {
+                "rows": [asdict(job) for job in store.list_jobs(limit=args.limit, status=args.status)],
+                "artifacts": {"runtime_db": str(runtime_db)},
+            }
+        elif args.action == "show":
+            if not args.job_id:
+                parser.error("jobs show requires --job-id")
+            job = store.get_job(args.job_id)
+            result = {
+                "job": asdict(job) if job else None,
+                "events": [asdict(event) for event in store.list_events(args.job_id)] if job else [],
+                "artifacts": {"runtime_db": str(runtime_db)},
+            }
+        elif args.action == "submit":
+            if not args.task:
+                parser.error("jobs submit requires --task")
+            try:
+                params = _json_object_arg(args.params_json, "jobs submit --params-json")
+            except ValueError as exc:
+                parser.error(str(exc))
+            job = service.submit(
+                task_id=args.task,
+                params=params,
+                actor=args.actor,
+                source=args.source,
+            )
+            result = {"job": asdict(job), "artifacts": {"runtime_db": str(runtime_db)}}
+        elif args.action == "run":
+            if not args.job_id:
+                parser.error("jobs run requires --job-id")
+            job_result = service.run(args.job_id)
+            result = {
+                "ok": job_result.ok,
+                "status": job_result.status,
+                "message": job_result.message,
+                "job": asdict(job_result.job),
+                "artifacts": {"runtime_db": str(runtime_db)},
+            }
+        elif args.action == "run-next":
+            runner_result = JobRunner(service).run_next()
+            result = {
+                "ok": runner_result.ok,
+                "ran": runner_result.ran,
+                "message": runner_result.message,
+                "job": asdict(runner_result.job) if runner_result.job else None,
+                "artifacts": {"runtime_db": str(runtime_db)},
+            }
+        else:
+            if not args.job_id:
+                parser.error("jobs cancel requires --job-id")
+            job_result = service.cancel(args.job_id, reason=args.reason)
+            result = {
+                "ok": job_result.ok,
+                "status": job_result.status,
+                "message": job_result.message,
+                "job": asdict(job_result.job),
+                "artifacts": {"runtime_db": str(runtime_db)},
+            }
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result.get("ok", True) else 2
 
     if args.command == "tasks":
         if args.action == "list":
