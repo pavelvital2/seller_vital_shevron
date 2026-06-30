@@ -55,14 +55,19 @@ data/planning/card_ops/quick_access.md
 - `plan-seller-sku-update`;
 - `apply-seller-sku-update`;
 - `plan-card-content-update`;
+- `promote-approved-card-passport`;
 - `apply-card-content-update`;
 - `apply-approved-card`;
 - `apply-approved-cards`;
 
 `apply-approved-cards` использовать после согласования владельцем пачки
 карточек: команда объединяет content update, seller SKU replacement и WB create
-в один batch-run с общим отчетом. Не запускать одноштучный `apply-approved-card`
-по кругу, если согласовано несколько карточек.
+в один batch-run с общим отчетом. Перед внешними write-операциями команда
+проверяет наличие Layer 3 passport и при необходимости вызывает
+`promote-approved-card-passport` для отсутствующих owner-approved Layer 2
+audit/HTML. После смены seller SKU запускает нормализованный post-verify по
+новым internal SKU. Не запускать одноштучный `apply-approved-card` по кругу,
+если согласовано несколько карточек.
 
 Следующие карточные команды должны быть добавлены в `TaskRegistry`, когда
 будут реализованы в CLI:
@@ -188,6 +193,9 @@ data/planning/card_ops/quick_access.md
 - `card-content-audit-packages`;
 - `status-preflight`;
 - `daily-morning-report`;
+- `plan-supply-workbooks`;
+- `send-telegram-report`;
+- `ozon-messenger-workflow`;
 - `sessions`;
 - `restore-ozon-session`;
 - `install-session-systemd`;
@@ -203,6 +211,7 @@ data/planning/card_ops/quick_access.md
 - `apply-actions`;
 - `plan-wb-card-create`;
 - `apply-wb-card-create`;
+- `promote-approved-card-passport`;
 - `reviews-questions`;
 - `apply-reviews-questions`;
 - `prepare-reviews-questions-approved`.
@@ -222,6 +231,34 @@ data/planning/card_ops/quick_access.md
 - runbook: `data/planning/catalog_mapping_runbook.md`;
 - назначение: собрать внутренний `data/catalog/unified/products.csv/json` из
   confirmed mapping и локальных processed каталогов Ozon/WB.
+
+`ozon-elastic-plan`:
+
+- task name: `ozon-elastic-plan`;
+- command: `plan-ozon-elastic`;
+- mode: `dry_run`;
+- risk: `normal`;
+- marketplace: `ozon`;
+- requires_credentials: `true`;
+- Telegram: `/elastic` запускает свежий dry-run, возвращает summary и report,
+  а при наличии строк к применению показывает inline-кнопку apply;
+- runbook: `data/planning/ozon_elastic_runbook.md`;
+- назначение: рассчитать актуальные действия Ozon Elastic без записи в Ozon.
+
+`ozon-elastic-apply`:
+
+- task name: `ozon-elastic-apply`;
+- command: `apply-ozon-elastic`;
+- mode: `apply`;
+- risk: `high`;
+- marketplace: `ozon`;
+- requires_credentials: `true`;
+- requires_confirmation: `true`;
+- Telegram: запускается только callback-кнопкой `oe_apply:<plan_run_id>` после
+  показанного dry-run `/elastic`; callback считается явным подтверждением
+  владельца для конкретного `plan_run_id`;
+- apply делает fresh preflight, fresh dry-run, partial drift-check, verify и
+  idempotency guard.
 
 `plan-internal-skus`:
 

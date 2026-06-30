@@ -100,6 +100,9 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli ins
   продаж за 90 дней, локализации и производственного плана.
 - `analytics_skills_development_plan.md` - развитие аналитического skill,
   будущего plugin и связки с task-runner/ботом.
+- `data/reference/external_reviews/README.md` - внешние review проекта:
+  архитектурные baseline/checklist для развития task-runner, safety и
+  Telegram-бота.
 
 Локальный repo skill для аналитики:
 

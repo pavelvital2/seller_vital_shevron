@@ -12,7 +12,7 @@ import uuid
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from seller_agent.bot.dispatcher import dispatch_message
+from seller_agent.bot.dispatcher import dispatch_callback, dispatch_message
 from seller_agent.config import read_non_empty_lines
 
 
@@ -140,10 +140,11 @@ def send_telegram_text(
     chat_id: int,
     text: str,
     thread_id: int | None = None,
+    reply_markup: dict[str, Any] | None = None,
     api_request: ApiRequest = telegram_api_request,
 ) -> list[TelegramSendResult]:
     results: list[TelegramSendResult] = []
-    for chunk in _split_telegram_text(text):
+    for index, chunk in enumerate(_split_telegram_text(text)):
         payload: dict[str, Any] = {
             "chat_id": chat_id,
             "text": chunk,
@@ -151,6 +152,8 @@ def send_telegram_text(
         }
         if thread_id is not None:
             payload["message_thread_id"] = thread_id
+        if index == 0 and reply_markup:
+            payload["reply_markup"] = reply_markup
         try:
             response = api_request(token, "sendMessage", payload)
             message = response.get("result") if isinstance(response.get("result"), dict) else {}
@@ -213,6 +216,7 @@ def send_preview_command(
         chat_id=chat_id,
         text=command_result.text,
         thread_id=thread_id,
+        reply_markup=command_result.reply_markup,
         api_request=api_request,
     )
     document_results = _send_command_artifacts(
@@ -253,7 +257,7 @@ def poll_once(
     payload: dict[str, Any] = {
         "timeout": timeout_seconds,
         "limit": limit,
-        "allowed_updates": ["message", "edited_message"],
+        "allowed_updates": ["message", "edited_message", "callback_query"],
     }
     if offset is not None:
         payload["offset"] = offset
@@ -277,6 +281,63 @@ def poll_once(
         update_id = _maybe_int(update.get("update_id"))
         if update_id is not None:
             next_offset = max(next_offset or 0, update_id + 1)
+
+        callback_query = update.get("callback_query")
+        if isinstance(callback_query, dict):
+            callback_id = str(callback_query.get("id") or "")
+            callback_message = callback_query.get("message")
+            message_obj = callback_message if isinstance(callback_message, dict) else {}
+            chat = message_obj.get("chat") if isinstance(message_obj.get("chat"), dict) else {}
+            chat_id = _maybe_int(chat.get("id"))
+            data = str(callback_query.get("data") or "").strip()
+            if chat_id is None or not data:
+                skipped += 1
+                continue
+            received_chat_ids.add(chat_id)
+            if allowed_chat_ids is not None and chat_id not in allowed_chat_ids:
+                skipped += 1
+                skipped_chat_ids.add(chat_id)
+                continue
+
+            if callback_id:
+                try:
+                    api_request(
+                        token,
+                        "answerCallbackQuery",
+                        {
+                            "callback_query_id": callback_id,
+                            "text": "Принято. Выполняю действие...",
+                            "show_alert": False,
+                        },
+                    )
+                except TelegramRunnerError as exc:
+                    errors.append(str(exc))
+
+            thread_id = _maybe_int(message_obj.get("message_thread_id"))
+            command_result = dispatch_callback(data, data_dir=data_dir)
+            send_results = send_telegram_text(
+                token=token,
+                chat_id=chat_id,
+                text=command_result.text,
+                thread_id=thread_id,
+                reply_markup=command_result.reply_markup,
+                api_request=api_request,
+            )
+            document_results = _send_command_artifacts(
+                token=token,
+                chat_id=chat_id,
+                thread_id=thread_id,
+                data_dir=data_dir,
+                artifacts=command_result.artifacts if command_result.ok else {},
+                document_api_request=document_api_request,
+            )
+            processed += 1
+            processed_chat_ids.add(chat_id)
+            sent += sum(1 for result in send_results if result.ok)
+            sent_documents += sum(1 for result in document_results if result.ok)
+            errors.extend(result.error for result in send_results if result.error)
+            errors.extend(result.error for result in document_results if result.error)
+            continue
 
         message_obj = update.get("message") or update.get("edited_message")
         if not isinstance(message_obj, dict):
@@ -306,6 +367,7 @@ def poll_once(
             chat_id=chat_id,
             text=command_result.text,
             thread_id=thread_id,
+            reply_markup=command_result.reply_markup,
             api_request=api_request,
         )
         document_results = _send_command_artifacts(

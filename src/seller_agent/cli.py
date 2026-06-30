@@ -26,6 +26,7 @@ from seller_agent.tasks.card_content_parameter_inventory import run_card_content
 from seller_agent.tasks.card_content_signals import run_collect_card_signals
 from seller_agent.tasks.card_content_snapshot import run_card_content_snapshot
 from seller_agent.tasks.card_content_update import run_apply_approved_card, run_card_content_update_apply, run_card_content_update_plan
+from seller_agent.tasks.card_passport_promotion import run_promote_approved_card_passport
 from seller_agent.tasks.catalog_fetch import run_catalog_fetch
 from seller_agent.tasks.catalog_content_master import run_catalog_content_master
 from seller_agent.tasks.catalog_internal_sku_plan import run_internal_sku_plan
@@ -46,7 +47,10 @@ from seller_agent.tasks.reviews_questions import (
 from seller_agent.tasks.registry import get_task_definition, list_task_definitions
 from seller_agent.tasks.seo_query_pack import build_seo_query_pack
 from seller_agent.tasks.seller_sku_update import run_seller_sku_update_apply, run_seller_sku_update_plan
+from seller_agent.tasks.ozon_messenger_workflow import run_ozon_messenger_workflow
 from seller_agent.tasks.status_preflight import run_status_preflight
+from seller_agent.tasks.supply_workbooks_plan import run_supply_workbooks_plan
+from seller_agent.tasks.telegram_report_sender import run_send_telegram_report
 from seller_agent.tasks.wb_actions_discount_apply import run_wb_actions_discount_apply
 from seller_agent.tasks.wb_actions_discount_plan import run_wb_actions_discount_plan
 from seller_agent.tasks.wb_card_create_apply import run_wb_card_create_apply
@@ -228,6 +232,22 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Allow /status to build a fresh read-only status preflight.",
     )
+
+    send_report = subparsers.add_parser(
+        "send-telegram-report",
+        help="Send an owner-facing Telegram summary and attach a saved report file.",
+    )
+    send_report.add_argument("--data-dir", default="data", help="Project data directory.")
+    send_report.add_argument(
+        "--token-file",
+        default=None,
+        help="External Telegram bot token file. Do not store it in the repository.",
+    )
+    send_report.add_argument("--chat-id", type=int, required=True, help="Telegram chat id.")
+    send_report.add_argument("--thread-id", type=int, default=None, help="Telegram topic/thread id.")
+    send_report.add_argument("--report", required=True, help="Saved report file under data/runs or data/reports.")
+    send_report.add_argument("--summary", default=None, help="Short Telegram summary text.")
+    send_report.add_argument("--summary-file", default=None, help="File with short Telegram summary text.")
     approvals = subparsers.add_parser(
         "approvals",
         help="List or close pending/approved approval packages.",
@@ -812,6 +832,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Build seller-focused v3 report: yesterday 00:00-23:59 MSK, Ozon/WB side-by-side.",
     )
 
+    supply_workbooks = subparsers.add_parser(
+        "plan-supply-workbooks",
+        help="Build the read-only supply workbook automation plan and source readiness report.",
+    )
+    supply_workbooks.add_argument("--data-dir", default="data", help="Project data directory.")
+    supply_workbooks.add_argument("--run-id", default=None, help="Optional stable run id.")
+    supply_workbooks.add_argument("--target-days", type=int, default=30, help="Target stock horizon in days.")
+    supply_workbooks.add_argument("--cycle-days", type=int, default=5, help="Production cycle length in days.")
+    supply_workbooks.add_argument("--daily-capacity", type=int, default=200, help="Physical pieces per production day.")
+    supply_workbooks.add_argument("--ozon-weekly-physical", type=int, default=1400, help="Ozon weekly target in physical pieces.")
+    supply_workbooks.add_argument("--wb-target-physical", type=int, default=1200, help="WB target in physical pieces.")
+
     sessions = subparsers.add_parser(
         "sessions",
         help="Manage local Ozon/WB LK session contours.",
@@ -1329,6 +1361,40 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use local snapshots only. Intended for local smoke checks; apply must use approved ready plan.",
     )
 
+    promote_card_passport = subparsers.add_parser(
+        "promote-approved-card-passport",
+        help="Promote owner-approved Layer 2 audit/HTML into Layer 3 approved master passport.",
+    )
+    promote_card_passport.add_argument("--data-dir", default="data", help="Project data directory.")
+    promote_card_passport.add_argument("--run-id", default=None, help="Optional stable run id.")
+    promote_card_passport.add_argument(
+        "--internal-sku",
+        action="append",
+        default=[],
+        help="Owner-approved internal SKU to promote from card_audits. Can be repeated.",
+    )
+    promote_card_passport.add_argument(
+        "--audit",
+        action="append",
+        default=[],
+        help="Explicit Layer 2 audit.json path. Can be repeated.",
+    )
+    promote_card_passport.add_argument(
+        "--audit-root",
+        default=None,
+        help="Optional card_audits root for searching audit.json files.",
+    )
+    promote_card_passport.add_argument(
+        "--write",
+        action="store_true",
+        help="Write approved passport files. Without this flag the command is dry-run only.",
+    )
+    promote_card_passport.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Allow replacing an existing approved passport.",
+    )
+
     apply_card_content_update = subparsers.add_parser(
         "apply-card-content-update",
         help="Apply approved Ozon/WB card content update plan and verify submission.",
@@ -1505,6 +1571,29 @@ def build_parser() -> argparse.ArgumentParser:
         default="data",
         help="Project data directory.",
     )
+
+    ozon_messenger_workflow = subparsers.add_parser(
+        "ozon-messenger-workflow",
+        help="Run or inspect the Ozon Messenger workflow lifecycle.",
+    )
+    ozon_messenger_workflow.add_argument("--data-dir", default="data", help="Project data directory.")
+    ozon_messenger_workflow.add_argument("--run-id", default=None, help="Optional stable run id.")
+    ozon_messenger_workflow.add_argument(
+        "--stage",
+        choices=("triage", "prepare-approved", "apply", "verify", "cleanup"),
+        required=True,
+        help="Workflow stage to execute.",
+    )
+    ozon_messenger_workflow.add_argument(
+        "--approved-path",
+        default=None,
+        help="Approved apply package for apply/cleanup stages.",
+    )
+    ozon_messenger_workflow.add_argument(
+        "--confirmed-by-user",
+        action="store_true",
+        help="Required explicit confirmation for external Ozon write operations.",
+    )
     return parser
 
 
@@ -1644,6 +1733,30 @@ def main(argv: list[str] | None = None) -> int:
             )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result.get("ok") else 2
+
+    if args.command == "send-telegram-report":
+        token = load_telegram_bot_token(token_file=args.token_file)
+        if not token:
+            result = {
+                "overall_status": "blocked",
+                "blocked_reason": (
+                    "missing Telegram bot token; set "
+                    "VITAL_SHEVRON_TELEGRAM_BOT_TOKEN_FILE or pass --token-file"
+                ),
+            }
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 2
+        result = run_send_telegram_report(
+            token=token,
+            chat_id=args.chat_id,
+            thread_id=args.thread_id,
+            data_dir=Path(args.data_dir),
+            report_path=Path(args.report),
+            summary=args.summary,
+            summary_path=Path(args.summary_file) if args.summary_file else None,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] == "ok" else 2
 
     if args.command == "approvals":
         data_dir = Path(args.data_dir)
@@ -1860,6 +1973,20 @@ def main(argv: list[str] | None = None) -> int:
             refresh_preflight=not args.skip_preflight_refresh,
             seller_v2=args.seller_v2,
             seller_v3=args.seller_v3,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
+
+    if args.command == "plan-supply-workbooks":
+        result = run_supply_workbooks_plan(
+            credentials=load_credentials(),
+            data_dir=Path(args.data_dir),
+            run_id=args.run_id,
+            target_days=args.target_days,
+            cycle_days=args.cycle_days,
+            daily_capacity=args.daily_capacity,
+            ozon_weekly_physical=args.ozon_weekly_physical,
+            wb_target_physical=args.wb_target_physical,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["overall_status"] in {"ok", "warning"} else 2
@@ -2084,6 +2211,19 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["overall_status"] in {"ok", "warning"} else 2
 
+    if args.command == "promote-approved-card-passport":
+        result = run_promote_approved_card_passport(
+            data_dir=Path(args.data_dir),
+            internal_skus=args.internal_sku,
+            audit_paths=[Path(path) for path in args.audit],
+            audit_root=Path(args.audit_root) if args.audit_root else None,
+            run_id=args.run_id,
+            write=args.write,
+            overwrite=args.overwrite,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
+
     if args.command == "apply-card-content-update":
         result = run_card_content_update_apply(
             credentials=load_credentials(),
@@ -2161,6 +2301,17 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
+
+    if args.command == "ozon-messenger-workflow":
+        result = run_ozon_messenger_workflow(
+            data_dir=Path(args.data_dir),
+            run_id=args.run_id,
+            stage=args.stage,
+            approved_path=Path(args.approved_path) if args.approved_path else None,
+            confirmed_by_user=args.confirmed_by_user,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
 
     parser.error(f"Unknown command: {args.command}")
     return 2

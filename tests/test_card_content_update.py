@@ -3,6 +3,7 @@ import pytest
 from seller_agent.tasks.card_content_update import (
     _build_ozon_payload,
     _build_wb_payload,
+    _verify_wb_payloads,
     _wb_media_urls_from_passport,
     run_apply_approved_card,
 )
@@ -117,8 +118,46 @@ def test_wb_media_urls_from_passport_requires_explicit_target_assets() -> None:
     ) == ["https://example.test/1.jpg"]
 
 
+def test_wb_verify_normalizes_collapsed_blank_lines_and_is_valid_dimension(tmp_path) -> None:
+    class FakeWb:
+        def find_cards_by_vendor_codes(self, codes):
+            return {
+                "sku1": {
+                    "vendorCode": "sku1",
+                    "title": "Шеврон на липучке БПЛА Улыбнись",
+                    "description": "Блок 1.\nБлок 2.\nБлок 3.",
+                    "dimensions": {"length": 10, "width": 10, "height": 1, "weightBrutto": 0.01, "isValid": True},
+                    "characteristics": [{"id": 14177449, "value": ["черный", "белый"]}],
+                    "photos": [{"big": "1"}, {"big": "2"}],
+                }
+            }
+
+    payloads = [
+        {
+            "vendorCode": "sku1",
+            "nmID": 1,
+            "title": "Шеврон на липучке БПЛА Улыбнись",
+            "description": "Блок 1.\n\nБлок 2.\n\nБлок 3.",
+            "dimensions": {"length": 10, "width": 10, "height": 1, "weightBrutto": 0.01},
+            "characteristics": [{"id": 14177449, "value": ["черный", "белый"]}],
+        }
+    ]
+
+    result = _verify_wb_payloads(FakeWb(), payloads, tmp_path, {"sku1": ["u1", "u2"]})
+
+    assert result["status"] == "ok"
+    assert result["results"][0]["checks"] == {
+        "title": True,
+        "description": True,
+        "dimensions": True,
+        "colors": True,
+        "photo_count": True,
+    }
+
+
 def test_task_registry_contains_card_content_update_commands() -> None:
     plan = get_task_definition("plan-card-content-update")
+    promote = get_task_definition("promote-approved-card-passport")
     apply = get_task_definition("apply-card-content-update")
     fast = get_task_definition("apply-approved-card")
     batch = get_task_definition("apply-approved-cards")
@@ -126,6 +165,8 @@ def test_task_registry_contains_card_content_update_commands() -> None:
     assert plan["name"] == "card-content-update-plan"
     assert plan["mode"] == "dry_run"
     assert plan["requires_mapping"] is True
+    assert promote["name"] == "approved-card-passport-promote"
+    assert promote["mode"] == "dry_run"
     assert apply["name"] == "card-content-update-apply"
     assert apply["mode"] == "apply"
     assert apply["requires_confirmation"] is True

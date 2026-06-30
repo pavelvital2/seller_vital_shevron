@@ -290,6 +290,22 @@ def _verify_ozon_elastic(
     }
 
 
+def _preflight_failure_summary(preflight: dict[str, Any]) -> str:
+    failed: list[str] = []
+    checks = preflight.get("checks") if isinstance(preflight.get("checks"), dict) else {}
+    for key, value in checks.items():
+        if not isinstance(value, dict):
+            continue
+        status = str(value.get("status") or "")
+        if status not in {"error", "warning"}:
+            continue
+        error = str(value.get("error") or value.get("message") or "").replace("\n", " ").strip()
+        failed.append(f"{key}={status}" + (f" ({error[:180]})" if error else ""))
+    if not failed:
+        return ""
+    return "; ".join(failed[:8])
+
+
 def _write_report(path: Path, result: dict[str, Any]) -> None:
     lines = [
         "# Ozon Elastic Apply Result",
@@ -347,9 +363,20 @@ def run_ozon_elastic_apply(
     raw_dir = ensure_dir(run_dir / "raw")
     processed_dir = ensure_dir(run_dir / "processed")
 
-    preflight = run_status_preflight(credentials=credentials, data_dir=data_dir)
-    if preflight["overall_status"] != "ok":
-        raise RuntimeError(f"preflight is not ok: {preflight['overall_status']}")
+    preflight = run_status_preflight(
+        credentials=credentials,
+        data_dir=data_dir,
+        include_lk=False,
+        marketplaces=("ozon",),
+        include_catalog=False,
+        include_ozon_performance=False,
+    )
+    if preflight["overall_status"] not in {"ok", "warning"}:
+        failure_summary = _preflight_failure_summary(preflight)
+        report_path = (preflight.get("artifacts") or {}).get("report") if isinstance(preflight, dict) else None
+        details = f"; failed checks: {failure_summary}" if failure_summary else ""
+        report = f"; report: {report_path}" if report_path else ""
+        raise RuntimeError(f"preflight is not ok: {preflight['overall_status']}{details}{report}")
 
     fresh_plan = run_ozon_elastic_plan(credentials=credentials, data_dir=data_dir)
     fresh_rows = _read_csv(Path(fresh_plan["artifacts"]["csv"]))

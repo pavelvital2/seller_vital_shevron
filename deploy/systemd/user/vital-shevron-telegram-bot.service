@@ -1,5 +1,5 @@
 [Unit]
-Description=Vital Shevron read-only Telegram bot polling
+Description=Vital Shevron controlled Telegram bot polling
 After=network-online.target
 Wants=network-online.target
 

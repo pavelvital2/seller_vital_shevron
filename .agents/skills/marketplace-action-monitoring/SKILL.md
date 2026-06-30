@@ -18,6 +18,11 @@ description: "Use for Ozon/Wildberries marketplace action monitoring after promo
 - For Ozon `STOCK_DISCOUNT` actions such as `Супербустинг`, keep them separate
   from Elastic and compare action price against min price and the previous
   Elastic/action price.
+- For API-only action apply flows, preflight must be scoped to the marketplace
+  and API actually used by the write operation. For Ozon Elastic, use Ozon
+  Seller API scoped preflight and do not block apply on WB LK/keepalive/refresh
+  failures. If a relevant preflight check fails, report the failed check names
+  and the preflight report path.
 - For Ozon Superboosting sales control, if `/v1/analytics/data` rejects a
   `sku IN [list]` filter, fetch `dimensions=["sku","day"]` by pages without
   the SKU filter and filter the needed SKU list locally. This was confirmed on

@@ -6,14 +6,19 @@ import json
 from pathlib import Path
 from typing import Any
 
-from seller_agent.config import AppCredentials
+from seller_agent.config import AppCredentials, load_credentials
 from seller_agent.core.run_manifest import latest_run
 from seller_agent.core.workflow_runner import WorkflowRunner
+from seller_agent.tasks.ozon_elastic_apply import run_ozon_elastic_apply
+from seller_agent.tasks.ozon_elastic_plan import run_ozon_elastic_plan
 from seller_agent.tasks.approvals import run_approvals_status
 from seller_agent.tasks.registry import default_task_registry
+from seller_agent.tasks.wb_actions_discount_apply import run_wb_actions_discount_apply
+from seller_agent.tasks.wb_actions_discount_plan import run_wb_actions_discount_plan
 
 
-SUPPORTED_READ_ONLY_COMMANDS = {
+SUPPORTED_COMMANDS = {
+    "/elastic",
     "/help",
     "/status",
     "/today",
@@ -21,16 +26,19 @@ SUPPORTED_READ_ONLY_COMMANDS = {
     "/approvals",
     "/catalog",
     "/runs",
+    "/wb-actions",
 }
 
 TELEGRAM_TITLES = {
     "/approvals": "Согласования",
     "/catalog": "Каталог",
+    "/elastic": "Ozon Elastic",
     "/help": "Помощь",
     "/reviews": "Отзывы и вопросы",
     "/runs": "Запуски",
     "/status": "Статус проекта",
     "/today": "Ежедневный отчет",
+    "/wb-actions": "WB акции 70-55-55",
 }
 
 
@@ -41,6 +49,7 @@ class TelegramCommandResult:
     text: str
     mode: str = "read_only"
     artifacts: dict[str, str] = field(default_factory=dict)
+    reply_markup: dict[str, Any] = field(default_factory=dict)
     blocked_reason: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -58,6 +67,10 @@ def handle_telegram_command(
     command, argument = _parse_command(message)
     if command == "/help":
         return _help()
+    if command in {"/elastic", "/ozon-elastic", "/ozon_elastic"}:
+        return _ozon_elastic_plan(data_dir=data_dir, credentials=credentials)
+    if command in {"/wb-actions", "/wb_actions", "/wb-actions-70-55-55"}:
+        return _wb_actions_plan(data_dir=data_dir, credentials=credentials)
     if command == "/status":
         if live_status:
             return _fresh_status_preflight(data_dir=data_dir, credentials=credentials)
@@ -108,7 +121,32 @@ def handle_telegram_command(
         text=(
             "Команда не поддерживается в read-only Telegram MVP.\n\n"
             "Доступные команды: "
-            + ", ".join(sorted(SUPPORTED_READ_ONLY_COMMANDS))
+            + ", ".join(sorted(SUPPORTED_COMMANDS))
+        ),
+    )
+
+
+def handle_telegram_callback(
+    callback_data: str,
+    *,
+    data_dir: Path = Path("data"),
+    credentials: AppCredentials | None = None,
+) -> TelegramCommandResult:
+    data = str(callback_data or "").strip()
+    if data.startswith("oe_apply:"):
+        plan_run_id = data.removeprefix("oe_apply:").strip()
+        return _ozon_elastic_apply(plan_run_id=plan_run_id, data_dir=data_dir, credentials=credentials)
+    if data.startswith("wba_apply:"):
+        plan_run_id = data.removeprefix("wba_apply:").strip()
+        return _wb_actions_apply(plan_run_id=plan_run_id, data_dir=data_dir, credentials=credentials)
+    return TelegramCommandResult(
+        command="callback",
+        ok=False,
+        blocked_reason="unsupported_callback",
+        text=(
+            "Действие не поддерживается.\n\n"
+            f"Callback: `{_truncate(data, 80)}`\n\n"
+            "Изменений в Ozon/WB не выполнял."
         ),
     )
 
@@ -117,15 +155,15 @@ def _help() -> TelegramCommandResult:
     registry = default_task_registry()
     tasks = registry.list(telegram_only=True)
     lines = [
-        "Telegram MVP",
+        "Telegram bot",
         "",
-        "Итог: доступны только read-only/maintenance экраны. Write-кнопок нет.",
+        "Итог: доступны read-only экраны и безопасные кнопки Ozon Elastic / WB акции через dry-run и подтверждение.",
         "",
         "Команды:",
     ]
     for task in tasks:
         label = task.telegram_button_label or f"/{task.command}"
-        if label not in SUPPORTED_READ_ONLY_COMMANDS:
+        if label not in SUPPORTED_COMMANDS:
             continue
         mode = "read-only" if task.mode == "read_only" else task.mode
         lines.append(f"- `{label}` - {TELEGRAM_TITLES.get(label, task.title)}; режим `{mode}`, риск `{task.risk}`")
@@ -136,11 +174,389 @@ def _help() -> TelegramCommandResult:
             "- `/status` собирает свежий read-only preflight, если включен live status mode.",
             "- `/today` собирает свежий read-only отчет, если включен live mode.",
             "- `/catalog <запрос>` ищет товар в unified catalog по internal_sku, Ozon/WB ID, barcode или названию.",
+            "- `/elastic` строит свежий dry-run Ozon Elastic и показывает кнопку применения.",
+            "- Кнопка применения Ozon Elastic запускает apply только по конкретному показанному `plan_run_id`.",
+            "- `/wb-actions` строит свежий dry-run WB акций по схеме 70-55-55 и показывает кнопку применения.",
+            "- Кнопка применения WB акций запускает apply только по конкретному показанному `plan_run_id`.",
             "- Остальные команды показывают последние runtime-данные и статусы.",
-            "- Изменения в Ozon/WB через Telegram не выполняются.",
+            "- Другие изменения в Ozon/WB через Telegram не выполняются.",
         ]
     )
     return TelegramCommandResult(command="/help", ok=True, text="\n".join(lines))
+
+
+def _wb_actions_plan(
+    *,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+) -> TelegramCommandResult:
+    try:
+        result = run_wb_actions_discount_plan(
+            credentials=credentials or load_credentials(),
+            data_dir=data_dir,
+            scheme_text="70-55-55",
+        )
+    except Exception as exc:  # noqa: BLE001 - Telegram must return a safe failure.
+        return TelegramCommandResult(
+            command="/wb-actions",
+            ok=False,
+            mode="dry_run",
+            blocked_reason="wb_actions_plan_failed",
+            text=(
+                "WB акции 70-55-55\n\n"
+                "Итог: свежий dry-run не удалось построить.\n\n"
+                f"Причина: `{_safe_error(exc)}`\n\n"
+                "Изменений в Ozon/WB не выполнял."
+            ),
+        )
+
+    summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+    run_id = str(result.get("run_id") or "")
+    changed_rows = int(summary.get("changed_rows") or summary.get("to_change") or 0)
+    reason_counts = _wb_actions_reason_counts(_safe_artifacts(result).get("csv"))
+    changed_reasons = reason_counts.get("changed", {})
+    nochange_reasons = reason_counts.get("nochange", {})
+    threshold_reason = f"скидка до порога > 70% -> 55%"
+    promo_reason = "скидка до порога <= 70%"
+    no_promo_reason = "товара нет в активных акциях -> 55%"
+
+    lines = [
+        "WB акции 70-55-55",
+        "",
+        "Итог: свежий dry-run построен. Скидки в WB не загружались.",
+        f"Run ID: `{run_id or 'н/д'}`",
+        f"Схема: `{summary.get('scheme') or '70-55-55'}`",
+        "",
+        "Сводка:",
+        f"- всего товаров в ценах WB: `{_int(summary.get('total_goods'))}`",
+        f"- в активных акциях: `{_int(summary.get('in_promos'))}`",
+        f"- вне активных акций: `{_int(summary.get('outside_promos'))}`",
+        f"- в нескольких акциях: `{_int(summary.get('multiple_promos'))}`",
+        f"- изменить скидку: `{_int(changed_rows)}`",
+        f"- повысить скидку: `{_int(summary.get('increase'))}`",
+        f"- снизить скидку: `{_int(summary.get('decrease'))}`",
+        f"- не менять: `{_int(summary.get('no_change'))}`",
+        "",
+        "Бизнес-причины изменения скидки:",
+        f"- превышение порога 70%, привести к fallback 55%: `{_int(changed_reasons.get(threshold_reason, 0))}`",
+        f"- участие в акции с меньшей требуемой скидкой: `{_int(changed_reasons.get(promo_reason, 0))}`",
+        f"- отсутствие в активных акциях: `{_int(changed_reasons.get(no_promo_reason, 0))}` строк к изменению",
+        f"- вне активных акций без изменения: `{_int(nochange_reasons.get(no_promo_reason, 0))}`",
+        "",
+        "Акции:",
+        f"- активные: `{_int(summary.get('active_promos'))}`",
+        f"- будущие: `{_int(summary.get('future_promos'))}`",
+        "",
+        "Что дальше:",
+    ]
+    if changed_rows:
+        lines.extend(
+            [
+                "Нажатие кнопки ниже является явным подтверждением владельца для этого dry-run.",
+                "Перед записью apply сам выполнит fresh preflight, fresh dry-run, partial drift-check и verify.",
+                "Если часть строк изменилась, будут применены только неизменившиеся строки; изменившиеся останутся на новый review.",
+            ]
+        )
+    else:
+        lines.append("Изменений к применению нет, кнопку apply не показываю.")
+
+    artifacts = _safe_artifacts(result)
+    if artifacts:
+        lines.extend(["", "Файлы:"])
+        if artifacts.get("report"):
+            lines.append(f"- отчет: `{artifacts['report']}`")
+        if artifacts.get("xlsx"):
+            lines.append(f"- Excel: `{artifacts['xlsx']}`")
+        if artifacts.get("csv"):
+            lines.append(f"- CSV: `{artifacts['csv']}`")
+    lines.extend(["", "Изменений в Ozon/WB не выполнял."])
+
+    reply_markup: dict[str, Any] = {}
+    if changed_rows and run_id:
+        reply_markup = {
+            "inline_keyboard": [
+                [
+                    {
+                        "text": "✅ Применить WB 70-55-55",
+                        "callback_data": f"wba_apply:{run_id}",
+                    }
+                ]
+            ]
+        }
+    return TelegramCommandResult(
+        command="/wb-actions",
+        ok=True,
+        mode="dry_run",
+        text="\n".join(lines),
+        artifacts=artifacts,
+        reply_markup=reply_markup,
+    )
+
+
+def _wb_actions_apply(
+    *,
+    plan_run_id: str,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+) -> TelegramCommandResult:
+    if not _valid_wb_actions_plan_id(plan_run_id):
+        return TelegramCommandResult(
+            command="/wb_actions_apply",
+            ok=False,
+            mode="apply",
+            blocked_reason="invalid_plan_run_id",
+            text=(
+                "WB акции apply\n\n"
+                "Итог: apply заблокирован - некорректный `plan_run_id`.\n\n"
+                f"Получено: `{_truncate(plan_run_id, 100)}`\n\n"
+                "Изменений в Ozon/WB не выполнял."
+            ),
+        )
+
+    try:
+        result = run_wb_actions_discount_apply(
+            credentials=credentials or load_credentials(),
+            data_dir=data_dir,
+            plan_run_id=plan_run_id,
+            confirmed_by_user=True,
+        )
+    except Exception as exc:  # noqa: BLE001 - Telegram must return a safe failure.
+        return TelegramCommandResult(
+            command="/wb_actions_apply",
+            ok=False,
+            mode="apply",
+            blocked_reason="wb_actions_apply_failed",
+            text=(
+                "WB акции apply\n\n"
+                "Итог: apply не выполнен или остановлен safety-контуром.\n\n"
+                f"Plan ID: `{plan_run_id}`\n"
+                f"Причина: `{_safe_error(exc)}`\n\n"
+                "Если причина в drift или preflight, нужен новый dry-run и новое подтверждение."
+            ),
+        )
+
+    applied = result.get("applied") if isinstance(result.get("applied"), dict) else {}
+    drift = result.get("drift") if isinstance(result.get("drift"), dict) else {}
+    verify = result.get("verify") if isinstance(result.get("verify"), dict) else {}
+    fresh_plan = result.get("fresh_plan") if isinstance(result.get("fresh_plan"), dict) else {}
+    latest_history = _wb_latest_history_data(verify)
+    lines = [
+        "WB акции apply",
+        "",
+        f"Итог: apply завершен со статусом `{result.get('overall_status') or 'н/д'}`.",
+        f"Approved plan: `{result.get('approved_plan_run_id') or plan_run_id}`",
+        f"Fresh plan: `{fresh_plan.get('run_id') or 'н/д'}`",
+        f"Apply run: `{result.get('run_id') or 'н/д'}`",
+        f"Схема: `{result.get('scheme') or 'н/д'}`",
+        "",
+        "Применено:",
+        f"- отправлено строк: `{_int(applied.get('payload_rows_count'))}`",
+        f"- upload ID: `{applied.get('upload_id') or 'н/д'}`",
+        f"- пропущено из-за drift: `{_int(drift.get('skipped_due_to_drift_count'))}` строк / `{_int(drift.get('skipped_due_to_drift_product_count'))}` товаров",
+        "",
+        "Проверка:",
+        f"- verify status: `{verify.get('status') or 'н/д'}`",
+        f"- successful goods: `{_int(latest_history.get('successGoodsNumber'))}` / `{_int(latest_history.get('overAllGoodsNumber'))}`",
+    ]
+    if drift.get("skipped_due_to_drift_nm_ids"):
+        nm_ids = ", ".join(str(item) for item in drift.get("skipped_due_to_drift_nm_ids", [])[:10])
+        lines.extend(["", f"Drift товары на новый review: `{nm_ids}`"])
+    artifacts = _safe_artifacts(result)
+    if artifacts:
+        lines.extend(["", "Файлы:"])
+        if artifacts.get("report"):
+            lines.append(f"- отчет: `{artifacts['report']}`")
+        if artifacts.get("drift_check"):
+            lines.append(f"- drift-check: `{artifacts['drift_check']}`")
+        if artifacts.get("skipped_drift_rows"):
+            lines.append(f"- skipped drift: `{artifacts['skipped_drift_rows']}`")
+    return TelegramCommandResult(
+        command="/wb_actions_apply",
+        ok=str(result.get("overall_status") or "") in {"ok", "warning"},
+        mode="apply",
+        text="\n".join(lines),
+        artifacts=artifacts,
+    )
+
+
+def _ozon_elastic_plan(
+    *,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+) -> TelegramCommandResult:
+    try:
+        result = run_ozon_elastic_plan(
+            credentials=credentials or load_credentials(),
+            data_dir=data_dir,
+        )
+    except Exception as exc:  # noqa: BLE001 - Telegram must return a safe failure.
+        return TelegramCommandResult(
+            command="/elastic",
+            ok=False,
+            mode="dry_run",
+            blocked_reason="ozon_elastic_plan_failed",
+            text=(
+                "Ozon Elastic\n\n"
+                "Итог: свежий dry-run не удалось построить.\n\n"
+                f"Причина: `{_safe_error(exc)}`\n\n"
+                "Изменений в Ozon/WB не выполнял."
+            ),
+        )
+
+    summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+    run_id = str(result.get("run_id") or "")
+    has_write_rows = (
+        int(summary.get("add_to_action") or 0)
+        + int(summary.get("update_action_price_with_changed_price") or 0)
+        + int(summary.get("deactivate_from_action") or 0)
+    ) > 0
+    lines = [
+        "Ozon Elastic",
+        "",
+        "Итог: свежий dry-run построен. Apply не выполнялся.",
+        f"Run ID: `{run_id or 'н/д'}`",
+        f"Акция: `{summary.get('action_name') or 'н/д'}` / `{summary.get('action_id') or 'н/д'}`",
+        "",
+        "Сводка:",
+        f"- товаров в активной акции: `{_int(summary.get('active_rows'))}`",
+        f"- кандидатов: `{_int(summary.get('candidate_rows'))}`",
+        f"- уникальных товаров в расчете: `{_int(summary.get('merged_unique_products'))}`",
+        f"- добавить в акцию: `{_int(summary.get('add_to_action'))}`",
+        f"- обновить цену: `{_int(summary.get('update_action_price'))}`",
+        f"- из них с реальным изменением цены: `{_int(summary.get('update_action_price_with_changed_price'))}`",
+        f"- снять с акции: `{_int(summary.get('deactivate_from_action'))}`",
+        f"- пропустить кандидатов: `{_int(summary.get('skip_candidate'))}`",
+        f"- blocked: `{_int(summary.get('blocked'))}`",
+        "",
+        "Что дальше:",
+    ]
+    if has_write_rows:
+        lines.extend(
+            [
+                "Нажатие кнопки ниже является явным подтверждением владельца для этого dry-run.",
+                "Перед записью apply сам выполнит fresh preflight, fresh dry-run, partial drift-check и verify.",
+                "Если часть строк изменилась, будут применены только неизменившиеся строки; изменившиеся останутся на новый review.",
+            ]
+        )
+    else:
+        lines.append("Изменений к применению нет, кнопку apply не показываю.")
+
+    artifacts = _safe_artifacts(result)
+    if artifacts:
+        lines.extend(["", "Файлы:"])
+        if artifacts.get("report"):
+            lines.append(f"- отчет: `{artifacts['report']}`")
+        if artifacts.get("xlsx"):
+            lines.append(f"- Excel: `{artifacts['xlsx']}`")
+        if artifacts.get("csv"):
+            lines.append(f"- CSV: `{artifacts['csv']}`")
+    lines.extend(["", "Изменений в Ozon/WB не выполнял."])
+
+    reply_markup: dict[str, Any] = {}
+    if has_write_rows and run_id:
+        reply_markup = {
+            "inline_keyboard": [
+                [
+                    {
+                        "text": "✅ Применить Ozon Elastic",
+                        "callback_data": f"oe_apply:{run_id}",
+                    }
+                ]
+            ]
+        }
+    return TelegramCommandResult(
+        command="/elastic",
+        ok=True,
+        mode="dry_run",
+        text="\n".join(lines),
+        artifacts=artifacts,
+        reply_markup=reply_markup,
+    )
+
+
+def _ozon_elastic_apply(
+    *,
+    plan_run_id: str,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+) -> TelegramCommandResult:
+    if not _valid_ozon_elastic_plan_id(plan_run_id):
+        return TelegramCommandResult(
+            command="/elastic_apply",
+            ok=False,
+            mode="apply",
+            blocked_reason="invalid_plan_run_id",
+            text=(
+                "Ozon Elastic apply\n\n"
+                "Итог: apply заблокирован - некорректный `plan_run_id`.\n\n"
+                f"Получено: `{_truncate(plan_run_id, 100)}`\n\n"
+                "Изменений в Ozon/WB не выполнял."
+            ),
+        )
+
+    try:
+        result = run_ozon_elastic_apply(
+            credentials=credentials or load_credentials(),
+            data_dir=data_dir,
+            plan_run_id=plan_run_id,
+            confirmed_by_user=True,
+        )
+    except Exception as exc:  # noqa: BLE001 - Telegram must return a safe failure.
+        return TelegramCommandResult(
+            command="/elastic_apply",
+            ok=False,
+            mode="apply",
+            blocked_reason="ozon_elastic_apply_failed",
+            text=(
+                "Ozon Elastic apply\n\n"
+                "Итог: apply не выполнен или остановлен safety-контуром.\n\n"
+                f"Plan ID: `{plan_run_id}`\n"
+                f"Причина: `{_safe_error(exc)}`\n\n"
+                "Если причина в drift или preflight, нужен новый dry-run и новое подтверждение."
+            ),
+        )
+
+    applied = result.get("applied") if isinstance(result.get("applied"), dict) else {}
+    drift = result.get("drift") if isinstance(result.get("drift"), dict) else {}
+    verify = result.get("verify") if isinstance(result.get("verify"), dict) else {}
+    fresh_plan = result.get("fresh_plan") if isinstance(result.get("fresh_plan"), dict) else {}
+    lines = [
+        "Ozon Elastic apply",
+        "",
+        f"Итог: apply завершен со статусом `{result.get('overall_status') or 'н/д'}`.",
+        f"Approved plan: `{result.get('approved_plan_run_id') or plan_run_id}`",
+        f"Fresh plan: `{fresh_plan.get('run_id') or 'н/д'}`",
+        f"Apply run: `{result.get('run_id') or 'н/д'}`",
+        "",
+        "Применено:",
+        f"- добавить/обновить: `{_int(applied.get('activate_rows_count'))}`",
+        f"- снять с акции: `{_int(applied.get('deactivate_rows_count'))}`",
+        f"- пропущено из-за drift: `{_int(drift.get('skipped_due_to_drift_count'))}` строк / `{_int(drift.get('skipped_due_to_drift_product_count'))}` товаров",
+        "",
+        "Проверка:",
+        f"- verify status: `{verify.get('status') or 'н/д'}`",
+        f"- расхождения цен: `{_int(len(verify.get('price_mismatches') or []))}`",
+        f"- остались активными после снятия: `{_int(len(verify.get('still_active_deactivated') or []))}`",
+    ]
+    if drift.get("skipped_due_to_drift_product_ids"):
+        product_ids = ", ".join(str(item) for item in drift.get("skipped_due_to_drift_product_ids", [])[:10])
+        lines.extend(["", f"Drift товары на новый review: `{product_ids}`"])
+    artifacts = _safe_artifacts(result)
+    if artifacts:
+        lines.extend(["", "Файлы:"])
+        if artifacts.get("report"):
+            lines.append(f"- отчет: `{artifacts['report']}`")
+        if artifacts.get("drift_check"):
+            lines.append(f"- drift-check: `{artifacts['drift_check']}`")
+        if artifacts.get("skipped_drift_rows"):
+            lines.append(f"- skipped drift: `{artifacts['skipped_drift_rows']}`")
+    return TelegramCommandResult(
+        command="/elastic_apply",
+        ok=str(result.get("overall_status") or "") in {"ok", "warning"},
+        mode="apply",
+        text="\n".join(lines),
+        artifacts=artifacts,
+    )
 
 
 def _fresh_status_preflight(
@@ -733,6 +1149,39 @@ def _safe_artifacts(run: dict[str, Any]) -> dict[str, str]:
     return safe
 
 
+def _wb_actions_reason_counts(csv_path: str | None) -> dict[str, dict[str, int]]:
+    result = {"changed": {}, "nochange": {}}
+    if not csv_path:
+        return result
+    path = Path(csv_path)
+    try:
+        with path.open(encoding="utf-8-sig", newline="") as handle:
+            rows = list(csv.DictReader(handle, delimiter=";"))
+    except (OSError, csv.Error):
+        return result
+    for row in rows:
+        action = str(row.get("Действие") or "")
+        reason = str(row.get("Причина") or "")
+        if not reason:
+            continue
+        bucket = "nochange" if action == "не менять" else "changed" if action else ""
+        if not bucket:
+            continue
+        result[bucket][reason] = result[bucket].get(reason, 0) + 1
+    return result
+
+
+def _wb_latest_history_data(verify: dict[str, Any]) -> dict[str, Any]:
+    polls = verify.get("polls") if isinstance(verify.get("polls"), list) else []
+    for poll in reversed(polls):
+        if not isinstance(poll, dict):
+            continue
+        data = ((((poll.get("status") or {}).get("history") or {}).get("data") or {}).get("data") or {})
+        if isinstance(data, dict) and data:
+            return data
+    return {}
+
+
 def _dict_value(source: dict[str, Any], key: str) -> dict[str, Any]:
     value = source.get(key)
     return value if isinstance(value, dict) else {}
@@ -803,6 +1252,27 @@ def _check_issues(checks: dict[str, Any]) -> list[str]:
         reason = value.get("error") or value.get("message") or status
         issues.append(f"{_check_label(key)}: `{reason}`")
     return issues
+
+
+def _valid_ozon_elastic_plan_id(value: str) -> bool:
+    text = str(value or "")
+    if not text.startswith("ozon_elastic_plan_"):
+        return False
+    return all(char.isalnum() or char in {"_", "-"} for char in text)
+
+
+def _valid_wb_actions_plan_id(value: str) -> bool:
+    text = str(value or "")
+    if not text.startswith("wb_actions_discount_plan_"):
+        return False
+    return all(char.isalnum() or char in {"_", "-"} for char in text)
+
+
+def _safe_error(exc: BaseException) -> str:
+    text = str(exc).replace("\n", " ").replace("\r", " ")
+    for marker in ("token", "secret", "cookie", "storage", "auth", "api_key", "client_secret", "password"):
+        text = text.replace(marker, "<redacted>")
+    return _truncate(text, 500)
 
 
 def _parse_command(message: str) -> tuple[str, str]:

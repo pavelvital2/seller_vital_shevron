@@ -170,6 +170,15 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         runbook_path="data/planning/telegram_bot_mvp_runbook.md",
     ),
     RegisteredTask(
+        name="telegram-send-report",
+        command="send-telegram-report",
+        title="Send Telegram report",
+        description="Send an owner-facing Telegram summary and attach a safe saved report file.",
+        mode="maintenance",
+        risk="low",
+        runbook_path="data/planning/chat_report_templates.md",
+    ),
+    RegisteredTask(
         name="catalog-fetch",
         command="fetch-catalog",
         title="Catalog fetch",
@@ -368,6 +377,32 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         telegram_button_label="/today",
     ),
     RegisteredTask(
+        name="supply-workbooks-plan",
+        command="plan-supply-workbooks",
+        title="Supply workbook automation plan",
+        description=(
+            "Build read-only readiness report for generating Excel supply workbooks "
+            "from stocks, 90-day sales, localization and active inbound supplies."
+        ),
+        mode="read_only",
+        risk="low",
+        marketplaces=("ozon", "wb"),
+        runbook_path="data/planning/supply_planning_runbook.md",
+        requires_credentials=True,
+    ),
+    RegisteredTask(
+        name="ozon-messenger-workflow",
+        command="ozon-messenger-workflow",
+        title="Ozon Messenger workflow",
+        description="Lifecycle for Ozon Messenger triage, approval, apply, verify and cleanup.",
+        mode="maintenance",
+        risk="normal",
+        marketplaces=("ozon",),
+        runbook_path="data/planning/ozon_messenger_runbook.md",
+        requires_credentials=True,
+        requires_confirmation=True,
+    ),
+    RegisteredTask(
         name="sessions",
         command="sessions",
         title="LK session manager",
@@ -410,6 +445,8 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         marketplaces=("ozon",),
         runbook_path="data/planning/ozon_elastic_runbook.md",
         requires_credentials=True,
+        telegram_enabled=True,
+        telegram_button_label="/elastic",
     ),
     RegisteredTask(
         name="ozon-elastic-apply",
@@ -455,6 +492,8 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         marketplaces=("wb",),
         runbook_path="data/planning/wb_actions_runbook.md",
         requires_credentials=True,
+        telegram_enabled=True,
+        telegram_button_label="/wb-actions",
     ),
     RegisteredTask(
         name="wb-actions-discount-apply",
@@ -584,6 +623,21 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         marketplaces=("ozon", "wb"),
         runbook_path="data/planning/card_ops/03_card_content_update_ozon_wb.md",
         requires_credentials=True,
+        requires_mapping=True,
+    ),
+    RegisteredTask(
+        name="approved-card-passport-promote",
+        command="promote-approved-card-passport",
+        title="Promote approved card passport",
+        description=(
+            "Promote an owner-approved Layer 2 card audit/HTML package into "
+            "a Layer 3 approved master passport before marketplace apply."
+        ),
+        mode="dry_run",
+        risk="medium",
+        marketplaces=("ozon", "wb"),
+        runbook_path="data/planning/card_ops/quick_access.md",
+        requires_credentials=False,
         requires_mapping=True,
     ),
     RegisteredTask(

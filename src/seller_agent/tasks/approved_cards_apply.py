@@ -9,6 +9,7 @@ from typing import Any
 from seller_agent.config import AppCredentials
 from seller_agent.core.run_manifest import write_summary_run_manifest
 from seller_agent.reports.writer import ensure_dir, write_json
+from seller_agent.tasks.card_passport_promotion import ensure_approved_passports_for_batch
 from seller_agent.tasks.card_content_update import (
     run_card_content_update_apply,
     run_card_content_update_plan,
@@ -63,6 +64,28 @@ def _ready_skus_from_plan(path: Path) -> tuple[list[str], list[dict[str, Any]]]:
 
 def _stage(status: str, **kwargs: Any) -> dict[str, Any]:
     return {"status": status, **kwargs}
+
+
+def _run_post_apply_content_verify(
+    *,
+    credentials: AppCredentials,
+    data_dir: Path,
+    internal_skus: list[str],
+    base_run_id: str,
+) -> dict[str, Any]:
+    if not internal_skus:
+        return _stage("skipped", plan=None, ready_skus=[], blocked=[])
+    plan = run_card_content_update_plan(
+        credentials=credentials,
+        data_dir=data_dir,
+        internal_skus=internal_skus,
+        run_id=f"{base_run_id}_post_verify",
+        skip_api=False,
+    )
+    plan_path = Path(plan["artifacts"]["plan"])
+    ready_skus, blocked = _ready_skus_from_plan(plan_path)
+    status = "ok" if int(plan.get("blocked_rows") or 0) == 0 else "warning"
+    return _stage(status, plan=plan, ready_skus=ready_skus, blocked=blocked)
 
 
 def _run_content_stage(
@@ -799,6 +822,53 @@ def run_apply_approved_cards(
     base_run_id = run_id or f"apply_approved_cards_{started_at.strftime('%Y%m%dT%H%M%S')}"
     run_dir = ensure_dir(data_dir / "runs" / started_at.strftime("%Y-%m-%d") / base_run_id)
 
+    passport_preflight = ensure_approved_passports_for_batch(data_dir=data_dir, internal_skus=skus, base_run_id=base_run_id)
+    if passport_preflight.get("status") != "ok":
+        result = {
+            "run_id": base_run_id,
+            "started_at": started_at.isoformat(timespec="seconds"),
+            "mode": "apply",
+            "task": "apply-approved-cards",
+            "overall_status": "blocked",
+            "input_skus": skus,
+            "summary": {
+                "input_skus": len(skus),
+                "content_ready": 0,
+                "seller_sku_ready": 0,
+                "wb_create_ready": 0,
+                "content_status": "skipped",
+                "seller_sku_status": "skipped",
+                "wb_create_status": "skipped",
+                "catalog_sync_status": "skipped",
+                "passport_preflight_status": "blocked",
+            },
+            "passport_preflight": passport_preflight,
+            "stages": {},
+            "local_catalog_sync": {"status": "skipped"},
+            "artifacts": {
+                "run_dir": str(run_dir),
+                "summary": str(run_dir / "summary.json"),
+                "report": str(run_dir / "apply_approved_cards_report.md"),
+            },
+        }
+        write_json(run_dir / "summary.json", result)
+        _write_report(run_dir / "apply_approved_cards_report.md", result)
+        manifest = write_summary_run_manifest(
+            data_dir=data_dir,
+            run_dir=run_dir,
+            summary=result,
+            task="apply-approved-cards",
+            mode="apply",
+            risk="high",
+            marketplaces=["ozon", "wb"],
+            inputs={"internal_skus": skus},
+            lifecycle_status="blocked",
+            closed=False,
+        )
+        result["artifacts"]["run_manifest"] = manifest["manifest"]
+        write_json(run_dir / "summary.json", result)
+        return result
+
     content = _run_content_stage(
         credentials=credentials,
         data_dir=data_dir,
@@ -833,11 +903,21 @@ def run_apply_approved_cards(
         internal_skus=seller_ready or content_ready or skus,
         run_id=base_run_id,
     )
+    post_verify = _run_post_apply_content_verify(
+        credentials=credentials,
+        data_dir=data_dir,
+        internal_skus=seller_ready or content_ready or skus,
+        base_run_id=base_run_id,
+    )
 
-    stage_statuses = [content["status"], seller_sku["status"], wb_create["status"]]
+    stage_statuses = [content["status"], seller_sku["status"], wb_create["status"], post_verify["status"]]
     overall_status = "ok"
     if any(status in {"blocked", "error"} for status in stage_statuses):
         overall_status = "warning"
+    elif content["status"] == "warning" and post_verify["status"] == "ok" and all(
+        status in {"ok", "skipped", "warning"} for status in stage_statuses
+    ):
+        overall_status = "ok"
     elif any(status == "warning" for status in stage_statuses):
         overall_status = "warning"
 
@@ -857,11 +937,15 @@ def run_apply_approved_cards(
             "seller_sku_status": seller_sku["status"],
             "wb_create_status": wb_create["status"],
             "catalog_sync_status": catalog_sync.get("status", "unknown"),
+            "post_verify_status": post_verify["status"],
+            "passport_preflight_status": passport_preflight.get("status", "unknown"),
         },
+        "passport_preflight": passport_preflight,
         "stages": {
             "content_update": content,
             "seller_sku_update": seller_sku,
             "wb_card_create": wb_create,
+            "post_apply_content_verify": post_verify,
         },
         "local_catalog_sync": catalog_sync,
         "artifacts": {

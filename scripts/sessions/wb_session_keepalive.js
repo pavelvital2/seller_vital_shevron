@@ -42,7 +42,7 @@ function sellerPattern() {
 
 function classify(summary) {
   const all = `${summary.url}\n${summary.title}\n${summary.text}`;
-  const blocked = /captcha|access denied|доступ ограничен|ошибка|что-то пошло не так/i.test(all);
+  const blocked = /captcha|access denied|доступ ограничен|что-то пошло не так|произошла ошибка|страница недоступна|service unavailable/i.test(all);
   const needsLogin = /login|passport|signin|auth|войти|номер телефона|получить код/i.test(all);
   const pattern = sellerPattern();
   const sellerFound = pattern ? pattern.test(all) : true;

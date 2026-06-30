@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import csv
 import json
 from pathlib import Path
 
 import pytest
 
-from seller_agent.bot.dispatcher import dispatch_message
+from seller_agent.bot.dispatcher import dispatch_callback, dispatch_message
 from seller_agent.bot.telegram_runner import (
     load_telegram_bot_token,
     poll_loop,
@@ -21,9 +22,11 @@ def test_bot_help_lists_read_only_mvp_commands() -> None:
     result = dispatch_message("/help")
 
     assert result.ok is True
-    assert "Write-кнопок нет" in result.text
+    assert "безопасные кнопки Ozon Elastic / WB акции" in result.text
     assert "`/status`" in result.text
     assert "`/approvals`" in result.text
+    assert "`/elastic`" in result.text
+    assert "`/wb-actions`" in result.text
 
 
 def test_bot_status_uses_latest_run_manifest(tmp_path: Path) -> None:
@@ -384,9 +387,287 @@ def test_bot_rejects_unsupported_write_like_command() -> None:
     assert "не поддерживается" in result.text
 
 
+def test_bot_elastic_builds_plan_and_apply_button(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from seller_agent.bot import commands
+
+    report = tmp_path / "runs" / "2026-06-30" / "ozon_elastic_plan_test" / "ozon_elastic_dry_run.md"
+
+    def fake_plan(**kwargs: object) -> dict:
+        assert kwargs["data_dir"] == tmp_path
+        return {
+            "run_id": "ozon_elastic_plan_test",
+            "summary": {
+                "action_id": "123",
+                "action_name": "Эластичный бустинг",
+                "active_rows": 10,
+                "candidate_rows": 20,
+                "merged_unique_products": 25,
+                "add_to_action": 2,
+                "update_action_price": 3,
+                "update_action_price_with_changed_price": 1,
+                "deactivate_from_action": 0,
+                "skip_candidate": 20,
+                "blocked": 0,
+            },
+            "artifacts": {
+                "report": str(report),
+                "xlsx": str(report.with_suffix(".xlsx")),
+                "csv": str(report.with_suffix(".csv")),
+            },
+        }
+
+    monkeypatch.setattr(commands, "run_ozon_elastic_plan", fake_plan)
+
+    result = dispatch_message("/elastic", data_dir=tmp_path)
+
+    assert result.ok is True
+    assert result.mode == "dry_run"
+    assert "свежий dry-run построен" in result.text
+    assert "добавить в акцию: `2`" in result.text
+    assert result.reply_markup["inline_keyboard"][0][0]["callback_data"] == "oe_apply:ozon_elastic_plan_test"
+    assert result.artifacts["report"] == str(report)
+
+
+def test_bot_elastic_plan_without_write_rows_has_no_apply_button(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from seller_agent.bot import commands
+
+    def fake_plan(**kwargs: object) -> dict:
+        return {
+            "run_id": "ozon_elastic_plan_no_changes",
+            "summary": {
+                "action_id": "123",
+                "action_name": "Эластичный бустинг",
+                "active_rows": 10,
+                "candidate_rows": 20,
+                "merged_unique_products": 25,
+                "add_to_action": 0,
+                "update_action_price": 3,
+                "update_action_price_with_changed_price": 0,
+                "deactivate_from_action": 0,
+                "skip_candidate": 20,
+                "blocked": 0,
+            },
+            "artifacts": {},
+        }
+
+    monkeypatch.setattr(commands, "run_ozon_elastic_plan", fake_plan)
+
+    result = dispatch_message("/elastic", data_dir=tmp_path)
+
+    assert result.ok is True
+    assert "Изменений к применению нет" in result.text
+    assert result.reply_markup == {}
+
+
+def test_bot_elastic_callback_applies_specific_plan(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from seller_agent.bot import commands
+
+    calls: list[dict] = []
+
+    def fake_apply(**kwargs: object) -> dict:
+        calls.append(kwargs)
+        return {
+            "run_id": "ozon_elastic_apply_test",
+            "overall_status": "warning",
+            "approved_plan_run_id": "ozon_elastic_plan_test",
+            "fresh_plan": {"run_id": "ozon_elastic_plan_fresh"},
+            "applied": {"activate_rows_count": 4, "deactivate_rows_count": 1},
+            "drift": {
+                "skipped_due_to_drift_count": 2,
+                "skipped_due_to_drift_product_count": 2,
+                "skipped_due_to_drift_product_ids": ["111", "222"],
+            },
+            "verify": {
+                "status": "ok",
+                "price_mismatches": [],
+                "still_active_deactivated": [],
+            },
+            "artifacts": {"report": str(tmp_path / "runs" / "apply.md")},
+        }
+
+    monkeypatch.setattr(commands, "run_ozon_elastic_apply", fake_apply)
+
+    result = dispatch_callback("oe_apply:ozon_elastic_plan_test", data_dir=tmp_path)
+
+    assert result.ok is True
+    assert result.mode == "apply"
+    assert "apply завершен" in result.text
+    assert "добавить/обновить: `4`" in result.text
+    assert calls[0]["data_dir"] == tmp_path
+    assert calls[0]["plan_run_id"] == "ozon_elastic_plan_test"
+    assert calls[0]["confirmed_by_user"] is True
+
+
+def test_bot_elastic_callback_rejects_invalid_plan_id(tmp_path: Path) -> None:
+    result = dispatch_callback("oe_apply:../../bad", data_dir=tmp_path)
+
+    assert result.ok is False
+    assert result.blocked_reason == "invalid_plan_run_id"
+    assert "Изменений в Ozon/WB не выполнял" in result.text
+
+
+def test_bot_wb_actions_builds_plan_and_apply_button(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from seller_agent.bot import commands
+
+    run_dir = tmp_path / "runs" / "2026-06-30" / "wb_actions_discount_plan_70-55-55_test"
+    report = run_dir / "wb-discount-calculation-active-actions-70-55-55.md"
+    csv_path = run_dir / "wb-discount-calculation-active-actions-70-55-55.csv"
+    run_dir.mkdir(parents=True)
+    with csv_path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["Действие", "Причина"], delimiter=";")
+        writer.writeheader()
+        writer.writerow({"Действие": "снизить скидку", "Причина": "скидка до порога <= 70%"})
+        writer.writerow({"Действие": "снизить скидку", "Причина": "скидка до порога > 70% -> 55%"})
+        writer.writerow({"Действие": "не менять", "Причина": "товара нет в активных акциях -> 55%"})
+
+    def fake_plan(**kwargs: object) -> dict:
+        assert kwargs["data_dir"] == tmp_path
+        assert kwargs["scheme_text"] == "70-55-55"
+        return {
+            "run_id": "wb_actions_discount_plan_70-55-55_test",
+            "summary": {
+                "scheme": "70-55-55",
+                "total_goods": 10,
+                "in_promos": 8,
+                "outside_promos": 2,
+                "multiple_promos": 4,
+                "changed_rows": 2,
+                "to_change": 2,
+                "increase": 0,
+                "decrease": 2,
+                "no_change": 8,
+                "active_promos": 3,
+                "future_promos": 1,
+            },
+            "artifacts": {
+                "report": str(report),
+                "xlsx": str(report.with_suffix(".xlsx")),
+                "csv": str(csv_path),
+            },
+        }
+
+    monkeypatch.setattr(commands, "run_wb_actions_discount_plan", fake_plan)
+
+    result = dispatch_message("/wb-actions", data_dir=tmp_path)
+
+    assert result.ok is True
+    assert result.mode == "dry_run"
+    assert "WB акции 70-55-55" in result.text
+    assert "изменить скидку: `2`" in result.text
+    assert "участие в акции с меньшей требуемой скидкой: `1`" in result.text
+    assert result.reply_markup["inline_keyboard"][0][0]["callback_data"] == "wba_apply:wb_actions_discount_plan_70-55-55_test"
+    assert result.artifacts["report"] == str(report)
+
+
+def test_bot_wb_actions_plan_without_write_rows_has_no_apply_button(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from seller_agent.bot import commands
+
+    def fake_plan(**kwargs: object) -> dict:
+        return {
+            "run_id": "wb_actions_discount_plan_70-55-55_no_changes",
+            "summary": {
+                "scheme": "70-55-55",
+                "total_goods": 10,
+                "in_promos": 8,
+                "outside_promos": 2,
+                "multiple_promos": 4,
+                "changed_rows": 0,
+                "to_change": 0,
+                "increase": 0,
+                "decrease": 0,
+                "no_change": 10,
+                "active_promos": 3,
+                "future_promos": 1,
+            },
+            "artifacts": {},
+        }
+
+    monkeypatch.setattr(commands, "run_wb_actions_discount_plan", fake_plan)
+
+    result = dispatch_message("/wb-actions", data_dir=tmp_path)
+
+    assert result.ok is True
+    assert "Изменений к применению нет" in result.text
+    assert result.reply_markup == {}
+
+
+def test_bot_wb_actions_callback_applies_specific_plan(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from seller_agent.bot import commands
+
+    calls: list[dict] = []
+
+    def fake_apply(**kwargs: object) -> dict:
+        calls.append(kwargs)
+        return {
+            "run_id": "wb_actions_discount_apply_test",
+            "overall_status": "warning",
+            "approved_plan_run_id": "wb_actions_discount_plan_70-55-55_test",
+            "scheme": "70-55-55",
+            "fresh_plan": {"run_id": "wb_actions_discount_plan_70-55-55_fresh"},
+            "applied": {"payload_rows_count": 4, "upload_id": 12345},
+            "drift": {
+                "skipped_due_to_drift_count": 2,
+                "skipped_due_to_drift_product_count": 2,
+                "skipped_due_to_drift_nm_ids": [111, 222],
+            },
+            "verify": {
+                "status": "ok",
+                "polls": [
+                    {
+                        "status": {
+                            "history": {
+                                "data": {"data": {"successGoodsNumber": 4, "overAllGoodsNumber": 4}}
+                            }
+                        }
+                    }
+                ],
+            },
+            "artifacts": {"report": str(tmp_path / "runs" / "wb_apply.md")},
+        }
+
+    monkeypatch.setattr(commands, "run_wb_actions_discount_apply", fake_apply)
+
+    result = dispatch_callback("wba_apply:wb_actions_discount_plan_70-55-55_test", data_dir=tmp_path)
+
+    assert result.ok is True
+    assert result.mode == "apply"
+    assert "apply завершен" in result.text
+    assert "отправлено строк: `4`" in result.text
+    assert "successful goods: `4` / `4`" in result.text
+    assert calls[0]["data_dir"] == tmp_path
+    assert calls[0]["plan_run_id"] == "wb_actions_discount_plan_70-55-55_test"
+    assert calls[0]["confirmed_by_user"] is True
+
+
+def test_bot_wb_actions_callback_rejects_invalid_plan_id(tmp_path: Path) -> None:
+    result = dispatch_callback("wba_apply:../../bad", data_dir=tmp_path)
+
+    assert result.ok is False
+    assert result.blocked_reason == "invalid_plan_run_id"
+    assert "Изменений в Ozon/WB не выполнял" in result.text
+
+
 def test_cli_bot_preview_text_and_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["bot", "preview", "--message", "/help", "--data-dir", str(tmp_path)]) == 0
-    assert "Telegram MVP" in capsys.readouterr().out
+    assert "Telegram bot" in capsys.readouterr().out
 
     assert main(["bot", "preview", "--message", "/status", "--data-dir", str(tmp_path), "--json"]) == 2
     output = json.loads(capsys.readouterr().out)
@@ -418,8 +699,46 @@ def test_send_preview_command_uses_mock_api_without_exposing_token(tmp_path: Pat
     assert result["ok"] is True
     assert calls[0][0] == "secret-token"
     assert calls[0][1] == "sendMessage"
-    assert "Telegram MVP" in calls[0][2]["text"]
+    assert "Telegram bot" in calls[0][2]["text"]
     assert "secret-token" not in json.dumps(result, ensure_ascii=False)
+
+
+def test_send_preview_command_forwards_reply_markup(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from seller_agent.bot import telegram_runner
+    from seller_agent.bot.commands import TelegramCommandResult
+
+    calls: list[tuple[str, str, dict]] = []
+    markup = {"inline_keyboard": [[{"text": "Apply", "callback_data": "oe_apply:ozon_elastic_plan_test"}]]}
+
+    monkeypatch.setattr(
+        telegram_runner,
+        "dispatch_message",
+        lambda *args, **kwargs: TelegramCommandResult(
+            command="/elastic",
+            ok=True,
+            text="Ozon Elastic",
+            reply_markup=markup,
+        ),
+    )
+
+    def fake_api(token: str, method: str, payload: dict) -> dict:
+        calls.append((token, method, payload))
+        return {"ok": True, "result": {"message_id": 10}}
+
+    result = send_preview_command(
+        token="secret-token",
+        chat_id=123,
+        message="/elastic",
+        data_dir=tmp_path,
+        api_request=fake_api,
+    )
+
+    assert result["ok"] is True
+    assert calls[0][1] == "sendMessage"
+    assert calls[0][2]["reply_markup"] == markup
 
 
 def test_safe_report_attachment_paths_only_allows_report_artifacts(tmp_path: Path) -> None:
@@ -583,6 +902,64 @@ def test_poll_once_dispatches_allowed_chat_and_writes_offset(tmp_path: Path) -> 
     assert json.loads(state_file.read_text(encoding="utf-8"))["offset"] == 103
     send_call = [call for call in calls if call[1] == "sendMessage"][0]
     assert send_call[2]["message_thread_id"] == 55
+
+
+def test_poll_once_dispatches_callback_query(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from seller_agent.bot import telegram_runner
+    from seller_agent.bot.commands import TelegramCommandResult
+
+    calls: list[tuple[str, str, dict]] = []
+    dispatched: list[str] = []
+
+    monkeypatch.setattr(
+        telegram_runner,
+        "dispatch_callback",
+        lambda data, **kwargs: dispatched.append(data)
+        or TelegramCommandResult(command="/elastic_apply", ok=True, text="Applied"),
+    )
+
+    def fake_api(token: str, method: str, payload: dict) -> dict:
+        calls.append((token, method, payload))
+        if method == "getUpdates":
+            return {
+                "ok": True,
+                "result": [
+                    {
+                        "update_id": 301,
+                        "callback_query": {
+                            "id": "cb1",
+                            "data": "oe_apply:ozon_elastic_plan_test",
+                            "message": {
+                                "chat": {"id": 123},
+                                "message_thread_id": 55,
+                            },
+                        },
+                    }
+                ],
+            }
+        return {"ok": True, "result": {"message_id": 11}}
+
+    state_file = tmp_path / ".sessions" / "telegram" / "state.json"
+    result = poll_once(
+        token="secret-token",
+        data_dir=tmp_path,
+        state_file=state_file,
+        allowed_chat_ids={123},
+        api_request=fake_api,
+    )
+
+    assert result["ok"] is True
+    assert result["processed_updates"] == 1
+    assert dispatched == ["oe_apply:ozon_elastic_plan_test"]
+    methods = [call[1] for call in calls]
+    assert "answerCallbackQuery" in methods
+    send_call = [call for call in calls if call[1] == "sendMessage"][0]
+    assert send_call[2]["text"] == "Applied"
+    assert send_call[2]["message_thread_id"] == 55
+    assert json.loads(state_file.read_text(encoding="utf-8"))["offset"] == 302
 
 
 def test_poll_loop_requires_allowed_chat_ids(tmp_path: Path) -> None:

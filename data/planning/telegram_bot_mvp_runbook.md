@@ -4,16 +4,25 @@
 
 ## Итог
 
-Read-only Telegram MVP - это первый безопасный слой будущего бота. Он
-использует `TaskRegistry`, `RunManifest` и runtime-артефакты проекта, но не
-выполняет write-операции в Ozon/WB.
+Telegram MVP - это первый безопасный слой будущего бота. Он использует
+`TaskRegistry`, `RunManifest` и runtime-артефакты проекта. Базовые команды
+остаются read-only, а write-операции подключаются только точечно через
+отдельный approval/callback flow.
 
-Текущая реализация подключает безопасный read-only Telegram adapter поверх
-того же command layer. Adapter умеет отправить preview-ответ, один раз
-обработать входящие updates через Telegram Bot API, работать в controlled
-polling loop и прикреплять безопасный файл отчета из `artifacts`. Live
-read-only `/today` и `/status` запускаются через `WorkflowRunner`.
-Marketplace write-операции не запускаются.
+Текущая реализация подключает безопасный Telegram adapter поверх того же
+command layer. Adapter умеет отправить preview-ответ, один раз обработать
+входящие updates через Telegram Bot API, работать в controlled polling loop,
+обрабатывать `callback_query` и прикреплять безопасный файл отчета из
+`artifacts`. Live read-only `/today` и `/status` запускаются через
+`WorkflowRunner`.
+
+С 2026-06-30 подключены точечные write-кнопки: Ozon Elastic и WB акции
+`70-55-55`. Команды `/elastic` и `/wb-actions` строят fresh dry-run,
+отправляют отчет и inline-кнопку применения. Нажатие кнопки является явным
+подтверждением владельца только для показанного `plan_run_id`; apply
+выполняется существующими контурами `apply-ozon-elastic` и
+`apply-wb-actions-discounts` с fresh-check, partial drift-check, verify и
+idempotency guard.
 
 Токен бота не хранится в проекте. Если токен был отправлен в чат или попал в
 логи, считать его засвеченным и перевыпустить через BotFather перед
@@ -177,7 +186,44 @@ Service должен включаться только после:
   `internal_product_id`, названию, Ozon `offer_id/product_id/sku/barcode`,
   WB `vendorCode/nmID/barcode`; barcode подтягивается из processed Ozon/WB
   catalog CSV, если эти файлы есть.
+- `/elastic` - строит свежий dry-run Ozon Elastic, показывает summary и
+  прикрепляет report-файл. Если есть строки к применению, добавляет
+  inline-кнопку `Применить Ozon Elastic`.
+- `/wb-actions` - строит свежий dry-run WB акций по схеме `70-55-55`,
+  показывает summary, бизнес-причины изменения скидки и прикрепляет
+  report-файл. Если есть строки к применению, добавляет inline-кнопку
+  `Применить WB 70-55-55`.
 - `/runs` - краткий список последних runtime-статусов по Telegram-задачам.
+
+## Inline-кнопки и callback
+
+Бот обрабатывает Telegram `callback_query` только для разрешенных chat_id.
+Callback должен быть узким и безопасным. На 2026-06-30 поддерживается:
+
+```text
+oe_apply:<ozon_elastic_plan_run_id>
+wba_apply:<wb_actions_discount_plan_run_id>
+```
+
+Правила:
+
+- Ozon Elastic callback принимает только `plan_run_id`, начинающийся с
+  `ozon_elastic_plan_`;
+- WB actions callback принимает только `plan_run_id`, начинающийся с
+  `wb_actions_discount_plan_`;
+- нажатие кнопки = explicit owner approval для этого dry-run;
+- Ozon Elastic apply запускается через
+  `run_ozon_elastic_apply(..., confirmed_by_user=True)`;
+- WB actions apply запускается через
+  `run_wb_actions_discount_apply(..., confirmed_by_user=True)`;
+- перед записью Ozon Elastic apply выполняет свежий scoped preflight только для
+  Ozon API, новый dry-run, partial drift-check и verify;
+- перед записью WB actions apply выполняет штатный WB preflight, новый dry-run
+  по схеме утвержденного плана, partial drift-check `nmID + price + discount`,
+  upload и verify через WB history/buffer;
+- если часть строк изменилась, применяются только неизменившиеся строки, а
+  drift-строки выводятся в отчет на новый review;
+- повторный apply того же approved plan блокируется idempotency marker.
 
 ## Прикрепление файлов
 
@@ -200,10 +246,18 @@ cookies, storage state и файлы вне разрешенных директ�
 
 ## Safety
 
-- MVP не запускает apply-команды.
-- MVP не создает approved package.
+- MVP не запускает прямые marketplace write-команды без callback/approval.
+- MVP не создает универсальный approved package для всех операций; Ozon Elastic
+  и WB actions пока используют `plan_run_id` как approved identity для
+  существующих apply-контуров.
 - MVP не отправляет ответы покупателям.
 - MVP не меняет цены, акции, ставки, карточки, фото, остатки или поставки.
+- Исключение: `/elastic` + inline-кнопка Ozon Elastic применяет только
+  конкретный показанный Ozon Elastic dry-run через `apply-ozon-elastic` и
+  штатный safety-контур.
+- Исключение: `/wb-actions` + inline-кнопка WB actions применяет только
+  конкретный показанный WB `70-55-55` dry-run через
+  `apply-wb-actions-discounts` и штатный safety-контур.
 - MVP запускает из Telegram только live read-only `/today` и `/status`, если
   явно включены `--live-today` и `--live-status`. Остальные команды показывают
   уже сохраненные runtime-данные.

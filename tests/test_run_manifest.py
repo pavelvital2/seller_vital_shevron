@@ -198,3 +198,53 @@ def test_status_preflight_writes_run_manifest(tmp_path: Path, monkeypatch) -> No
     assert manifest["mode"] == "read_only"
     assert manifest["risk"] == "none"
     assert latest["run_id"] == "status_preflight_manifest_test"
+
+
+def test_status_preflight_can_be_scoped_to_ozon_without_wb_or_catalog(tmp_path: Path, monkeypatch) -> None:
+    called = {"wb": False, "catalog": False, "performance": False}
+
+    monkeypatch.setattr(
+        "seller_agent.tasks.status_preflight._check_ozon_api",
+        lambda credentials: {"status": "ok"},
+    )
+
+    def fail_if_wb_called(credentials):
+        called["wb"] = True
+        return {"status": "error"}
+
+    def fail_if_catalog_called(data_dir):
+        called["catalog"] = True
+        return {"status": "error"}
+
+    def fail_if_performance_called(credentials):
+        called["performance"] = True
+        return {"status": "error"}
+
+    monkeypatch.setattr("seller_agent.tasks.status_preflight._check_wb_api", fail_if_wb_called)
+    monkeypatch.setattr("seller_agent.tasks.status_preflight._summarize_master_catalog", fail_if_catalog_called)
+    monkeypatch.setattr("seller_agent.tasks.status_preflight._check_ozon_performance_api", fail_if_performance_called)
+    monkeypatch.setattr(
+        "seller_agent.tasks.status_preflight._check_lk_sessions",
+        lambda include_lk: {"ozon_cdp": {"status": "skipped"}},
+    )
+
+    result = run_status_preflight(
+        credentials=AppCredentials(ozon_seller=None, ozon_performance=None, wb=None),
+        data_dir=tmp_path,
+        run_id="status_preflight_ozon_only",
+        include_lk=False,
+        marketplaces=("ozon",),
+        include_catalog=False,
+        include_ozon_performance=False,
+    )
+
+    manifest = json.loads(Path(result["artifacts"]["run_manifest"]).read_text(encoding="utf-8"))
+
+    assert result["checks"]["ozon_api"]["status"] == "ok"
+    assert "wb_api" not in result["checks"]
+    assert "master_catalog" not in result["checks"]
+    assert "ozon_performance_api" not in result["checks"]
+    assert called == {"wb": False, "catalog": False, "performance": False}
+    assert manifest["marketplaces"] == ["ozon"]
+    assert manifest["inputs"]["include_catalog"] is False
+    assert manifest["inputs"]["include_ozon_performance"] is False

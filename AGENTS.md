@@ -103,6 +103,9 @@
   fresh-агентов и будущего Telegram-бота.
 - `data/planning/workflow_runner_runbook.md` - единый read-only запуск задач
   через `TaskRegistry`, locks и безопасный результат для Telegram/timers.
+- `data/planning/runtime_job_store_plan.md` - план следующего runtime-слоя:
+  SQLite Job Store, JobService/JobRunner, TaskRegistry v2, Telegram
+  deduplication, atomic approvals и resource leases.
 - `data/planning/telegram_bot_mvp_runbook.md` - read-only Telegram MVP:
   command layer, preview CLI, safe Telegram adapter, controlled polling,
   live read-only `/today` и `/status`, безопасное прикрепление файла отчета
@@ -156,6 +159,10 @@
   покарточной работы: фото-аудит всех фото, липучка/нашивки, размеры, вес,
   упаковка, материал/состав, описание и правила review перед изменениями
   карточек.
+- `data/planning/product_card_work_checkpoint.md` - текущий checkpoint
+  карточной работы: где остановились, какие HTML/SEO/apply-правила
+  зафиксированы, какие карточки применены, какие статусы проверять и как
+  безопасно продолжить после переключения на другую задачу.
 - `data/planning/card_ops/quick_access.md` - быстрый доступ к карточным
   write-маршрутам и командам: WB create из HTML/passport, смена seller SKU,
   update параметров Ozon/WB и будущий Ozon create.
@@ -188,8 +195,15 @@
   аналитических skills/plugins для Ozon/WB аналитики.
 - `data/planning/telegram_bot_management_transition_plan.md` - поэтапный план
   перехода Vital Shevron к управлению Ozon/WB через Telegram-бота.
+- `data/reference/api_docs/README.md` - реестр API-документации Ozon/WB:
+  официальные источники, локальные OpenAPI/Swagger-схемы, карточки endpoint-ов,
+  даты проверки, ограничения и правила регулярного обновления.
 - `data/reference/takterra_development_docs/README.md` - read-only копия
   документов TAKTERRA по развитию проекта, архитектуре и боту.
+- `data/reference/external_reviews/README.md` - read-only индекс внешних
+  review-документов по проекту; использовать как справочный слой для сверки
+  архитектурных решений, но не как источник истины вместо `AGENTS.md` и
+  профильных runbook.
 - `data/catalog/card_audits/README.md` - слой 2 карточного контура:
   результаты личного аудита агента и рекомендации до согласования владельцем.
 - `data/catalog/master_passport/README.md` - слой 3 карточного контура:
@@ -407,6 +421,23 @@ read-only -> dry-run -> review -> approved -> apply -> verify -> result
 приоритет всегда у API. ЛК использовать только если операция невозможна через
 API, API не дает нужного метода, либо API-метод не позволяет завершить
 конкретную внештатную ситуацию.
+
+При работе с API агент обязан сначала работать по официальной документации,
+OpenAPI/Swagger-схеме или уже реализованному проектному адаптеру, а не методом
+подбора параметров. Подбор payload, enum, endpoint или полей ответа допустим
+только если документация недоступна, отсутствует, явно устарела или
+противоречит фактическому API. Перед таким подбором нужно явно зафиксировать,
+какую документацию искали, почему ее недостаточно, и выполнять только
+read-only smoke-test без write-действий.
+
+API-документация Ozon/WB должна храниться и поддерживаться в проекте в
+`data/reference/api_docs/`: ссылки на официальные источники, локальные
+OpenAPI/Swagger-схемы, карточки используемых endpoint-ов, даты проверки и
+известные расхождения. При добавлении нового API-метода, изменении адаптера
+или обнаружении расхождения между документацией и фактическим API агент обязан
+обновить соответствующую карточку endpoint-а и профильный runbook. Минимальная
+регулярная ревизия API-документации - раз в месяц или раньше, если
+маркетплейс сообщает об изменениях.
 
 Перед переходом в ЛК нужно зафиксировать, какой API-метод проверен и почему его
 недостаточно.

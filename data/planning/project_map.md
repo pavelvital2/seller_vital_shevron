@@ -55,7 +55,8 @@
 - `src/seller_agent/tasks/registry.py` - единый `TaskRegistry`: метаданные
   текущих CLI-команд, режимы `read_only/dry_run/apply/maintenance`, риск,
   marketplace, runbook, требования к credentials/LK/mapping/confirmation и
-  Telegram-label для будущего бота.
+  Telegram-label для бота. Telegram-enabled dry-run задачи: `/elastic` для
+  Ozon Elastic и `/wb-actions` для WB акций `70-55-55`.
 - `tasks list|show` - CLI-команды просмотра `TaskRegistry`.
 - `src/seller_agent/tasks/catalog_unified.py` - read-only сборка внутреннего
   общего product-level каталога из confirmed Ozon/WB mapping, owner-approved
@@ -124,6 +125,16 @@
   `confirmed_query_rows` с `query`, `marketplace`, `role`, `frequency`/
   `popularity`, `period`, `source`, `seed_query`, `rank`, `collected_at`
   `data/catalog/content/seo_query_pack/`.
+- `src/seller_agent/tasks/card_passport_promotion.py` - promotion
+  owner-approved Layer 2 `audit.json`/HTML в Layer 3 approved master passport;
+  команда `promote-approved-card-passport` по умолчанию делает dry-run, с
+  `--write` создает `data/catalog/master_passport/approved/<internal_sku>.json`.
+  Этот же helper используется preflight-слоем `apply-approved-cards`, чтобы
+  не начинать marketplace write неполной пачкой при отсутствующем паспорте.
+- `src/seller_agent/tasks/approved_cards_apply.py` - batch owner-approved
+  карточный apply: проверка/восстановление Layer 3 passport, content update,
+  seller SKU replacement, WB create/media, финальный catalog-sync и
+  нормализованный post-verify по новым internal SKU.
 - `data/planning/product_card_data_layers_runbook.md` - контракт карточного
   контура: слой 1 source marketplace data, слой 2 agent audit, слой 3
   owner-approved master passport.
@@ -141,17 +152,29 @@
   WB Discounts/Prices API для `GET /api/v2/list/goods/filter`.
 - `src/seller_agent/bot/dispatcher.py` - thin layer над `TaskRegistry` для
   будущего Telegram-бота.
-- `src/seller_agent/bot/commands.py` - read-only Telegram MVP command layer:
-  `/help`, `/status`, `/today`, `/reviews`, `/approvals`, `/catalog`, `/runs`;
-  возвращает текст Telegram-summary без write-операций; `/catalog` показывает
-  последний `catalog-build-unified`, `/catalog <запрос>` ищет карточку товара
-  в unified catalog, а `/today` и `/status` могут запускать свежие read-only
-  задачи через `WorkflowRunner`, если включены `--live-today`/`--live-status`.
-- `src/seller_agent/bot/telegram_runner.py` - read-only Telegram Bot API
-  adapter: загрузка токена из внешнего файла/env, `sendMessage`,
-  безопасный `sendDocument` для `artifacts.report`, одноразовый `getUpdates`
-  polling, controlled `poll-loop`, allowlist, lock-file, state offset под
-  `.sessions/telegram/`; не запускает marketplace write-операции.
+- `src/seller_agent/bot/commands.py` - Telegram MVP command layer:
+  `/help`, `/status`, `/today`, `/reviews`, `/approvals`, `/catalog`,
+  `/runs`, `/elastic`, `/wb-actions`; `/catalog` показывает последний
+  `catalog-build-unified`, `/catalog <запрос>` ищет карточку товара в unified
+  catalog, а `/today` и `/status` могут запускать свежие read-only задачи
+  через `WorkflowRunner`, если включены `--live-today`/`--live-status`.
+  Write-действия разрешены только точечными callback-кнопками:
+  `oe_apply:<ozon_elastic_plan_run_id>` и
+  `wba_apply:<wb_actions_discount_plan_run_id>`.
+- `src/seller_agent/bot/telegram_runner.py` - Telegram Bot API adapter:
+  загрузка токена из внешнего файла/env, `sendMessage` с inline-keyboard,
+  `answerCallbackQuery`, безопасный `sendDocument` для `artifacts.report`,
+  одноразовый `getUpdates` polling с `message` и `callback_query`, controlled
+  `poll-loop`, allowlist, lock-file, state offset под `.sessions/telegram/`;
+  marketplace write допускается только через узкие approval/callback flows.
+- `/elastic` - Telegram-команда Ozon Elastic: свежий dry-run, report и
+  inline-кнопка apply. Callback `oe_apply:<plan_run_id>` запускает
+  `apply-ozon-elastic` только для показанного plan run через штатный
+  fresh preflight/drift-check/verify.
+- `src/seller_agent/tasks/telegram_report_sender.py` - maintenance helper
+  `send-telegram-report`: отправляет owner-facing summary и безопасно
+  прикрепляет сохраненный report-файл из `data/runs`/`data/reports`; блокирует
+  отсутствующие, небезопасные или потенциально секретные файлы.
 - `bot preview` - CLI-команда локальной проверки Telegram MVP без подключения
   Telegram token и без отправки сообщений.
 - `bot send-preview` - CLI-команда отправки read-only preview-ответа в
@@ -164,6 +187,9 @@
 - `bot poll-loop --live-today --live-status` - включает свежие read-only
   `/today` и `/status`; остальные команды остаются в режиме просмотра
   сохраненных runtime-данных.
+- `send-telegram-report` - CLI-команда отправки уже сохраненного отчета в
+  рабочий Telegram chat/topic: summary идет текстом, report-файл
+  прикрепляется отдельным документом.
 - `src/seller_agent/safety/approvals.py` - approval/idempotency helpers:
   stable checksum, marker `data/approved/applied/*.applied.json`, проверка
   повторного apply по marker и `RunManifest` index, checksum action rows,
@@ -190,6 +216,20 @@
   расходов и CPC-списаний, `/v2/posting/fbo/list` для операционных FBO-отмен,
   Review/Question API с LK/CDP fallback, WB Statistics/Finance/Promotion/
   Communications API и последние dry-run отчеты по акциям.
+- `src/seller_agent/tasks/supply_workbooks_plan.py` - read-only entrypoint
+  `plan-supply-workbooks`: собирает Ozon/WB read-only snapshots по остаткам,
+  продажам за 90 дней, локализации спроса и active inbound поставкам,
+  вычитает inbound, применяет производственные ограничения и формирует CSV,
+  Markdown report, RunManifest и Excel-файлы "в работу".
+- `src/seller_agent/marketplaces/wb/fbw_supplies_adapter.py` - read-only
+  adapter WB FBW Supplies API `https://supplies-api.wildberries.ru`:
+  список поставок, детали поставки и товары в поставке для вычитания
+  confirmed inbound.
+- `src/seller_agent/tasks/ozon_messenger_workflow.py` - maintenance entrypoint
+  `ozon-messenger-workflow`: единый будущий workflow Ozon Messenger
+  `triage -> approval -> apply -> verify -> cleanup`. Пока блокируется как
+  `workflow_adapter_not_implemented`, чтобы новые агенты не продолжали
+  одноразовые ручные apply-скрипты.
 - `src/seller_agent/marketplaces/wb/finance_adapter.py` - read-only адаптер
   WB Finance API для ежедневных финансовых отчетов реализации
   `/api/finance/v1/sales-reports/list`.
@@ -276,9 +316,13 @@ Ozon CDP port по умолчанию: `9544`.
   документов TAKTERRA по развитию проекта, архитектуре, task-runner,
   safety-контуры и Telegram-боту; использовать как справочный слой, не как
   действующие правила Vital Shevron.
+- `data/reference/api_docs/` - реестр API-документации Ozon/WB: официальные
+  источники, локальные OpenAPI/Swagger-схемы, карточки endpoint-ов, даты
+  проверки, ограничения и известные расхождения.
 - `data/reference/external_reviews/` - внешние review-документы по проекту,
   сохраненные как справочные материалы; не являются источником истины, но
-  используются для сверки плана развития и рисков.
+  используются для сверки плана развития и рисков. Индекс:
+  `data/reference/external_reviews/README.md`.
 
 Первый read-only catalog snapshot от 2026-06-12:
 
@@ -306,6 +350,10 @@ Ozon CDP port по умолчанию: `9544`.
 - `data/planning/run_manifest_runbook.md`
 - `data/planning/task_registry_runbook.md`
 - `data/planning/telegram_bot_mvp_runbook.md`
+- `data/planning/runtime_job_store_plan.md` - план runtime hardening:
+  SQLite Job Store, JobService/JobRunner, TaskRegistry v2, Telegram update
+  deduplication, atomic approvals/resource leases и перевод Telegram в
+  dispatcher job-ов.
 - `data/planning/daily_morning_report_runbook.md`
 - `data/planning/reviews_questions_runbook.md`
 - `data/planning/ozon_messenger_runbook.md` - Ozon Messenger/уведомления:
@@ -348,6 +396,10 @@ Ozon CDP port по умолчанию: `9544`.
   покарточной работы: просмотр всех фото, описание изображения/цветов/фона,
   правила липучки и пришивных нашивок, размеры/вес/упаковка,
   материал/состав, структура описания и формат review.
+- `data/planning/product_card_work_checkpoint.md` - текущая точка
+  восстановления карточной работы: последнее примененное состояние, статусы
+  Layer 2/Layer 3, фиксированный HTML-шаблон, правила owner approval,
+  batch-apply команды и следующий безопасный шаг.
 - `data/planning/wb_card_create_runbook.md` - безопасное создание новой
   WB-карточки из owner-approved Layer 3 паспорта, WB barcode, media upload,
   verify и обновление локального каталожного контура.
@@ -364,13 +416,34 @@ Ozon CDP port по умолчанию: `9544`.
 - `data/planning/supply_planning_runbook.md`
 - `data/planning/analytics_skills_development_plan.md`
 - `data/planning/telegram_bot_management_transition_plan.md`
+- `data/reference/api_docs/README.md`
+- `data/reference/api_docs/ozon/README.md`
+- `data/reference/api_docs/ozon/endpoints/supply_order.md` - Ozon
+  `supply-order` цепочка для FBO заявок поставки: list/get/details/bundle,
+  статусы, bundle_id, official OpenAPI check через CDP/ЛК.
+- `data/reference/api_docs/ozon/openapi/seller_swagger_20260629.json` -
+  локальная копия официального Swagger Ozon Seller API `2.1`, загруженная
+  через CDP/ЛК Vital Shevron; использовать как источник enum и схем
+  `supply-order`.
+- `data/reference/api_docs/wb/README.md`
+- `data/reference/api_docs/wb/endpoints/fbw_supplies.md` - WB FBW Supplies
+  API: список поставок, детали, товары, упаковки; источник для inbound на
+  склады WB вместо FBS `/api/v3/supplies`.
 - `data/reference/takterra_development_docs/README.md`
 - `data/reference/takterra_development_docs/data/15_architecture_notes/`
 - `data/reference/takterra_development_docs/data/planning/`
+- `data/reference/external_reviews/README.md` - read-only индекс внешних
+  review-документов и правила их использования без дублирования.
 - `data/reference/external_reviews/2026-06-13_gpt_pro_repository_review.md` -
   внешний review репозитория от 2026-06-13: оценка готовности к Telegram-боту,
   риски TaskRegistry/RunManifest/SafetyGuard/approval/locks и рекомендуемый
   порядок развития.
+- `data/reference/external_reviews/2026-06-25_gpt_pro_repository_review.md` -
+  внешний review текущего `main` от 2026-06-25: оценка прогресса после
+  `seller_agent`, `RunManifest`, `TaskRegistry`, approval packages,
+  read-only `WorkflowRunner` и Telegram MVP; рекомендует `SQLite Job Store`,
+  `TaskRegistry v2`, единый `JobRunner` и Telegram как dispatcher перед
+  дальнейшим расширением write-кнопок.
 
 ## Sessions
 

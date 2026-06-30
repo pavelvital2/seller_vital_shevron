@@ -101,6 +101,47 @@ apply_performed: false
 все равно нужно явно показать в отчете: сколько таких товаров найдено и почему
 они не попали в payload.
 
+## Telegram bot
+
+С 2026-06-30 WB actions подключены к Telegram-боту:
+
+```text
+/wb-actions
+```
+
+Команда всегда строит fresh dry-run по схеме `70-55-55` через
+`run_wb_actions_discount_plan`, выводит краткую сводку, бизнес-причины
+изменений и прикрепляет report-файл. Если в dry-run есть строки к применению,
+бот показывает inline-кнопку:
+
+```text
+✅ Применить WB 70-55-55
+```
+
+Нажатие кнопки отправляет callback:
+
+```text
+wba_apply:<wb_actions_discount_plan_run_id>
+```
+
+Это считается явным подтверждением владельца только для этого `plan_run_id`.
+Callback не может применять произвольный run: бот принимает только id,
+начинающиеся с `wb_actions_discount_plan_`.
+
+Apply из кнопки использует штатный контур CLI:
+
+- `confirmed_by_user=True`;
+- fresh `status-preflight`;
+- fresh `plan-wb-actions-discounts` по схеме утвержденного плана;
+- partial drift-check по payload `nmID + price + discount`;
+- upload только неизменившихся строк;
+- verify через WB history/buffer;
+- отчет и attachment в Telegram.
+
+Если WB вернул частичный успех или карантин цен, кнопку не повторять вслепую:
+использовать раздел `Карантин цен WB при резком снижении цены` ниже и
+готовить отдельный recovery/dry-run для отказанных строк.
+
 ## Apply
 
 Изменение скидок WB - опасная операция. Требуется цепочка:
@@ -321,3 +362,77 @@ idempotency marker сохранен в `data/approved/applied/`.
 Повторный apply по
 `wb_actions_discount_plan_70-55-55_20260627T161836` не выполнять:
 idempotency marker сохранен в `data/approved/applied/`.
+
+## Карантин цен WB при резком снижении цены
+
+Подтвержденный сценарий 2026-06-29:
+
+- approved dry-run:
+  `wb_actions_discount_plan_70-55-55_20260629T071859`;
+- apply:
+  `wb_actions_discount_apply_70-55-55_20260629T072729`;
+- fresh preflight: `status_preflight_20260629T072729`, статус `ok`;
+- fresh dry-run:
+  `wb_actions_discount_plan_70-55-55_20260629T072808`;
+- drift-check: `partial_apply_unchanged_rows`, `approved_payload_rows=62`,
+  `fresh_payload_rows=62`, `eligible_payload_rows=62`, skipped/drift `0`;
+- WB upload ID: `170436799`;
+- WB принял upload, но в buffer/details показал `overAllGoodsNumber=62`,
+  `successGoodsNumber=56`;
+- `6` строк получили статус `3` и ошибку WB:
+  `Changes weren't saved: New prices are more than twice lower than the current ones. Please lower them gradually`;
+- отказанные строки сохранены:
+  `data/runs/2026-06-29/wb_actions_discount_apply_70-55-55_20260629T072729/wb_actions_discount_apply_failed_rows.md`.
+
+Это не новая неизвестная ошибка, а срабатывание механики WB `Карантин цен`.
+Раздел ЛК описан в `data/planning/wb_cabinet_map.md`:
+
+```text
+Цены и скидки -> Карантин
+https://seller.wildberries.ru/discount-and-prices/quarantine
+```
+
+Правило восстановления:
+
+1. Не повторять тот же payload `55%` для отказанных строк через обычный
+   `apply-wb-actions-discounts`.
+2. Считать пакет частично примененным: успешные строки закрыты, отказанные
+   вынести в отдельный backlog/новый dry-run.
+3. Проверить отказанные строки в ЛК WB `Карантин цен`: если строки находятся
+   в карантине, подготовить owner-review с вариантами `Apply New Price` или
+   `Keep Current Price`.
+4. `Apply New Price` в карантине является write-операцией с финансовым
+   эффектом и требует отдельного approval владельца.
+5. Если строк в карантине нет или владелец не хочет подтверждать карантин,
+   строить отдельный постепенный план снижения цены/скидки с учетом ограничения
+   WB "не более чем в 2 раза ниже текущей цены".
+6. Новый план или действие в карантине применять только после отдельного review
+   и approval владельца.
+7. В итоговом отчете по apply обязательно показывать не только HTTP `200` и
+   upload ID, но и `successGoodsNumber / overAllGoodsNumber`, а также список
+   строк со статусом WB, отличным от успешного.
+
+Подтвержденное восстановление Vital Shevron 2026-06-29:
+
+- recovery run:
+  `data/runs/2026-06-29/wb_price_quarantine_staged_recovery_20260629T0758/`;
+- прямой upload `0% -> 55%` для `6` товаров не применился: WB вернул статус
+  строки `3` и текст про цену ниже текущей более чем в два раза;
+- официальный quarantine API и LK quarantine endpoint сначала вернули `0`
+  строк, фактическая скидка по WB prices API оставалась `0%`;
+- промежуточный upload `49%` перевел все `6` товаров в `Карантин цен`;
+- LK `Apply New Price` по внутренним ID строк карантина применил `49%`;
+- финальный upload `55%` применился штатно: `successGoodsNumber=6`,
+  `overAllGoodsNumber=6`, все `6` строк в details со статусом `2`;
+- финальная проверка WB prices API подтвердила скидку `55%` у `6/6` товаров;
+- финальная проверка LK quarantine endpoint подтвердила `0` целевых строк в
+  карантине.
+
+Для цели "оставить утвержденную скидку" использовать staged recovery:
+
+```text
+0% -> upload 49% -> Apply New Price в карантине -> verify 49% -> upload 55% -> verify 55%
+```
+
+`Keep Current Price` для такой цели не использовать: он отменяет quarantined
+изменение.

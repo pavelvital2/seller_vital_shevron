@@ -238,6 +238,31 @@ NODE_PATH=/home/Codex/agent-tools/node/node_modules \
 
 ## Проверенные операции
 
+### Штатный apply 2026-06-29
+
+- Pending-пакет:
+  `data/pending/reviews_questions_20260629T0812_owner_request_pending`.
+- Approved-пакет:
+  `data/approved/reviews_questions_20260629T0812_owner_request_pending_approved_20260629T0822/approved_apply_plan.json`.
+- Apply: `reviews_questions_apply_20260629T0822`.
+- Результат apply: WB ответы на вопросы `1/1`, Ozon публичные ответы
+  `4/4`, Ozon отметки просмотренным `37/37`.
+- Ozon счетчик перед/после: `NOT_VIEWED 41 -> 0`, `PROCESSED 2636 -> 2640`,
+  `VIEWED 4208 -> 4245`.
+- Контрольный read-only: `reviews_questions_verify_20260629T0824`.
+- Verify: `items_count=0`, `actions_count=0`; WB Feedbacks API вернул `0`
+  отзывов/вопросов к обработке, Ozon LK/CDP fallback вернул `0` отзывов и
+  `0` вопросов к обработке.
+- Ограничение источника: официальный Ozon Review API `/v1/review/count` и
+  `/v1/review/list` вернул `HTTP 403: not available with existing
+  subscription`, поэтому Ozon проверен через LK/CDP fallback.
+- Нулевой pending контрольного verify
+  `reviews_questions_verify_20260629T0824_pending` закрыт как
+  `no_actions_verify`; исходный pending закрыт как `applied_verified_cleanup`.
+- Владелец подтвердил правило отчета: если полный файл отчета уже сохранен и
+  его можно отправить через Telegram Bot API, краткий отчет без прикрепленного
+  файла считается неполным.
+
 ### Штатный apply 2026-06-26
 
 - Pending-пакет:

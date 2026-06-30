@@ -394,23 +394,42 @@ def _write_status_report(path: Path, *, result: dict[str, Any]) -> None:
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
+def _normalize_marketplaces(marketplaces: tuple[str, ...] | list[str] | set[str] | None) -> tuple[str, ...]:
+    if marketplaces is None:
+        return ("ozon", "wb")
+    selected = tuple(sorted({str(item).strip().lower() for item in marketplaces if str(item).strip()}))
+    if not selected:
+        return ("ozon", "wb")
+    unknown = sorted(set(selected) - {"ozon", "wb"})
+    if unknown:
+        raise ValueError(f"unknown marketplaces for status preflight: {unknown}")
+    return selected
+
+
 def run_status_preflight(
     *,
     credentials: AppCredentials,
     data_dir: Path = Path("data"),
     run_id: str | None = None,
     include_lk: bool = True,
+    marketplaces: tuple[str, ...] | list[str] | set[str] | None = None,
+    include_catalog: bool = True,
+    include_ozon_performance: bool = True,
 ) -> dict[str, Any]:
     started_at = datetime.now()
     run_id = run_id or f"status_preflight_{started_at.strftime('%Y%m%dT%H%M%S')}"
     run_dir = ensure_dir(data_dir / "runs" / started_at.strftime("%Y-%m-%d") / run_id)
+    selected_marketplaces = _normalize_marketplaces(marketplaces)
 
-    checks: dict[str, Any] = {
-        "ozon_api": _check_ozon_api(credentials),
-        "ozon_performance_api": _check_ozon_performance_api(credentials),
-        "wb_api": _check_wb_api(credentials),
-        "master_catalog": _summarize_master_catalog(data_dir),
-    }
+    checks: dict[str, Any] = {}
+    if "ozon" in selected_marketplaces:
+        checks["ozon_api"] = _check_ozon_api(credentials)
+        if include_ozon_performance:
+            checks["ozon_performance_api"] = _check_ozon_performance_api(credentials)
+    if "wb" in selected_marketplaces:
+        checks["wb_api"] = _check_wb_api(credentials)
+    if include_catalog:
+        checks["master_catalog"] = _summarize_master_catalog(data_dir)
     checks.update(_check_lk_sessions(include_lk=include_lk))
 
     artifacts = {
@@ -438,8 +457,13 @@ def run_status_preflight(
             task="status-preflight",
             mode="read_only",
             risk="none",
-            marketplaces=["ozon", "wb"],
-            inputs={"include_lk": include_lk},
+            marketplaces=list(selected_marketplaces),
+            inputs={
+                "include_lk": include_lk,
+                "marketplaces": list(selected_marketplaces),
+                "include_catalog": include_catalog,
+                "include_ozon_performance": include_ozon_performance,
+            },
         ),
     )
     return result

@@ -399,6 +399,26 @@ approved package.
 - После apply выполнен `ozon_session_keepalive_cdp.js`; контур Vital Shevron
   подтвержден, `stateExported=true`, `needsLogin=false`.
 
+Подтвержденный apply/cleanup 2026-06-29:
+
+- После owner approval по run `ozon_messenger_triage_20260629T0815`
+  выполнена отметка `1` площадочного уведомления Ozon прочитанным через
+  официальный `/v2/chat/read` с payload
+  `{"chat_id": "...", "from_message_id": ...}`.
+- Тип уведомления: `NotificationUser`, тема `FBO: создали автозаявку на вывоз`.
+- Apply: `ozon_messenger_apply_20260629T0823`, результат `applied=1`,
+  `ok_count=1`, `verify_unread_after=0`, `overall_status=ok`.
+- Контрольный read-only: `ozon_messenger_verify_after_apply_20260629T0824`.
+- Verify показал `320` проверенных чатов, `0` строк с `unread_count > 0` и
+  `0` фактически непрочитанных сообщений в историях. Общий
+  `total_unread_count_api=1` остался нестрогим счетчиком Ozon и не считается
+  блокером при чистых строках/историях.
+- Pending `ozon_messenger_triage_20260629T0815_pending` закрыт как
+  `applied_verified_cleanup`.
+- Итоговый отчет
+  `data/runs/2026-06-29/inbox_reviews_questions_notifications_apply_20260629T0826/inbox_reviews_questions_notifications_apply_result.md`
+  отправлен владельцу в Telegram вместе с кратким итогом.
+
 Подтвержденный apply/cleanup 2026-06-26:
 
 - После owner approval по run `ozon_messenger_triage_20260626T1042`
@@ -462,6 +482,18 @@ approved package.
 - файлы и изображения из переписки без отдельного решения по хранению PII.
 
 ## Будущая автоматизация
+
+Штатный entrypoint уже зарегистрирован:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli \
+  ozon-messenger-workflow --stage triage
+```
+
+На 2026-06-29 команда является безопасным task-runner каркасом и честно
+возвращает `blocked: workflow_adapter_not_implemented`, пока не подключены
+адаптеры triage/apply/verify/cleanup. Ее назначение - быть единым местом
+дальнейшей реализации, а не продолжать ручные одноразовые скрипты.
 
 Рекомендуемый порядок:
 

@@ -45,6 +45,20 @@ Telegram chat
 - `data/reference/takterra_development_docs/data/planning/vital_shevron_migration_plan.md`;
 - `data/reference/takterra_development_docs/data/planning/vital_shevron_transfer_manifest.md`.
 
+Внешние review:
+
+- `data/reference/external_reviews/README.md`;
+- `data/reference/external_reviews/2026-06-13_gpt_pro_repository_review.md` -
+  архитектурный review ранней стадии проекта: подтверждает приоритет
+  `RunManifest`, расширенного `TaskRegistry`, `WorkflowRunner`, `SafetyGuard`,
+  approval lifecycle и locks перед расширением Telegram write-кнопок.
+- `data/reference/external_reviews/2026-06-25_gpt_pro_repository_review.md` -
+  актуализированный review текущего `main`: подтверждает, что основу проекта
+  переписывать не нужно, но перед расширением write-кнопок нужно сделать
+  `SQLite Job Store`, `TaskRegistry v2`, единый `JobRunner`, атомарные
+  approvals/resource locks, Telegram update deduplication и перевести Telegram
+  из исполнителя задач в диспетчер job-ов.
+
 ## Базовые принципы
 
 1. Бот не содержит бизнес-логику. Бизнес-логика остается в task/workflow

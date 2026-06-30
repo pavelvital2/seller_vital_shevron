@@ -293,6 +293,100 @@ class OzonSellerAdapter:
 
         return items
 
+    def fetch_stock_on_warehouses(self, *, limit: int = 1000) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        page_limit = min(max(int(limit), 1), 1000)
+        offset = 0
+        while True:
+            data = self.post(
+                "/v2/analytics/stock_on_warehouses",
+                {"limit": page_limit, "offset": offset, "warehouse_type": "ALL"},
+            )
+            page = ((data.get("result") or {}).get("rows") or []) if isinstance(data, dict) else []
+            if not isinstance(page, list):
+                page = []
+            rows.extend(row for row in page if isinstance(row, dict))
+            if len(page) < page_limit:
+                break
+            offset += page_limit
+        return rows
+
+    def fetch_supply_order_ids(
+        self,
+        *,
+        states: list[str],
+        limit: int = 100,
+    ) -> list[str]:
+        ids: list[str] = []
+        offset = 0
+        page_limit = min(max(int(limit), 1), 100)
+        while True:
+            data = self.post(
+                "/v3/supply-order/list",
+                {
+                    "filter": {"states": states},
+                    "limit": page_limit,
+                    "offset": offset,
+                    "sort_by": "ORDER_CREATION",
+                    "sort_dir": "DESC",
+                },
+            )
+            result = data.get("result") if isinstance(data, dict) else {}
+            raw_ids = result.get("order_ids") if isinstance(result, dict) else []
+            if not raw_ids and isinstance(result, dict):
+                raw_ids = [
+                    row.get("order_id") or row.get("orderId") or row.get("id")
+                    for row in (result.get("orders") or [])
+                    if isinstance(row, dict)
+                ]
+            page_ids = [str(value) for value in raw_ids or [] if str(value).strip()]
+            ids.extend(page_ids)
+            if len(page_ids) < page_limit:
+                break
+            offset += page_limit
+        return ids
+
+    def fetch_supply_orders(self, order_ids: list[str], *, batch_size: int = 50) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        normalized_ids = [str(item).strip() for item in order_ids if str(item).strip()]
+        for start in range(0, len(normalized_ids), batch_size):
+            batch = normalized_ids[start : start + batch_size]
+            if not batch:
+                continue
+            data = self.post("/v3/supply-order/get", {"order_ids": batch})
+            result = data.get("result") if isinstance(data, dict) else {}
+            page = result.get("orders") if isinstance(result, dict) else []
+            if isinstance(page, list):
+                rows.extend(row for row in page if isinstance(row, dict))
+        return rows
+
+    def fetch_supply_order_details(self, supply_id: str | int) -> dict[str, Any]:
+        data = self.post("/v1/supply-order/details", {"supply_id": str(supply_id)})
+        result = data.get("result") if isinstance(data, dict) else {}
+        return result if isinstance(result, dict) else data if isinstance(data, dict) else {}
+
+    def fetch_supply_order_bundle(self, bundle_id: str | int, *, limit: int = 1000) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        last_id = ""
+        page_limit = min(max(int(limit), 1), 1000)
+        while True:
+            payload: dict[str, Any] = {"bundle_id": str(bundle_id), "limit": page_limit}
+            if last_id:
+                payload["last_id"] = last_id
+            data = self.post("/v1/supply-order/bundle", payload)
+            result = data.get("result") if isinstance(data, dict) else {}
+            page = []
+            if isinstance(result, dict):
+                page = result.get("items") or result.get("products") or result.get("goods") or []
+            if not isinstance(page, list):
+                page = []
+            rows.extend(row for row in page if isinstance(row, dict))
+            next_last_id = str((result or {}).get("last_id") or (result or {}).get("lastId") or "")
+            if len(page) < page_limit or not next_last_id or next_last_id == last_id:
+                break
+            last_id = next_last_id
+        return rows
+
     def fetch_finance_transactions(
         self,
         *,

@@ -162,3 +162,53 @@ hardcoded путь к другому контуру.
 node scripts/sessions/wb_session_keepalive.js
 PYTHONPATH=src python3 -m seller_agent.cli sessions status --marketplace wb
 ```
+
+### Внештатная ситуация WB 2026-06-30
+
+Симптом:
+
+- полный `status-preflight` показывал `wb_keepalive: error` и
+  `wb_refresh_state: error`;
+- ошибка: `WB blocked/error page detected`;
+- при ручной проверке seller и cmp страницы были фактически открыты, вход в ЛК
+  был активен.
+
+Причина:
+
+- `scripts/sessions/wb_session_keepalive.js` считал любое слово `ошибка` в
+  тексте страницы признаком blocked/error page;
+- на странице `cmp.wildberries.ru/campaigns/list` WB показал обычное
+  информационное уведомление про отображение бюджета кампаний со строкой
+  `Ошибка только в отображении`;
+- это не было блокировкой, капчей и не требовало повторного входа.
+
+Восстановление:
+
+1. Остановить legacy watchdog на время диагностики:
+
+   ```bash
+   scripts/sessions/stop_wb_session_watchdog.sh
+   ```
+
+2. Проверить seller/cmp страницы через текущий профиль без вывода cookies и
+   storage state.
+3. Уточнить классификатор blocked/error page: не считать любое слово `ошибка`
+   блокировкой; блокировать только явные признаки `captcha`, `access denied`,
+   `доступ ограничен`, `что-то пошло не так`, `произошла ошибка`,
+   `страница недоступна`, `service unavailable`.
+4. Запустить:
+
+   ```bash
+   node scripts/sessions/wb_session_keepalive.js
+   scripts/sessions/start_wb_session_watchdog.sh
+   PYTHONPATH=src python3 -m seller_agent.cli sessions status --marketplace wb
+   PYTHONPATH=src python3 -m seller_agent.cli status-preflight
+   ```
+
+Проверка результата:
+
+- `node scripts/sessions/wb_session_keepalive.js`: `ok: true`,
+  `stateExported: true`, `valuesPrinted: false`;
+- `sessions status --marketplace wb`: `overall_status: ok`;
+- полный `status-preflight`: `overall_status: ok`;
+- секреты, cookies, storage state и значения токенов не выводились.

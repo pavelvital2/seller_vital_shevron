@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from seller_agent.bot.commands import TelegramCommandResult, handle_telegram_command
+from seller_agent.bot.commands import TelegramCommandResult, handle_telegram_callback, handle_telegram_command
 from seller_agent.tasks.registry import TaskRegistry, default_task_registry
 
 
@@ -27,3 +27,11 @@ def dispatch_message(
         live_today=live_today,
         live_status=live_status,
     )
+
+
+def dispatch_callback(
+    callback_data: str,
+    *,
+    data_dir: Path = Path("data"),
+) -> TelegramCommandResult:
+    return handle_telegram_callback(callback_data, data_dir=data_dir)

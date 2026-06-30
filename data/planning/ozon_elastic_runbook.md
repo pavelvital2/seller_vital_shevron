@@ -198,9 +198,47 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli app
   --confirmed-by-user
 ```
 
+## Telegram bot
+
+С 2026-06-30 Ozon Elastic подключен к Telegram-боту:
+
+```text
+/elastic
+```
+
+Команда строит fresh dry-run через `run_ozon_elastic_plan`, выводит короткую
+сводку и прикрепляет report-файл. Если в dry-run есть строки к применению,
+бот показывает inline-кнопку:
+
+```text
+✅ Применить Ozon Elastic
+```
+
+Нажатие кнопки отправляет callback:
+
+```text
+oe_apply:<ozon_elastic_plan_run_id>
+```
+
+Это считается явным подтверждением владельца только для этого `plan_run_id`.
+Callback не может применять произвольный run: бот принимает только id,
+начинающиеся с `ozon_elastic_plan_`.
+
+Apply из кнопки использует тот же штатный контур, что и CLI:
+
+- `confirmed_by_user=True`;
+- fresh scoped `status-preflight` только для Ozon API;
+- fresh `plan-ozon-elastic`;
+- partial drift-check;
+- apply только неизменившихся строк;
+- verify;
+- отчет и attachment в Telegram.
+
 Перед отправкой изменений команда выполняет:
 
-- полный `status-preflight`;
+- scoped `status-preflight` с параметрами `marketplaces=("ozon",)`,
+  `include_lk=False`, `include_catalog=False`,
+  `include_ozon_performance=False`;
 - свежий `plan-ozon-elastic`;
 - partial drift-check между согласованным и свежим планом;
 - apply только по строкам, где write-payload не изменился:
@@ -213,6 +251,11 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli app
 - verify активных товаров и снятых строк после apply.
 
 Команда не затрагивает WB.
+
+Важно: Ozon Elastic apply является API-only Ozon Seller операцией. Ошибка WB
+ЛК, WB keepalive, WB refresh или другого нерелевантного блока не должна
+останавливать эту кнопку. Если падает именно `ozon_api`, запись в Ozon не
+выполнять; нужен fresh dry-run после восстановления API и новое подтверждение.
 
 ## Partial drift-check
 

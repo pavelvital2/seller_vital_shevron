@@ -54,6 +54,10 @@ def _normalize_text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _normalize_space(value: Any) -> str:
+    return " ".join(_normalize_text(value).split())
+
+
 def _normalize_int_text(value: Any) -> str:
     text = _normalize_text(value)
     return text[:-2] if text.endswith(".0") else text
@@ -568,6 +572,24 @@ def _same_list(left: list[Any], right: list[Any]) -> bool:
     return [_normalize_text(item) for item in left] == [_normalize_text(item) for item in right]
 
 
+def _same_number(left: Any, right: Any) -> bool:
+    try:
+        return float(left) == float(right)
+    except (TypeError, ValueError):
+        return _normalize_text(left) == _normalize_text(right)
+
+
+def _same_dimensions(left: dict[str, Any] | None, right: dict[str, Any] | None) -> bool:
+    left = left or {}
+    right = right or {}
+    for key in ("length", "width", "height", "depth", "weightBrutto"):
+        if key not in left and key not in right:
+            continue
+        if not _same_number(left.get(key), right.get(key)):
+            return False
+    return True
+
+
 def _ozon_target_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "offer_id": _normalize_text(payload.get("offer_id")),
@@ -595,8 +617,8 @@ def _verify_ozon_payloads(ozon: OzonSellerAdapter, payloads: list[dict[str, Any]
         if not item:
             results.append({"offer_id": offer_id, "status": "missing", "checks": checks})
             continue
-        checks["name"] = _normalize_text(item.get("name")) == target["name"]
-        checks["description"] = _first_attr_value(item, OZON_ATTR_IDS["description"]) == target["description"]
+        checks["name"] = _normalize_space(item.get("name")) == _normalize_space(target["name"])
+        checks["description"] = _normalize_space(_first_attr_value(item, OZON_ATTR_IDS["description"])) == _normalize_space(target["description"])
         checks["colors"] = _same_list(_ozon_attr_values(item, OZON_ATTR_IDS["color"]), target["colors"])
         checks["dimensions"] = {
             "depth": int(item.get("depth") or 0),
@@ -640,9 +662,9 @@ def _verify_wb_payloads(
         if not item:
             results.append({"vendorCode": code, "status": "missing", "checks": checks})
             continue
-        checks["title"] = _normalize_text(item.get("title")) == _normalize_text(payload.get("title"))
-        checks["description"] = _normalize_text(item.get("description")) == _normalize_text(payload.get("description"))
-        checks["dimensions"] = item.get("dimensions") == payload.get("dimensions")
+        checks["title"] = _normalize_space(item.get("title")) == _normalize_space(payload.get("title"))
+        checks["description"] = _normalize_space(item.get("description")) == _normalize_space(payload.get("description"))
+        checks["dimensions"] = _same_dimensions(item.get("dimensions"), payload.get("dimensions"))
         checks["colors"] = _same_list(_wb_char_values(item, WB_CHAR_IDS["color"]), _wb_char_values(payload, WB_CHAR_IDS["color"]))
         target_media = (media_by_vendor_code or {}).get(code) or []
         if target_media:

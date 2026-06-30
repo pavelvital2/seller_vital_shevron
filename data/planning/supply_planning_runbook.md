@@ -95,6 +95,45 @@ Ozon `/v1/analytics/data` можно использовать для прове�
 отгрузки. Если нужен областной/окружной разрез, сначала исследовать ЛК/API и
 зафиксировать источник.
 
+API источники заявок на поставку Ozon:
+
+- `POST /v1/supply-order/status/counter` - количество заявок по статусам;
+- `POST /v3/supply-order/list` - список `order_ids` по состояниям заявок;
+- `POST /v3/supply-order/get` - пачка заявок с `order_number`, `state`,
+  `drop_off_warehouse`, `timeslot`, `supplies[]`, `supply_id`, `bundle_id`,
+  `macrolocal_cluster_id`;
+- `POST /v1/supply-order/details` - детальная карточка одной заявки,
+  `supply_state`, `content.bundle_id`, `storage_warehouse`;
+- `POST /v1/supply-order/bundle` - состав товаров по `bundle_id`: `offer_id`,
+  `sku`, `product_id`, `barcode`, `quantity`, `name`, пагинация через
+  `limit/last_id`.
+- `GET /v1/supplier/available_warehouses` - загруженность складов Ozon.
+
+Endpoint-карточка: `data/reference/api_docs/ozon/endpoints/supply_order.md`.
+Локальная копия официального Swagger:
+`data/reference/api_docs/ozon/openapi/seller_swagger_20260629.json`.
+
+Проверка 2026-06-29: прямой shell-доступ к Ozon docs возвращал redirect loop,
+но через CDP/ЛК Vital Shevron официальная документация и Swagger открылись с
+`HTTP 200`. Для постоянного кода использовать строковые enum OpenAPI, а не
+числовые значения из ранних live-проб.
+
+Официальные статусы для `filter.states`, `orders[].state` и
+`supplies[].state`: `DATA_FILLING`, `READY_TO_SUPPLY`,
+`ACCEPTED_AT_SUPPLY_WAREHOUSE`, `IN_TRANSIT`,
+`ACCEPTANCE_AT_STORAGE_WAREHOUSE`, `REPORTS_CONFIRMATION_AWAITING`,
+`REPORT_REJECTED`, `COMPLETED`, `REJECTED_AT_SUPPLY_WAREHOUSE`, `CANCELLED`,
+`OVERDUE`. В `details.supplies[].supply_state` также есть
+`ACCEPTED_AT_STORAGE_WAREHOUSE`.
+
+Официальные `sort_by` для `/v3/supply-order/list`: `ORDER_CREATION`,
+`ORDER_STATE_UPDATED_AT`, `TIMESLOT_FROM_UTC`, `TIMESLOT_FROM_LOCAL`.
+`sort_dir`: `ASC`, `DESC`.
+
+`POST /v1/supply-order/timeslot/get` официально устаревает и должен быть
+отключен 2026-08-19; для будущей реализации изучить
+`/v2/supply-order/timeslot/list`.
+
 ## Источники WB
 
 API-first источники:
@@ -102,6 +141,25 @@ API-first источники:
 - `GET /api/v1/supplier/stocks` - текущие остатки по складам.
 - `GET /api/v1/supplier/orders` - заказы и отмены за период.
 - `GET /api/v1/supplier/sales` - продажи/возвраты за период.
+
+API источники складских поставок WB/FBW:
+
+- `POST https://supplies-api.wildberries.ru/api/v1/supplies` - список
+  поставок FBW;
+- `GET https://supplies-api.wildberries.ru/api/v1/supplies/{supplyID}` -
+  статус, склад, количество, приемка, принято к продаже;
+- `GET https://supplies-api.wildberries.ru/api/v1/supplies/{supplyID}/goods` -
+  состав товаров: `vendorCode`, `barcode`, `nmID`, `quantity`,
+  `acceptedQuantity`, `readyForSaleQuantity`;
+- `GET https://supplies-api.wildberries.ru/api/v1/supplies/{supplyID}/package` -
+  короба/упаковки и количество по баркодам.
+
+Endpoint-карточка: `data/reference/api_docs/wb/endpoints/fbw_supplies.md`.
+
+Важно: `GET https://marketplace-api.wildberries.ru/api/v3/supplies` относится
+к другому контуру поставок и не является источником складских FBW-поставок. На
+2026-06-28 он вернул `0` активных, хотя FBW API и ЛК показывали активные
+поставки.
 
 Поля для локализации:
 
@@ -114,6 +172,41 @@ API-first источники:
 - `GET /api/v1/supplier/stocks` является legacy endpoint. Для постоянного CLI
   нужно заменить или дополнить его актуальным warehouse/remains источником,
   если WB меняет доступность метода.
+- Для поставок WB не использовать `/api/v3/supplies` как основной источник
+  inbound на склады; использовать `supplies-api.wildberries.ru`.
+
+## API-first и fallback в ЛК
+
+Если API не дает нужные данные по текущим поставкам, статусам, приемке,
+кластерам размещения, складам приемки или составу поставки, агент обязан идти
+в ЛК Ozon/WB, а не останавливать расчет на неполных API-данных.
+
+Сначала нужно читать официальную документацию Ozon/WB API, OpenAPI/Swagger или
+уже реализованный проектный адаптер. Подбор payload/enum/endpoint допустим
+только если документация недоступна, отсутствует, явно устарела или
+противоречит фактическому API; причину такого перехода нужно записать в
+отчет/артефакт запуска. Подбор не должен выполнять write-операции.
+
+Обязательный порядок:
+
+1. Найти и прочитать официальную документацию/API-схему или проектный адаптер.
+2. Зафиксировать, какой API-метод проверен и чего в нем не хватило.
+3. Открыть правильный проектный ЛК/профиль согласно `AGENTS.md`.
+4. Сохранить безопасный LK snapshot без секретов: номера поставок, статус,
+   дата, склад/кластер, количество товаров, количество принято/в пути.
+5. Если ЛК показывает активную поставку, а API возвращает `0` активных
+   поставок, в отчете писать расхождение `API != LK` и использовать ЛК как
+   актуальный источник статуса.
+6. Состав поставки по артикулам нельзя домысливать из общей суммы. По Ozon
+   сначала брать `/v1/supply-order/bundle` через `bundle_id`, по WB -
+   `/api/v1/supplies/{supplyID}/goods`. Если API недоступен или не дал состав,
+   брать детальную LK-выгрузку или ранее созданный owner-approved файл, если
+   совпали маркетплейс, кластер/регион, количество и дата/номер поставки. Если
+   состав не подтвержден, строку выносить в ограничение: "состав поставки не
+   подтвержден".
+7. При расчете следующей поставки вычитать confirmed inbound из потребности:
+   `готово к отгрузке`, `на точке отгрузки`, `в пути`, `приемка`,
+   `отгрузка разрешена`, `идет приемка`.
 
 ## Методика расчета
 
@@ -318,6 +411,56 @@ data/runs/<date>/supply_planning_<timestamp>/
 
 Raw API snapshots можно сохранять только как runtime-артефакты внутри `raw/`.
 Они не должны попадать в git.
+
+## Штатная автоматизация
+
+Entry point для автоматического формирования файлов "в работу":
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli \
+  plan-supply-workbooks
+```
+
+На 2026-06-29 команда зарегистрирована в `TaskRegistry` и подключает реальные
+read-only source adapters:
+
+- текущие остатки Ozon/WB: Ozon `/v4/product/info/stocks` и
+  `/v2/analytics/stock_on_warehouses`, WB `/api/v1/supplier/stocks`;
+- продажи за `90` дней: Ozon `/v2/posting/fbo/list`, WB
+  `/api/v1/supplier/sales`;
+- локализация спроса: Ozon `financial_data.cluster_to` с fallback на
+  `analytics_data.warehouse_name`, WB `oblastOkrugName`/`regionName`;
+- активные поставки/inbound с составом по артикулам: Ozon supply-order chain
+  `list/get/details/bundle`, WB FBW Supplies API
+  `supplies-api.wildberries.ru`;
+- mapping `buyer_region`/`buyer_city` -> `destination_cluster`: для WB
+  используется текущий федеральный округ -> региональный кластер, для Ozon -
+  подтвержденный `cluster_to`, если он есть в posting financial data;
+- производственные ограничения: кратность `8`, `200` физических штук в день,
+  `5` дней цикла.
+
+Команда сохраняет `raw/` snapshots, `processed/*.csv`, `summary.json`,
+`supply_workbooks_report.md`, RunManifest и Excel `в работу`. Поставки в ЛК
+не создаются.
+
+Проверенный smoke 2026-06-29:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli \
+  plan-supply-workbooks \
+  --run-id supply_workbooks_live_smoke_20260629 \
+  --ozon-weekly-physical 16 \
+  --wb-target-physical 200
+```
+
+Результат: `overall_status=ok`, все `source_status=ok`, создано `3` Excel.
+Ozon active supply orders на момент smoke: `0`; WB FBW Supplies API вернул
+`28` поставок, из них `1` active goods group, inbound к вычитанию `62` шт.
+
+Следующий технический слой - усилить расчет под рабочий production mode:
+добавить явный выбор горизонта/целей Ozon/WB из CLI или config, отдельный
+контроль лимитов/слотов ЛК и owner-facing Telegram summary с прикреплением
+Excel-файлов.
 
 ## Excel "в работу"
 

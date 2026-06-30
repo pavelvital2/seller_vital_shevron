@@ -257,3 +257,56 @@ ROAS: <value>
 
 Нельзя выполнять write-операции WB promotion по одному read-only отчету без
 fresh dry-run, drift-check и явного подтверждения владельца.
+
+## Parser-enriched bid recommendations
+
+Подтвержденный сценарий 2026-06-28: для увеличения продаж можно расширять
+штатный dry-run ставок данными WB parser и stock/sales signals.
+
+Источники для такого расчета:
+
+- свежий `wb-promotion-report` за период 14 дней;
+- штатный `plan-wb-promotion-bids` как базовый расчет эффективности;
+- последний WB parser positions run;
+- свежие WB stock/sales signals через `collect-card-signals`.
+
+Правило сегментации:
+
+- `apply-ready` - есть рекламная эффективность, приемлемый ДРР, текущая ставка
+  из API и подтвержденный положительный остаток;
+- `review-only/test` - есть parser-сигнал, но нет заказов в рекламе, либо
+  остаток низкий;
+- `blocked/reduce` - нет текущей ставки, нет подтвержденного остатка, высокий
+  ДРР или расход без заказов.
+
+Если владелец явно согласовал все кандидаты, включая review-only/test строки,
+их можно включить в apply-пакет, но только через fresh drift-check:
+
+```text
+approved parser-enriched package -> fresh wb-promotion-report ->
+drift-check by advert_id/nm_id/placement/current_bid/target_bid ->
+PATCH /api/advert/v1/bids -> wait -> fetch campaigns -> verify target bids
+```
+
+Строки с drift должны быть пропущены, а не применены автоматически.
+
+Подтвержденный apply:
+
+```text
+data/runs/2026-06-28/wb_promotion_bids_apply_all23_20260628T221859
+```
+
+Результат:
+
+- approved rows: `23`;
+- applied rows: `23`;
+- skipped rows: `0`;
+- drift rows: `0`;
+- сумма ставок: `24.72 -> 28.04`;
+- прирост ставок: `+3.32`;
+- verify: `ok`, mismatches `0`.
+
+Ограничение: этот parser-enriched apply пока выполнен кастомным безопасным
+контуром поверх WB Promotion API. Рекомендуется сделать штатную CLI-команду,
+которая будет принимать parser-enriched approval CSV и выполнять тот же
+fresh-report/drift-check/apply/verify маршрут без одноразового скрипта.
