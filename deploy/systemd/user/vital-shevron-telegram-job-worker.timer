@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Vital Shevron Telegram runtime job worker every minute
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1min
+Persistent=true
+Unit=vital-shevron-telegram-job-worker.service
+
+[Install]
+WantedBy=timers.target

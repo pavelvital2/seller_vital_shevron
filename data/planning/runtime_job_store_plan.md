@@ -269,6 +269,8 @@ worker/job runner -> result -> send final report
   Telegram chat/thread;
 - `bot run-job-loop --max-iterations N` выполняет управляемый worker loop,
   останавливается на пустой очереди и подходит для будущего systemd/timer;
+- `deploy/systemd/user/vital-shevron-telegram-job-worker.service|timer` -
+  подготовленные, но не включенные шаблоны worker timer;
 - `/jobs`, `/job_<id>`, `/cancel_<id>` показывают и безопасно отменяют только
   `created/queued` runtime job;
 - `/status` + `--live-status --runtime-jobs` создает job
@@ -277,9 +279,9 @@ worker/job runner -> result -> send final report
   `daily-morning-report`;
 - повторный Telegram `update_id` не создает второй job.
 
-Ограничение: постоянный auto worker/timer пока не подключен в systemd; после
-постановки в очередь job нужно выполнить вручную через `bot run-job-next`,
-`bot run-job-loop --max-iterations N` или будущий timer/worker. Apply
+Ограничение: systemd-шаблоны worker/timer подготовлены, но не включены и не
+запущены. До включения после постановки в очередь job нужно выполнить вручную
+через `bot run-job-next` или `bot run-job-loop --max-iterations N`. Apply
 callbacks Ozon Elastic/WB actions пока не переведены на JobService.
 
 ### Этап 6. Атомарные approvals и resource leases

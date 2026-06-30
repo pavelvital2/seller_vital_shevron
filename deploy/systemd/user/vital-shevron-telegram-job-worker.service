@@ -1,0 +1,12 @@
+[Unit]
+Description=Vital Shevron Telegram runtime job worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/pavel/projects/seller_vital_shevron
+Environment=PYTHONPATH=/home/pavel/projects/seller_vital_shevron/src
+Environment=VITAL_SHEVRON_TELEGRAM_BOT_TOKEN_FILE=/home/pavel/.secrets/vital_shevron_telegram_bot_token
+EnvironmentFile=-/home/pavel/projects/seller_vital_shevron/.sessions/telegram/vital_shevron_telegram_bot.env
+ExecStart=/home/Codex/agent-tools/python/bin/python -m seller_agent.cli bot run-job-loop --max-iterations 20 --poll-interval 2 --runtime-db runtime/runtime.db

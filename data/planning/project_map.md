@@ -300,6 +300,10 @@
 - `deploy/systemd/user/vital-shevron-telegram-bot.service` - шаблон
   read-only Telegram polling service с live `/today` и `/status`; включать
   только после runtime allowlist `.sessions/telegram/vital_shevron_telegram_bot.env`.
+- `deploy/systemd/user/vital-shevron-telegram-job-worker.service`
+- `deploy/systemd/user/vital-shevron-telegram-job-worker.timer` -
+  подготовленные, но не включенные шаблоны runtime worker для выполнения
+  queued Telegram job-ов через `bot run-job-loop`.
 
 Ozon CDP port по умолчанию: `9544`.
 

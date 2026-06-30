@@ -196,6 +196,8 @@ Systemd user service template:
 
 ```text
 deploy/systemd/user/vital-shevron-telegram-bot.service
+deploy/systemd/user/vital-shevron-telegram-job-worker.service
+deploy/systemd/user/vital-shevron-telegram-job-worker.timer
 ```
 
 Service должен включаться только после:
@@ -204,6 +206,13 @@ Service должен включаться только после:
 - личный `chat_id` подтвержден через `poll-once`;
 - `.sessions/telegram/vital_shevron_telegram_bot.env` содержит allowlist;
 - `poll-loop --max-iterations 1` прошел без ошибок.
+- `bot run-job-loop --max-iterations 1` прошел smoke на тестовой или пустой
+  очереди.
+
+`vital-shevron-telegram-job-worker.timer` пока не включать автоматически без
+отдельного согласования владельца. Сначала нужно проверить, что live polling
+создает job через `--runtime-jobs`, worker выполняет ее, а Telegram получает
+summary и безопасный report-файл.
 
 ## Поддерживаемые команды
 
