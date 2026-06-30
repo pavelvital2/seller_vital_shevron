@@ -64,6 +64,8 @@
   текущий `WorkflowRunner`, безопасная блокировка apply-задач и cancel queued.
 - `src/seller_agent/core/job_runner.py` - минимальный runner queued job-ов:
   `run(job_id)` и `run_next()`.
+- `src/seller_agent/core/job_worker.py` - управляемый worker loop поверх
+  `JobRunner`: `run_once()` и `run_loop(max_iterations, stop_when_empty)`.
 - `jobs list|show|submit|run|run-next|cancel` - CLI-команды нового SQLite
   runtime-контура для создания, запуска и проверки job-ов без Telegram.
 - `src/seller_agent/bot/runtime_jobs.py` - optional Telegram runtime bridge:
@@ -379,7 +381,7 @@ Ozon CDP port по умолчанию: `9544`.
   dispatcher job-ов. Этапы 1-2 начаты в `feature/runtime-job-store`:
   добавлены `JobStore`, `JobService`, `JobRunner`, CLI `jobs`, optional
   Telegram `--runtime-jobs` для `/status`/`/today`, `bot run-job-next`
-  notifier и tests.
+  notifier, `bot run-job-loop` и tests.
 - `data/planning/daily_morning_report_runbook.md`
 - `data/planning/reviews_questions_runbook.md`
 - `data/planning/ozon_messenger_runbook.md` - Ozon Messenger/уведомления:

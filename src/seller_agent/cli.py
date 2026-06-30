@@ -22,6 +22,7 @@ from seller_agent.config import load_credentials
 from seller_agent.core.job_runner import JobRunner
 from seller_agent.core.job_service import JobService
 from seller_agent.core.job_store import JobStore
+from seller_agent.core.job_worker import JobWorker
 from seller_agent.core.run_manifest import find_run, latest_run, list_runs
 from seller_agent.tasks.approvals import run_approvals_close, run_approvals_status
 from seller_agent.tasks.approved_cards_apply import run_apply_approved_cards
@@ -171,7 +172,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     bot.add_argument(
         "action",
-        choices=("preview", "send-preview", "poll-once", "poll-loop", "run-job-next"),
+        choices=("preview", "send-preview", "poll-once", "poll-loop", "run-job-next", "run-job-loop"),
         help="Bot action.",
     )
     bot.add_argument(
@@ -1839,6 +1840,33 @@ def main(argv: list[str] | None = None) -> int:
                 "message": runner_result.message,
                 "job": asdict(runner_result.job) if runner_result.job else None,
                 "notification": asdict(notification) if notification else None,
+                "artifacts": {"runtime_db": str(runtime_db)},
+            }
+        elif args.action == "run-job-loop":
+            runtime_db = Path(args.runtime_db)
+            store = JobStore(runtime_db)
+            service = JobService(store=store, data_dir=data_dir, runtime_db=runtime_db)
+            notifications: list[dict] = []
+
+            def notify(job) -> None:  # type: ignore[no-untyped-def]
+                notification = notify_telegram_job_result(
+                    token=token,
+                    job_id=job.job_id,
+                    store=store,
+                    runtime_db=runtime_db,
+                    data_dir=data_dir,
+                )
+                notifications.append(asdict(notification))
+
+            summary = JobWorker(JobRunner(service), after_run=notify).run_loop(
+                max_iterations=args.max_iterations or 1,
+                poll_interval_seconds=args.poll_interval,
+                stop_when_empty=True,
+            )
+            result = {
+                "ok": summary.ok and all(item.get("ok") for item in notifications),
+                "summary": asdict(summary),
+                "notifications": notifications,
                 "artifacts": {"runtime_db": str(runtime_db)},
             }
         elif args.action == "poll-loop":

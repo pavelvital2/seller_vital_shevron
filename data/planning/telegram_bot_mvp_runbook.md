@@ -189,6 +189,8 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 `bot run-job-next` выполняет первый queued job и, если job была создана из
 Telegram update, отправляет итоговый Telegram-summary в исходный chat/thread и
 прикрепляет безопасный `report`-файл через тот же attachment policy.
+`bot run-job-loop --max-iterations N` выполняет тот же контур в управляемом
+loop-режиме и останавливается на пустой очереди.
 
 Systemd user service template:
 

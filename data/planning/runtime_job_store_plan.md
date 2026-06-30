@@ -267,6 +267,8 @@ worker/job runner -> result -> send final report
 - `bot poll-once|poll-loop --runtime-jobs --runtime-db ...`;
 - `bot run-job-next` выполняет первый queued job и отправляет итог в исходный
   Telegram chat/thread;
+- `bot run-job-loop --max-iterations N` выполняет управляемый worker loop,
+  останавливается на пустой очереди и подходит для будущего systemd/timer;
 - `/jobs`, `/job_<id>`, `/cancel_<id>` показывают и безопасно отменяют только
   `created/queued` runtime job;
 - `/status` + `--live-status --runtime-jobs` создает job
@@ -275,10 +277,10 @@ worker/job runner -> result -> send final report
   `daily-morning-report`;
 - повторный Telegram `update_id` не создает второй job.
 
-Ограничение: постоянный auto worker/timer пока не подключен; после постановки
-в очередь job нужно выполнить вручную через `bot run-job-next` или будущий
-timer/worker. Apply callbacks Ozon Elastic/WB actions пока не переведены на
-JobService.
+Ограничение: постоянный auto worker/timer пока не подключен в systemd; после
+постановки в очередь job нужно выполнить вручную через `bot run-job-next`,
+`bot run-job-loop --max-iterations N` или будущий timer/worker. Apply
+callbacks Ozon Elastic/WB actions пока не переведены на JobService.
 
 ### Этап 6. Атомарные approvals и resource leases
 
