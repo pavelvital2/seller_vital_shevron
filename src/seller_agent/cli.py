@@ -256,6 +256,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Allow /status to build a fresh read-only status preflight.",
     )
+    bot.add_argument(
+        "--runtime-jobs",
+        action="store_true",
+        help="Queue live /status and /today through SQLite JobService instead of running inside polling.",
+    )
+    bot.add_argument(
+        "--runtime-db",
+        default="runtime/runtime.db",
+        help="SQLite runtime DB path for --runtime-jobs.",
+    )
 
     send_report = subparsers.add_parser(
         "send-telegram-report",
@@ -1815,6 +1825,8 @@ def main(argv: list[str] | None = None) -> int:
                 allowed_chat_ids=allowed_chat_ids or set(),
                 live_today=args.live_today,
                 live_status=args.live_status,
+                runtime_jobs=args.runtime_jobs,
+                runtime_db=Path(args.runtime_db),
                 timeout_seconds=args.timeout,
                 limit=args.limit,
                 poll_interval_seconds=args.poll_interval,
@@ -1828,6 +1840,8 @@ def main(argv: list[str] | None = None) -> int:
                 allowed_chat_ids=allowed_chat_ids,
                 live_today=args.live_today,
                 live_status=args.live_status,
+                runtime_jobs=args.runtime_jobs,
+                runtime_db=Path(args.runtime_db),
                 timeout_seconds=args.timeout,
                 limit=args.limit,
             )

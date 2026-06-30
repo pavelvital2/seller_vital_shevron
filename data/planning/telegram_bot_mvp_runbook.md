@@ -13,8 +13,11 @@ Telegram MVP - это первый безопасный слой будущег�
 command layer. Adapter умеет отправить preview-ответ, один раз обработать
 входящие updates через Telegram Bot API, работать в controlled polling loop,
 обрабатывать `callback_query` и прикреплять безопасный файл отчета из
-`artifacts`. Live read-only `/today` и `/status` запускаются через
-`WorkflowRunner`.
+`artifacts`. Live read-only `/today` и `/status` по умолчанию запускаются через
+`WorkflowRunner` для совместимости. С 2026-06-30 добавлен опциональный режим
+`--runtime-jobs`: polling ставит `/today` и `/status` в SQLite `JobStore`,
+дедуплицирует `telegram_updates.update_id` и сразу возвращает `job_id`; запуск
+очереди выполняется отдельным `jobs run-next` или будущим worker/timer.
 
 С 2026-06-30 подключены точечные write-кнопки: Ozon Elastic и WB акции
 `70-55-55`. Команды `/elastic` и `/wb-actions` строят fresh dry-run,
@@ -33,7 +36,10 @@ production-запуском.
 ```text
 src/seller_agent/bot/commands.py
 src/seller_agent/bot/dispatcher.py
+src/seller_agent/bot/runtime_jobs.py
 src/seller_agent/bot/telegram_runner.py
+src/seller_agent/core/job_service.py
+src/seller_agent/core/job_store.py
 src/seller_agent/core/workflow_runner.py
 ```
 
@@ -154,6 +160,32 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   --token-file /home/pavel/.secrets/vital_shevron_telegram_bot_token
 ```
 
+Опциональный async-runtime режим для live `/today` и `/status`:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli bot poll-loop \
+  --live-today \
+  --live-status \
+  --runtime-jobs \
+  --allowed-chat-id 123456789 \
+  --token-file /home/pavel/.secrets/vital_shevron_telegram_bot_token
+```
+
+В этом режиме Telegram polling не строит отчет внутри процесса polling, а
+создает job:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli jobs list
+
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli jobs run-next
+```
+
+Ограничение текущего слоя: итоговый отчет после завершения job еще не
+отправляется автоматически в Telegram. Это следующий шаг worker/notifier.
+
 Systemd user service template:
 
 ```text
@@ -171,11 +203,14 @@ Service должен включаться только после:
 
 - `/help` - список доступных read-only экранов.
 - `/status` - при `--live-status` строит свежий read-only `status-preflight`;
-  без `--live-status` показывает последний `status-preflight` из
-  `data/runs/index.jsonl`.
+  при дополнительном `--runtime-jobs` ставит `status-preflight` в SQLite
+  очередь и сразу возвращает `job_id`; без `--live-status` показывает
+  последний `status-preflight` из `data/runs/index.jsonl`.
 - `/today` - при `--live-today` строит свежий read-only
-  `daily-morning-report --seller-v3`; без `--live-today` показывает последний
-  `daily-morning-report` из `data/runs/index.jsonl`.
+  `daily-morning-report --seller-v3`; при дополнительном `--runtime-jobs`
+  ставит `daily-morning-report` в SQLite очередь и сразу возвращает `job_id`;
+  без `--live-today` показывает последний `daily-morning-report` из
+  `data/runs/index.jsonl`.
 - `/reviews` - последний `reviews-questions` из `data/runs/index.jsonl`.
 - `/approvals` - текущий обзор `approvals status`.
 - `/catalog` - последний `catalog-build-unified` из `data/runs/index.jsonl`;
@@ -261,6 +296,10 @@ cookies, storage state и файлы вне разрешенных директ�
 - MVP запускает из Telegram только live read-only `/today` и `/status`, если
   явно включены `--live-today` и `--live-status`. Остальные команды показывают
   уже сохраненные runtime-данные.
+- При `--runtime-jobs` live `/today` и `/status` не выполняются внутри polling:
+  Telegram update регистрируется в `telegram_updates`, повторный `update_id`
+  не создает второй job, а выполнение переносится на `jobs run-next` /
+  будущий worker.
 - Постоянный polling требует allowlist и lock-file; второй экземпляр polling
   должен завершаться с ошибкой lock.
 - Live read-only задачи используют per-task lock

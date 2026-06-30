@@ -13,7 +13,9 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from seller_agent.bot.dispatcher import dispatch_callback, dispatch_message
+from seller_agent.bot.runtime_jobs import dispatch_runtime_job_message
 from seller_agent.config import read_non_empty_lines
+from seller_agent.core.job_store import DEFAULT_RUNTIME_DB
 
 
 DEFAULT_TOKEN_FILE_ENVS = (
@@ -247,6 +249,8 @@ def poll_once(
     allowed_chat_ids: set[int] | None = None,
     live_today: bool = False,
     live_status: bool = False,
+    runtime_jobs: bool = False,
+    runtime_db: Path = DEFAULT_RUNTIME_DB,
     timeout_seconds: int = 0,
     limit: int = 20,
     api_request: ApiRequest = telegram_api_request,
@@ -356,12 +360,24 @@ def poll_once(
             continue
 
         thread_id = _maybe_int(message_obj.get("message_thread_id"))
-        command_result = dispatch_message(
-            text,
-            data_dir=data_dir,
-            live_today=live_today,
-            live_status=live_status,
-        )
+        command_result = None
+        if runtime_jobs and update_id is not None:
+            command_result = dispatch_runtime_job_message(
+                text,
+                update_id=update_id,
+                chat_id=chat_id,
+                data_dir=data_dir,
+                runtime_db=runtime_db,
+                live_today=live_today,
+                live_status=live_status,
+            )
+        if command_result is None:
+            command_result = dispatch_message(
+                text,
+                data_dir=data_dir,
+                live_today=live_today,
+                live_status=live_status,
+            )
         send_results = send_telegram_text(
             token=token,
             chat_id=chat_id,
@@ -412,6 +428,8 @@ def poll_loop(
     allowed_chat_ids: set[int],
     live_today: bool = False,
     live_status: bool = False,
+    runtime_jobs: bool = False,
+    runtime_db: Path = DEFAULT_RUNTIME_DB,
     timeout_seconds: int = 20,
     limit: int = 20,
     poll_interval_seconds: float = 1.0,
@@ -440,6 +458,8 @@ def poll_loop(
                     allowed_chat_ids=allowed_chat_ids,
                     live_today=live_today,
                     live_status=live_status,
+                    runtime_jobs=runtime_jobs,
+                    runtime_db=runtime_db,
                     timeout_seconds=timeout_seconds,
                     limit=limit,
                     api_request=api_request,

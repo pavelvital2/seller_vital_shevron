@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from seller_agent.bot.dispatcher import dispatch_callback, dispatch_message
+from seller_agent.bot.runtime_jobs import dispatch_runtime_job_message
 from seller_agent.bot.telegram_runner import (
     load_telegram_bot_token,
     poll_loop,
@@ -15,6 +16,7 @@ from seller_agent.bot.telegram_runner import (
     send_preview_command,
 )
 from seller_agent.cli import main
+from seller_agent.core.job_store import JobStore
 from seller_agent.core.run_manifest import manifest_from_summary, write_run_manifest
 
 
@@ -902,6 +904,89 @@ def test_poll_once_dispatches_allowed_chat_and_writes_offset(tmp_path: Path) -> 
     assert json.loads(state_file.read_text(encoding="utf-8"))["offset"] == 103
     send_call = [call for call in calls if call[1] == "sendMessage"][0]
     assert send_call[2]["message_thread_id"] == 55
+
+
+def test_runtime_job_dispatch_queues_live_status_and_deduplicates(tmp_path: Path) -> None:
+    runtime_db = tmp_path / "runtime.db"
+
+    first = dispatch_runtime_job_message(
+        "/status",
+        update_id=1001,
+        chat_id=123,
+        data_dir=tmp_path / "data",
+        runtime_db=runtime_db,
+        live_status=True,
+    )
+    duplicate = dispatch_runtime_job_message(
+        "/status",
+        update_id=1001,
+        chat_id=123,
+        data_dir=tmp_path / "data",
+        runtime_db=runtime_db,
+        live_status=True,
+    )
+
+    assert first is not None
+    assert first.ok is True
+    assert "поставлена в runtime-очередь" in first.text
+    assert duplicate is not None
+    assert "не поставлен в очередь второй раз" in duplicate.text
+
+    store = JobStore(runtime_db)
+    jobs = store.list_jobs()
+    updates = store.get_telegram_update(1001)
+    assert len(jobs) == 1
+    assert jobs[0].task_id == "status-preflight"
+    assert jobs[0].actor == "telegram:123"
+    assert jobs[0].params == {"include_lk": True}
+    assert updates is not None
+    assert updates.processing_status == "queued"
+    assert updates.job_id == jobs[0].job_id
+
+
+def test_poll_once_runtime_jobs_queues_live_today(tmp_path: Path) -> None:
+    calls: list[tuple[str, str, dict]] = []
+    runtime_db = tmp_path / "runtime.db"
+
+    def fake_api(token: str, method: str, payload: dict) -> dict:
+        calls.append((token, method, payload))
+        if method == "getUpdates":
+            return {
+                "ok": True,
+                "result": [
+                    {
+                        "update_id": 401,
+                        "message": {
+                            "chat": {"id": 123},
+                            "text": "/today",
+                            "message_thread_id": 55,
+                        },
+                    }
+                ],
+            }
+        return {"ok": True, "result": {"message_id": 21}}
+
+    result = poll_once(
+        token="secret-token",
+        data_dir=tmp_path / "data",
+        state_file=tmp_path / ".sessions" / "telegram" / "state.json",
+        allowed_chat_ids={123},
+        live_today=True,
+        runtime_jobs=True,
+        runtime_db=runtime_db,
+        api_request=fake_api,
+    )
+
+    assert result["ok"] is True
+    assert result["processed_updates"] == 1
+    send_call = [call for call in calls if call[1] == "sendMessage"][0]
+    assert "Job ID:" in send_call[2]["text"]
+    assert send_call[2]["message_thread_id"] == 55
+
+    jobs = JobStore(runtime_db).list_jobs()
+    assert len(jobs) == 1
+    assert jobs[0].task_id == "daily-morning-report"
+    assert jobs[0].params == {"refresh_preflight": True, "seller_v2": False, "seller_v3": True}
 
 
 def test_poll_once_dispatches_callback_query(

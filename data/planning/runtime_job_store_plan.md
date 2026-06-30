@@ -235,7 +235,8 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 
 - CLI может создать job и дождаться результата - выполнено для read-only
   задач, которые уже поддерживает текущий `WorkflowRunner`;
-- Telegram получает `job_id` сразу;
+- Telegram получает `job_id` сразу - выполнено для live `/status` и `/today`
+  в опциональном режиме `bot poll-once|poll-loop --runtime-jobs`;
 - итоговый report отправляется после завершения;
 - все запуски видны в `jobs` и `job_events`;
 - `RunManifest` продолжает писаться как artifact.
@@ -251,10 +252,25 @@ worker/job runner -> result -> send final report
 
 Нужно добавить:
 
-- `callback_query` support;
-- dedup by `update_id`;
+- `callback_query` support - уже есть для Ozon Elastic/WB actions, но apply
+  еще не переведен на JobService;
+- dedup by `update_id` - выполнено для message updates в режиме
+  `--runtime-jobs`;
 - команды `/jobs`, `/job_<id>`, `/cancel_<id>`;
 - безопасную отправку report files через существующий attachment policy.
+
+Реализовано в первом optional-слое:
+
+- `src/seller_agent/bot/runtime_jobs.py`;
+- `bot poll-once|poll-loop --runtime-jobs --runtime-db ...`;
+- `/status` + `--live-status --runtime-jobs` создает job
+  `status-preflight`;
+- `/today` + `--live-today --runtime-jobs` создает job
+  `daily-morning-report`;
+- повторный Telegram `update_id` не создает второй job.
+
+Ограничение: auto worker/notifier пока не подключен; после постановки в
+очередь job нужно выполнить через `jobs run-next` или будущий timer/worker.
 
 ### Этап 6. Атомарные approvals и resource leases
 
