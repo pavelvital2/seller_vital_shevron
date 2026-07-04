@@ -273,7 +273,13 @@ def run_wb_actions_discount_apply(
     raw_dir = ensure_dir(run_dir / "raw")
     processed_dir = ensure_dir(run_dir / "processed")
 
-    preflight = run_status_preflight(credentials=credentials, data_dir=data_dir)
+    preflight = run_status_preflight(
+        credentials=credentials,
+        data_dir=data_dir,
+        include_lk=False,
+        marketplaces=("wb",),
+        include_ozon_performance=False,
+    )
     if preflight["overall_status"] != "ok":
         raise RuntimeError(f"preflight is not ok: {preflight['overall_status']}")
 

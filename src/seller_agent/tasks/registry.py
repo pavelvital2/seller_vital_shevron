@@ -633,6 +633,66 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_credentials=True,
         requires_mapping=True,
         requires_confirmation=True,
+        source_plan_task="wb-card-create-plan",
+        verify_task="wb-card-create-apply",
+        lock_keys=("marketplace:wb", "cards:wb:create"),
+    ),
+    RegisteredTask(
+        name="ozon-card-create-plan",
+        command="plan-ozon-card-create",
+        title="Plan Ozon card create",
+        description="Build dry-run plan for creating WB-only product cards in Ozon from owner-approved Layer 3 passports.",
+        mode="dry_run",
+        risk="high",
+        marketplaces=("ozon",),
+        runbook_path="data/planning/card_ops/04_ozon_card_create_later.md",
+        requires_credentials=True,
+        requires_mapping=True,
+    ),
+    RegisteredTask(
+        name="ozon-card-create-apply",
+        command="apply-ozon-card-create",
+        title="Apply Ozon card create",
+        description="Create planned WB-only product cards in Ozon through /v3/product/import and verify the result.",
+        mode="apply",
+        risk="high",
+        marketplaces=("ozon",),
+        runbook_path="data/planning/card_ops/04_ozon_card_create_later.md",
+        requires_credentials=True,
+        requires_mapping=True,
+        requires_confirmation=True,
+        source_plan_task="ozon-card-create-plan",
+        verify_task="ozon-card-create-verify",
+        lock_keys=("marketplace:ozon", "cards:ozon:create"),
+    ),
+    RegisteredTask(
+        name="ozon-product-remove-plan",
+        command="plan-ozon-product-remove",
+        title="Plan Ozon product remove",
+        description=(
+            "Build dry-run plan to delete an uncreated/no-SKU Ozon product or "
+            "archive an existing Ozon product through documented Ozon API routes."
+        ),
+        mode="dry_run",
+        risk="high",
+        marketplaces=("ozon",),
+        runbook_path="data/planning/card_ops/05_ozon_product_remove.md",
+        requires_credentials=True,
+    ),
+    RegisteredTask(
+        name="ozon-product-remove-apply",
+        command="apply-ozon-product-remove",
+        title="Apply Ozon product remove",
+        description="Apply an owner-approved Ozon product delete/archive dry-run and verify the result.",
+        mode="apply",
+        risk="high",
+        marketplaces=("ozon",),
+        runbook_path="data/planning/card_ops/05_ozon_product_remove.md",
+        requires_credentials=True,
+        requires_confirmation=True,
+        source_plan_task="ozon-product-remove-plan",
+        verify_task="ozon-product-remove-apply",
+        lock_keys=("marketplace:ozon", "cards:ozon:remove"),
     ),
     RegisteredTask(
         name="seller-sku-update-plan",
@@ -664,6 +724,9 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_credentials=True,
         requires_mapping=True,
         requires_confirmation=True,
+        source_plan_task="seller-sku-update-plan",
+        verify_task="seller-sku-update-apply",
+        lock_keys=("marketplace:ozon", "marketplace:wb", "cards:seller-sku"),
     ),
     RegisteredTask(
         name="card-content-update-plan",
@@ -689,7 +752,7 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
             "a Layer 3 approved master passport before marketplace apply."
         ),
         mode="dry_run",
-        risk="medium",
+        risk="normal",
         marketplaces=("ozon", "wb"),
         runbook_path="data/planning/card_ops/quick_access.md",
         requires_credentials=False,
@@ -710,6 +773,9 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_credentials=True,
         requires_mapping=True,
         requires_confirmation=True,
+        source_plan_task="card-content-update-plan",
+        verify_task="card-content-update-apply",
+        lock_keys=("marketplace:ozon", "marketplace:wb", "cards:content"),
     ),
     RegisteredTask(
         name="approved-card-apply",
@@ -726,6 +792,9 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_credentials=True,
         requires_mapping=True,
         requires_confirmation=True,
+        source_plan_task="owner-approved-card-html-layer3-passport",
+        verify_task="apply-approved-card",
+        lock_keys=("marketplace:ozon", "marketplace:wb", "cards:approved-card"),
     ),
     RegisteredTask(
         name="approved-cards-batch-apply",
@@ -733,7 +802,8 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         title="Apply approved cards batch",
         description=(
             "Batch owner-approved card path: apply content updates, seller SKU "
-            "replacement and WB card creation for several cards in one run."
+            "replacement, WB card creation and Ozon card creation for several "
+            "cards in one run."
         ),
         mode="apply",
         risk="high",
@@ -742,6 +812,9 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_credentials=True,
         requires_mapping=True,
         requires_confirmation=True,
+        source_plan_task="owner-approved-card-html-layer3-passport",
+        verify_task="apply-approved-cards",
+        lock_keys=("marketplace:ozon", "marketplace:wb", "cards:batch-apply"),
     ),
     RegisteredTask(
         name="reviews-questions",

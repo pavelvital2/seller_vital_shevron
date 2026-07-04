@@ -252,16 +252,7 @@ def _summarize_master_catalog(data_dir: Path) -> dict[str, Any]:
 
 def _check_lk_sessions(*, include_lk: bool) -> dict[str, Any]:
     if not include_lk:
-        return {
-            "ozon_keeper_pid": {"status": "skipped"},
-            "ozon_watchdog_pid": {"status": "skipped"},
-            "ozon_cdp": {"status": "skipped"},
-            "ozon_keepalive": {"status": "skipped"},
-            "ozon_refresh_state": {"status": "skipped"},
-            "wb_watchdog_pid": {"status": "skipped"},
-            "wb_keepalive": {"status": "skipped"},
-            "wb_refresh_state": {"status": "skipped"},
-        }
+        return {}
 
     session_dir = PROJECT_ROOT / ".sessions"
     env = dict(os.environ)

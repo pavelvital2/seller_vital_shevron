@@ -1,10 +1,12 @@
 import pytest
 
+from seller_agent.config import AppCredentials, WbCredentials
 from seller_agent.tasks.wb_actions_discount_apply import (
     _assert_no_drift,
     _build_partial_drift_payload,
     _latest_history_data,
     _payload_from_rows,
+    run_wb_actions_discount_apply,
 )
 
 
@@ -106,3 +108,56 @@ def test_latest_history_data_returns_last_non_empty_poll() -> None:
         "overAllGoodsNumber": 302,
         "successGoodsNumber": 302,
     }
+
+
+def test_wb_actions_apply_uses_wb_scoped_api_preflight(tmp_path, monkeypatch) -> None:
+    plan_dir = tmp_path / "runs" / "2026-07-04" / "wb_actions_discount_plan_70-55-55_test"
+    plan_dir.mkdir(parents=True)
+    csv_path = plan_dir / "wb-discount-calculation-active-actions-70-55-55.csv"
+    csv_path.write_text(
+        "Артикул WB;Базовая цена;Финальная скидка;Дельта, п.п.\n"
+        "101;1100;55;0\n",
+        encoding="utf-8-sig",
+    )
+    (plan_dir / "summary.json").write_text(
+        (
+            '{"run_id":"wb_actions_discount_plan_70-55-55_test",'
+            '"summary":{"scheme":"70-55-55"},'
+            f'"artifacts":{{"csv":"{csv_path}"}}}}'
+        ),
+        encoding="utf-8",
+    )
+    calls = {}
+
+    def fake_preflight(**kwargs):
+        calls["preflight"] = kwargs
+        return {
+            "run_id": "status_preflight_wb_api_only",
+            "overall_status": "ok",
+            "artifacts": {},
+        }
+
+    def fake_fresh_plan(**kwargs):
+        calls["fresh_plan"] = kwargs
+        return {
+            "run_id": "wb_actions_discount_plan_70-55-55_fresh",
+            "summary": {"scheme": "70-55-55"},
+            "artifacts": {"csv": str(csv_path)},
+        }
+
+    monkeypatch.setattr("seller_agent.tasks.wb_actions_discount_apply.run_status_preflight", fake_preflight)
+    monkeypatch.setattr("seller_agent.tasks.wb_actions_discount_apply.run_wb_actions_discount_plan", fake_fresh_plan)
+
+    result = run_wb_actions_discount_apply(
+        credentials=AppCredentials(ozon_seller=None, ozon_performance=None, wb=WbCredentials(token="token")),
+        data_dir=tmp_path,
+        plan_run_id="wb_actions_discount_plan_70-55-55_test",
+        run_id="wb_actions_discount_apply_70-55-55_test",
+        confirmed_by_user=True,
+    )
+
+    assert result["preflight"]["run_id"] == "status_preflight_wb_api_only"
+    assert calls["preflight"]["include_lk"] is False
+    assert calls["preflight"]["marketplaces"] == ("wb",)
+    assert calls["preflight"]["include_ozon_performance"] is False
+    assert calls["fresh_plan"]["scheme_text"] == "70-55-55"

@@ -32,7 +32,8 @@ Owner-approved HTML по карточке является review-пакетом
 | Смена артикулов продавца Ozon/WB на внутренний артикул | `data/planning/card_ops/02_seller_sku_update_ozon_wb.md` | автоматизировано: `plan-seller-sku-update`, `apply-seller-sku-update` |
 | Изменение параметров существующих карточек Ozon/WB | `data/planning/card_ops/03_card_content_update_ozon_wb.md` | быстрый путь: `apply-approved-card`; batch-путь: `apply-approved-cards`; ручной debug-путь: `plan-card-content-update`, `apply-card-content-update` |
 | Promotion owner-approved Layer 2 audit/HTML в Layer 3 passport | этот файл | автоматизировано: `promote-approved-card-passport`; также встроено как preflight в `apply-approved-cards` |
-| Создание карточки на Ozon | `data/planning/card_ops/04_ozon_card_create_later.md` | позже, пока не применять |
+| Создание карточки на Ozon из owner-approved HTML / Layer 3 passport | `data/planning/card_ops/04_ozon_card_create_later.md` | автоматизировано: `plan-ozon-card-create`, `apply-ozon-card-create`; встроено в `apply-approved-cards` при `--ozon-create-min-price`; WB price fallback требует manual review |
+| Удаление не созданной Ozon-карточки без SKU или архивирование созданной карточки | `data/planning/card_ops/05_ozon_product_remove.md` | автоматизировано: `plan-ozon-product-remove`, `apply-ozon-product-remove` |
 
 ## Общие read-only команды перед карточными write-операциями
 
@@ -121,6 +122,7 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   --internal-sku <sku_1> \
   --internal-sku <sku_2> \
   --internal-sku <sku_3> \
+  --ozon-create-min-price <min_price_if_needed> \
   --confirmed-by-user
 ```
 
@@ -134,6 +136,9 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 - строит WB create plan из owner-approved Layer 3 passport только по
   указанным SKU;
 - создает недостающие WB-карточки, загружает фото и проверяет результат;
+- создает недостающие Ozon-карточки из WB-only owner-approved passports,
+  если передан `--ozon-create-min-price`; без минимальной цены стадия
+  блокируется отдельно и не мешает готовым WB/content/SKU стадиям;
 - в конце делает обязательный финальный catalog-sync по старым и новым
   идентификаторам: старый Ozon `offer_id`, старый WB `vendorCode`, новый
   internal SKU, `product_id` и `nmID`;
@@ -143,9 +148,10 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   replacement и catalog-sync;
 - пишет один общий run/report для пачки.
 
-Если одна карточка блокируется на dry-run, batch должен продолжить по ready
-карточкам и вынести blocked строки в общий отчет. Для больших пачек начинать с
-5 SKU; после стабильной серии можно переходить к 10 SKU.
+Если одна карточка или отдельная стадия блокируется на dry-run, batch должен
+продолжить по ready карточкам и вынести blocked строки в общий отчет. Для
+больших пачек начинать с 5 SKU; после стабильной серии можно переходить к
+10 SKU.
 
 Подтверждено 2026-06-29 на пачке `0009-0014`: перед batch apply нужно
 проверить, что для каждого owner-approved HTML/Layer 2 audit уже есть файл:
@@ -181,13 +187,44 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   --confirmed-by-user
 ```
 
-## Команды, которые еще нужно сделать штатными
+## Ozon create
 
-Следующие команды пока не реализованы. Пока их нет, агент обязан явно написать
-в отчете: `штатной CLI-команды нет`, использовать профильную инструкцию и
-сохранять полный run с request, response, verify и summary без секретов.
+Для owner-approved WB-only карточек:
 
 ```bash
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
-  -m seller_agent.cli plan-ozon-card-create --input data/pending/<package>.json
+  -m seller_agent.cli plan-ozon-card-create \
+  --internal-sku <internal_sku>
+```
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli apply-ozon-card-create \
+  --plan-run-id <plan_run_id> \
+  --confirmed-by-user
+```
+
+Если Ozon-цена отсутствует и владелец согласовал использовать WB price fallback,
+сначала строить plan с `--allow-wb-price-fallback`, затем apply с
+`--allow-manual-review`.
+
+## Ozon remove/archive
+
+Для policy-блокеров и ошибочных Ozon-карточек использовать штатный маршрут из
+`data/planning/card_ops/05_ozon_product_remove.md`, не ручные API-скрипты:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli plan-ozon-product-remove \
+  --offer-id <offer_id> \
+  --product-id <product_id> \
+  --action auto \
+  --reason "<owner-approved reason>"
+```
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli apply-ozon-product-remove \
+  --plan-run-id <plan_run_id> \
+  --confirmed-by-user
 ```

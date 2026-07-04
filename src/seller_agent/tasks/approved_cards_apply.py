@@ -14,6 +14,8 @@ from seller_agent.tasks.card_content_update import (
     run_card_content_update_apply,
     run_card_content_update_plan,
 )
+from seller_agent.tasks.ozon_card_create_apply import run_ozon_card_create_apply
+from seller_agent.tasks.ozon_card_create_plan import run_ozon_card_create_plan
 from seller_agent.tasks.seller_sku_update import (
     run_seller_sku_update_apply,
     run_seller_sku_update_plan,
@@ -212,6 +214,17 @@ def _passport_wants_wb_create(data_dir: Path, sku: str) -> bool:
     return True
 
 
+def _passport_wants_ozon_create(data_dir: Path, sku: str) -> bool:
+    path = data_dir / "catalog" / "master_passport" / "approved" / f"{sku}.json"
+    if not path.exists():
+        return False
+    passport = _read_json(path)
+    identity = passport.get("identity") or {}
+    if _normalize_text(identity.get("ozon_offer_id") or identity.get("ozon_product_id")):
+        return False
+    return bool(_normalize_text(identity.get("wb_vendor_code") or identity.get("wb_nm_id")))
+
+
 def _run_wb_create_stage(
     *,
     credentials: AppCredentials,
@@ -253,6 +266,75 @@ def _run_wb_create_stage(
     )
     status = "ok" if apply.get("overall_status") == "ok" else "warning"
     return _stage(status, plan=plan, apply=apply, ready_skus=create_skus, blocked=[], local_updates=local_updates)
+
+
+def _run_ozon_create_stage(
+    *,
+    credentials: AppCredentials,
+    data_dir: Path,
+    internal_skus: list[str],
+    base_run_id: str,
+    min_price: str,
+    allow_manual_review: bool,
+    wait_seconds: int,
+    poll_interval: int,
+) -> dict[str, Any]:
+    create_skus = [sku for sku in internal_skus if _passport_wants_ozon_create(data_dir, sku)]
+    if not create_skus:
+        return _stage("skipped", plan=None, apply=None, ready_skus=[], blocked=[])
+    if not _normalize_text(min_price):
+        return _stage(
+            "blocked",
+            plan=None,
+            apply=None,
+            ready_skus=[],
+            blocked=[{"reason": "ozon_create_min_price_required", "internal_skus": create_skus}],
+        )
+    plan = run_ozon_card_create_plan(
+        credentials=credentials,
+        data_dir=data_dir,
+        internal_skus=create_skus,
+        run_id=f"{base_run_id}_ozon_create_plan",
+        min_price=min_price,
+        allow_wb_price_fallback=allow_manual_review,
+    )
+    plan_path = Path(plan["artifacts"]["plan"])
+    ready_skus, blocked = _ready_skus_from_plan(plan_path)
+    manual_review_items = int(plan.get("manual_review_items") or 0)
+    if not ready_skus:
+        return _stage("blocked", plan=plan, apply=None, ready_skus=[], blocked=blocked)
+    if manual_review_items and not allow_manual_review:
+        return _stage(
+            "blocked",
+            plan=plan,
+            apply=None,
+            ready_skus=ready_skus,
+            blocked=[*blocked, {"reason": "ozon_create_manual_review_items", "count": manual_review_items}],
+        )
+    apply_plan = plan
+    apply_plan_run_id = plan["run_id"]
+    if set(ready_skus) != set(create_skus):
+        apply_plan = run_ozon_card_create_plan(
+            credentials=credentials,
+            data_dir=data_dir,
+            internal_skus=ready_skus,
+            run_id=f"{base_run_id}_ozon_create_plan_ready",
+            min_price=min_price,
+            allow_wb_price_fallback=allow_manual_review,
+        )
+        apply_plan_run_id = apply_plan["run_id"]
+    apply = run_ozon_card_create_apply(
+        credentials=credentials,
+        data_dir=data_dir,
+        plan_run_id=apply_plan_run_id,
+        run_id=f"{base_run_id}_ozon_create_apply",
+        confirmed_by_user=True,
+        allow_manual_review=allow_manual_review,
+        wait_seconds=wait_seconds,
+        poll_interval=poll_interval,
+    )
+    status = "ok" if apply.get("overall_status") == "ok" else "warning"
+    return _stage(status, plan=plan, apply=apply, ready_skus=ready_skus, blocked=blocked)
 
 
 def _update_json_rows(path: Path, key_names: tuple[str, ...], values: dict[str, dict[str, str]]) -> int:
@@ -812,6 +894,10 @@ def run_apply_approved_cards(
     seller_sku_poll_interval: int = 5,
     wb_create_wait_seconds: int = 600,
     wb_create_poll_interval: int = 30,
+    ozon_create_min_price: str = "",
+    ozon_create_allow_manual_review: bool = False,
+    ozon_create_wait_seconds: int = 300,
+    ozon_create_poll_interval: int = 10,
 ) -> dict[str, Any]:
     if not confirmed_by_user:
         raise RuntimeError("Apply requires explicit user confirmation")
@@ -836,9 +922,11 @@ def run_apply_approved_cards(
                 "content_ready": 0,
                 "seller_sku_ready": 0,
                 "wb_create_ready": 0,
+                "ozon_create_ready": 0,
                 "content_status": "skipped",
                 "seller_sku_status": "skipped",
                 "wb_create_status": "skipped",
+                "ozon_create_status": "skipped",
                 "catalog_sync_status": "skipped",
                 "passport_preflight_status": "blocked",
             },
@@ -897,20 +985,31 @@ def run_apply_approved_cards(
         wait_seconds=wb_create_wait_seconds,
         poll_interval=wb_create_poll_interval,
     )
+    ozon_create = _run_ozon_create_stage(
+        credentials=credentials,
+        data_dir=data_dir,
+        internal_skus=seller_ready or content_ready or skus,
+        base_run_id=base_run_id,
+        min_price=ozon_create_min_price,
+        allow_manual_review=ozon_create_allow_manual_review,
+        wait_seconds=ozon_create_wait_seconds,
+        poll_interval=ozon_create_poll_interval,
+    )
+    final_skus = sorted(set((seller_ready or content_ready or skus) + (ozon_create.get("ready_skus") or [])))
 
     catalog_sync = _sync_approved_card_catalog_layers(
         data_dir=data_dir,
-        internal_skus=seller_ready or content_ready or skus,
+        internal_skus=final_skus,
         run_id=base_run_id,
     )
     post_verify = _run_post_apply_content_verify(
         credentials=credentials,
         data_dir=data_dir,
-        internal_skus=seller_ready or content_ready or skus,
+        internal_skus=final_skus,
         base_run_id=base_run_id,
     )
 
-    stage_statuses = [content["status"], seller_sku["status"], wb_create["status"], post_verify["status"]]
+    stage_statuses = [content["status"], seller_sku["status"], wb_create["status"], ozon_create["status"], post_verify["status"]]
     overall_status = "ok"
     if any(status in {"blocked", "error"} for status in stage_statuses):
         overall_status = "warning"
@@ -933,9 +1032,11 @@ def run_apply_approved_cards(
             "content_ready": len(content_ready),
             "seller_sku_ready": len(seller_ready),
             "wb_create_ready": len(wb_create.get("ready_skus") or []),
+            "ozon_create_ready": len(ozon_create.get("ready_skus") or []),
             "content_status": content["status"],
             "seller_sku_status": seller_sku["status"],
             "wb_create_status": wb_create["status"],
+            "ozon_create_status": ozon_create["status"],
             "catalog_sync_status": catalog_sync.get("status", "unknown"),
             "post_verify_status": post_verify["status"],
             "passport_preflight_status": passport_preflight.get("status", "unknown"),
@@ -945,6 +1046,7 @@ def run_apply_approved_cards(
             "content_update": content,
             "seller_sku_update": seller_sku,
             "wb_card_create": wb_create,
+            "ozon_card_create": ozon_create,
             "post_apply_content_verify": post_verify,
         },
         "local_catalog_sync": catalog_sync,
@@ -969,6 +1071,9 @@ def run_apply_approved_cards(
             "content_wait_seconds": content_wait_seconds,
             "seller_sku_wait_seconds": seller_sku_wait_seconds,
             "wb_create_wait_seconds": wb_create_wait_seconds,
+            "ozon_create_min_price": ozon_create_min_price,
+            "ozon_create_allow_manual_review": ozon_create_allow_manual_review,
+            "ozon_create_wait_seconds": ozon_create_wait_seconds,
         },
         lifecycle_status="verified" if overall_status == "ok" else "applied",
         closed=overall_status == "ok",

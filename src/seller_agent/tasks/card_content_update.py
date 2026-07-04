@@ -32,6 +32,7 @@ OZON_ATTR_IDS = {
     "country": 4389,
     "factory_packs": 11650,
     "tnved": 22232,
+    "marking_required": 23536,
 }
 WB_CHAR_IDS = {
     "title": 15000000,
@@ -43,6 +44,11 @@ WB_CHAR_IDS = {
     "decor_type": 384944,
     "qty": 179792,
     "kit": 378533,
+}
+
+WB_COLOR_ALIASES = {
+    "олива": "оливковый",
+    "чёрный": "черный",
 }
 
 
@@ -67,6 +73,15 @@ def _split_values(value: Any) -> list[str]:
     if isinstance(value, list):
         return [_normalize_text(item) for item in value if _normalize_text(item)]
     return [_normalize_text(item) for item in re.split(r"[,;]", _normalize_text(value)) if _normalize_text(item)]
+
+
+def _normalize_wb_colors(values: list[str]) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        normalized = WB_COLOR_ALIASES.get(value.lower(), value)
+        if normalized and normalized not in result:
+            result.append(normalized)
+    return result
 
 
 def _field_value(attrs: list[dict[str, Any]], field: str) -> str:
@@ -226,6 +241,7 @@ def _ozon_target(passport: dict[str, Any]) -> dict[str, Any]:
         "release_type": "Фабричное производство",
         "adult": "Взрослая",
         "factory_packs": "1",
+        "marking_required": "false",
         "package_mm": _normalize_text(physical.get("package_dimensions_ozon_mm")),
         "weight_g": _normalize_text(physical.get("package_weight_g") or physical.get("item_weight_g")),
     }
@@ -256,6 +272,7 @@ def _build_ozon_payload(
     _set_ozon_attr(attrs, OZON_ATTR_IDS["release_type"], [target["release_type"]])
     _set_ozon_attr(attrs, OZON_ATTR_IDS["adult"], [target["adult"]])
     _set_ozon_attr(attrs, OZON_ATTR_IDS["factory_packs"], [target["factory_packs"]])
+    _set_ozon_attr(attrs, OZON_ATTR_IDS["marking_required"], [target["marking_required"]])
 
     dimensions = _parse_ozon_package_mm(target["package_mm"])
     price = _price_value(price_row, "ozon_price")
@@ -320,7 +337,7 @@ def _wb_target(passport: dict[str, Any]) -> dict[str, Any]:
     return {
         "title": _normalize_text(content.get("wb_title") or content.get("canonical_title")),
         "description": _normalize_text(content.get("wb_description") or content.get("canonical_description")),
-        "colors": _split_values(_field_value(wb_attrs, "Цвет")),
+        "colors": _normalize_wb_colors(_split_values(_field_value(wb_attrs, "Цвет"))),
         "dimensions": _parse_wb_package_cm(_normalize_text(physical.get("package_dimensions_wb_cm"))),
         "weight": _kg_from_g(physical.get("package_weight_g") or physical.get("item_weight_g")),
         "decor_type": _field_value(wb_attrs, "Вид декора для одежды") or "шеврон",

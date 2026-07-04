@@ -6,6 +6,5 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 WorkingDirectory=/home/pavel/projects/seller_vital_shevron
-Environment=WB_EXPECTED_SELLER=
+Environment="WB_EXPECTED_SELLER=ИП Витальская И. П."
 ExecStart=/usr/bin/env node /home/pavel/projects/seller_vital_shevron/scripts/sessions/wb_session_keepalive.js
-

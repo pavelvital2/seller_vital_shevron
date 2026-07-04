@@ -97,20 +97,21 @@ runtime-контура. Она не заменяет `RunManifest`: job store х
 - `apply-card-content-update`;
 - `apply-approved-card`;
 - `apply-approved-cards`;
+- `plan-ozon-card-create`;
+- `apply-ozon-card-create`;
+- `plan-ozon-product-remove`;
+- `apply-ozon-product-remove`;
 
 `apply-approved-cards` использовать после согласования владельцем пачки
-карточек: команда объединяет content update, seller SKU replacement и WB create
-в один batch-run с общим отчетом. Перед внешними write-операциями команда
+карточек: команда объединяет content update, seller SKU replacement, WB create
+и Ozon create в один batch-run с общим отчетом. Для Ozon create обязательно
+передавать `--ozon-create-min-price`, иначе блокируется только стадия создания
+Ozon-карточек. Перед внешними write-операциями команда
 проверяет наличие Layer 3 passport и при необходимости вызывает
 `promote-approved-card-passport` для отсутствующих owner-approved Layer 2
 audit/HTML. После смены seller SKU запускает нормализованный post-verify по
 новым internal SKU. Не запускать одноштучный `apply-approved-card` по кругу,
 если согласовано несколько карточек.
-
-Следующие карточные команды должны быть добавлены в `TaskRegistry`, когда
-будут реализованы в CLI:
-
-- позже: `plan-ozon-card-create`, `apply-ozon-card-create`.
 
 Фильтры:
 

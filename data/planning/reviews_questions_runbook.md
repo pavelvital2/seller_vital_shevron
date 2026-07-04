@@ -238,6 +238,30 @@ NODE_PATH=/home/Codex/agent-tools/node/node_modules \
 
 ## Проверенные операции
 
+### Штатный apply 2026-07-01
+
+- Pending-пакет:
+  `data/pending/reviews_questions_20260701T065514_pending`.
+- Approved-пакет:
+  `data/approved/reviews_questions_20260701T065514_pending_approved/approved_apply_plan.json`.
+- Apply: `reviews_questions_apply_20260701T071913`.
+- Результат apply: WB ответы `1/1`, WB вопросы `0/0`, Ozon публичные ответы
+  `4/4`, Ozon отметки просмотренным `61/61`.
+- Счетчик Ozon перед/после: `NOT_VIEWED 65 -> 0`, `PROCESSED 2629 -> 2633`,
+  `VIEWED 4244 -> 4305`.
+- Контрольный read-only: `reviews_questions_20260701T072132`.
+- Verify: `items_count=0`, `actions_count=0`; WB Feedbacks API вернул `0`
+  отзывов/вопросов к обработке, Ozon LK/CDP fallback вернул `0` отзывов и `0`
+  вопросов к обработке.
+- Нулевой pending контрольного verify
+  `reviews_questions_20260701T072132_pending` закрыт как
+  `verify_zero_actions_after_apply`, чтобы он не висел в статусах на
+  согласование.
+- Ограничение источника: официальный Ozon Review API `/v1/review/count` и
+  `/v1/review/list` вернул `HTTP 403: not available with existing
+  subscription`, поэтому Ozon проверен через LK/CDP fallback.
+- Медиа: в согласованном пакете отзывов не было фото или видео.
+
 ### Штатный apply 2026-06-29
 
 - Pending-пакет:

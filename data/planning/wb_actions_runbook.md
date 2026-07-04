@@ -131,7 +131,7 @@ Callback не может применять произвольный run: бот
 Apply из кнопки использует штатный контур CLI:
 
 - `confirmed_by_user=True`;
-- fresh `status-preflight`;
+- fresh WB-scoped API/catalog `status-preflight` без проверки Ozon LK/CDP;
 - fresh `plan-wb-actions-discounts` по схеме утвержденного плана;
 - partial drift-check по payload `nmID + price + discount`;
 - upload только неизменившихся строк;
@@ -141,6 +141,39 @@ Apply из кнопки использует штатный контур CLI:
 Если WB вернул частичный успех или карантин цен, кнопку не повторять вслепую:
 использовать раздел `Карантин цен WB при резком снижении цены` ниже и
 готовить отдельный recovery/dry-run для отказанных строк.
+
+### Параллельный запуск `/wb-actions`
+
+Подтвержденный сценарий 2026-07-04:
+
+- из CLI уже выполнялся fresh dry-run
+  `wb_actions_discount_plan_70-55-55_20260704T092906`;
+- владелец параллельно отправил `/wb-actions` в Telegram;
+- второй процесс попытался открыть тот же WB persistent profile
+  `.sessions/wb/browser-profile`;
+- Chrome/Playwright вернул длинную техническую ошибку с аргументами запуска
+  браузера, бот показал ее как причину;
+- marketplace write не выполнялся, расчет из CLI завершился штатно:
+  `overall_status=ok`, `total_goods=448`, `to_change=10`.
+
+Постоянный fix:
+
+- `run_wb_actions_discount_plan` ставит файловый lock
+  `.sessions/locks/wb_actions_discount_plan.lock` перед запуском WB LK
+  snapshot;
+- если lock занят, второй dry-run не трогает WB browser profile и возвращает
+  понятную ошибку "дождитесь завершения текущего расчета";
+- Chrome profile / `user-data-dir` ошибки нормализуются, чтобы не выводить в
+  Telegram длинную командную строку Chrome.
+
+Правило работы:
+
+1. Не запускать два `/wb-actions`/`plan-wb-actions-discounts` параллельно.
+2. Если бот сообщил, что расчет уже выполняется, дождаться завершения текущего
+   run и повторить `/wb-actions`.
+3. После любого изменения кода Telegram-бота или задач, вызываемых ботом,
+   перезапустить `vital-shevron-telegram-bot.service`, иначе polling-процесс
+   продолжит работать со старым импортированным кодом.
 
 ## Apply
 
@@ -166,7 +199,8 @@ PYTHONPATH=src NODE_PATH=/home/Codex/agent-tools/node/node_modules \
 
 Apply выполняет:
 
-- свежий `status-preflight`;
+- свежий WB-scoped API/catalog `status-preflight`
+  (`marketplaces=("wb",)`, `include_lk=False`);
 - свежий dry-run WB по схеме из утвержденного плана;
 - partial drift-check payload строк `nmID + price + discount`;
 - upload только строк, где `nmID + price + discount` совпали между
@@ -183,6 +217,30 @@ Apply выполняет:
 Если после fresh dry-run изменились только отдельные строки, нельзя
 останавливать весь пакет: неизменившиеся строки применяются, изменившиеся
 строки пропускаются и остаются на новый review/approval.
+
+### Scoped preflight для WB actions
+
+Подтверждено 2026-07-04 после перезагрузки Seller VPS:
+
+- Ozon CDP/keeper Vital Shevron на `127.0.0.1:9544` был не запущен, потому что
+  LK-сессии работали legacy pid-процессами, а не enabled `systemd --user`
+  units;
+- общий full `status-preflight` вернул `error` по Ozon LK, хотя WB API и WB
+  keepalive были `ok`;
+- попытка `apply-wb-actions-discounts` остановилась до upload с ошибкой
+  `preflight is not ok: error`.
+
+Правило:
+
+1. WB actions apply не должен блокироваться из-за unrelated Ozon LK/CDP.
+2. Перед WB upload выполнять WB-scoped API/catalog preflight:
+   `marketplaces=("wb",)`, `include_lk=False`, `include_ozon_performance=False`.
+3. Актуальность WB ЛК, активных акций и цен проверять следующим обязательным
+   fresh dry-run `plan-wb-actions-discounts`; если он не может получить WB
+   snapshot, upload не выполняется.
+4. Full `status-preflight` остается общей проверкой здоровья проекта и может
+   показывать инфраструктурные проблемы Ozon/WB, но не должен быть
+   единственным gate для marketplace-local API apply.
 
 ## Штатный apply 2026-06-16
 

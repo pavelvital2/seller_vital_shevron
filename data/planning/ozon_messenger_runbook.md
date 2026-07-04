@@ -399,6 +399,34 @@ approved package.
 - После apply выполнен `ozon_session_keepalive_cdp.js`; контур Vital Shevron
   подтвержден, `stateExported=true`, `needsLogin=false`.
 
+Подтвержденный apply/cleanup 2026-07-01:
+
+- После owner approval по run `ozon_messenger_triage_20260701T0708`
+  подготовлен approved-пакет
+  `data/approved/ozon_messenger_triage_20260701T0708_pending_approved_20260701T0719/approved_apply_plan.json`.
+- Официальный `/v1/chat/send/message` для ответа покупателю вернул
+  `HTTP 403`: `method is allowed starting from the premium plus subscription`;
+  это штатно переводит отправку ответа на LK/CDP fallback.
+- `5` площадочных уведомлений Ozon отмечены прочитанными через официальный
+  `/v2/chat/read` с payload
+  `{"chat_id": "...", "from_message_id": ...}`.
+- `scripts/messenger/ozon_send_messages_cdp.js` отправил `1` согласованный
+  ответ покупателю через CDP-контур Vital Shevron `127.0.0.1:9544`; результат
+  `sent_ok=1`, `skipped=0`, `blocker=""`.
+- Verify `ozon_messenger_verify_after_apply_20260701T0721` через
+  `/v3/chat/history` подтвердил: последнее сообщение в покупательском чате
+  имеет `user.type = Seller`, текст совпадает с approved package, в
+  примененных чатах `0` непрочитанных сообщений.
+- Broad verify проверил первые `300` чатов: `0` строк с `unread_count > 0` и
+  `0` фактически непрочитанных сообщений в историях. Общий
+  `total_unread_count=1` остался нестрогим счетчиком Ozon и не считается
+  блокером при чистых строках/историях.
+- Важные уведомления из apply: договор Ozon с 1 июля 2026 года, новый
+  инструмент `Сбор первых отзывов`, показатель FBO `Точность отгрузок`, акция
+  `Максимальный бустинг` с 8 июля и автоматические изменения характеристик
+  карточек за 28-29.06.2026. После отметки прочитанным такие темы нужно
+  переносить в follow-up/recommendations, если требуют действий.
+
 Подтвержденный apply/cleanup 2026-06-29:
 
 - После owner approval по run `ozon_messenger_triage_20260629T0815`

@@ -85,12 +85,19 @@ def strip_sleeve_seo(text: str) -> str:
 
 def normalize_hashtag_value(value: Any) -> str:
     if isinstance(value, list):
-        return " ".join(str(item).strip() for item in value if str(item).strip())
+        return ", ".join(str(item).strip() for item in value if str(item).strip())
     return str(value or "")
 
 
 def filter_hashtags(value: Any, *, non_uniform_nr: bool) -> str:
-    tags = [tag.strip() for tag in normalize_hashtag_value(value).split() if tag.strip()]
+    if isinstance(value, list):
+        tags = [str(tag).strip() for tag in value if str(tag).strip()]
+    else:
+        raw = normalize_hashtag_value(value)
+        if "," in raw or ";" in raw:
+            tags = [tag.strip() for tag in re.split(r"[,;]+", raw) if tag.strip()]
+        else:
+            tags = [tag.strip() for tag in raw.split() if tag.strip()]
     if non_uniform_nr:
         tags = [tag for tag in tags if not re.search(r"(рукав|нарукав)", tag, re.I)]
     seen: set[str] = set()
@@ -99,7 +106,7 @@ def filter_hashtags(value: Any, *, non_uniform_nr: bool) -> str:
         if tag not in seen:
             seen.add(tag)
             out.append(tag)
-    return " ".join(out[:30])
+    return ", ".join(out[:30])
 
 
 def recommended_hashtags(data: dict[str, Any]) -> Any:
@@ -184,13 +191,14 @@ def field_rows(fields: list[dict[str, Any]], marketplace: str) -> str:
         item_marketplace = item.get("marketplace") or item.get("mp")
         if item_marketplace != marketplace:
             continue
+        why = item.get("why") or item.get("reason")
         rows.append(
             "<tr>"
             f"<td>{esc(item.get('field'))}</td>"
             f"<td>{text_html(item.get('current'))}</td>"
             f"<td>{text_html(item.get('recommended'))}</td>"
             f"<td>{esc(item.get('status'))}</td>"
-            f"<td>{esc(item.get('why'))}</td>"
+            f"<td>{esc(why)}</td>"
             "</tr>"
         )
     return "\n".join(rows)
@@ -286,12 +294,13 @@ def build_html(data: dict[str, Any], audit_dir: Path, output: Path) -> None:
         if isinstance(recommended_value, (dict, list)):
             recommended_value = json.dumps(recommended_value, ensure_ascii=False, indent=2)
         rec_title = rec.get("title") or rec.get("field") or rec.get("id")
+        why = rec.get("why") or rec.get("reason")
         rec_cards.append(
             f'<article class="rec {esc(rec.get("severity", "medium"))}">'
             f'<div class="rec-head"><h3>{esc(rec_title)}</h3><span>{esc(rec.get("status"))}</span></div>'
             f'<div class="flow"><div><b>Сейчас</b><p>{text_html(current_value)}</p></div>'
             f'<div><b>Рекомендую</b><p>{text_html(recommended_value)}</p></div></div>'
-            f'<p class="why"><b>Почему:</b> {esc(rec.get("why"))}</p></article>'
+            f'<p class="why"><b>Почему:</b> {esc(why)}</p></article>'
         )
 
     seo_rows = []
@@ -323,9 +332,11 @@ def build_html(data: dict[str, Any], audit_dir: Path, output: Path) -> None:
         )
 
     desc_blocks = proposed.get("description_blocks", ["", "", ""])
-    color_value = proposed.get("colors") or proposed.get("color") or proposed.get("colour") or ""
+    physical = proposed.get("target_physical_parameters") if isinstance(proposed.get("target_physical_parameters"), dict) else {}
+    color_value = proposed.get("colors") or proposed.get("color") or proposed.get("colour") or physical.get("color") or ""
     if isinstance(color_value, list):
         color_value = ", ".join(map(str, color_value))
+    color_name = proposed.get("color_name") or physical.get("color_name") or ""
 
     wb_identity = (
         wb.get("vendor_code")
@@ -346,7 +357,7 @@ def build_html(data: dict[str, Any], audit_dir: Path, output: Path) -> None:
 <section><h2>Коллаж фото</h2>{f'<div class="media-scroll"><img class="collage" src="{collage}" alt="Коллаж всех фото карточки"></div>' if collage else '<p class="warn">Коллаж не найден, HTML не готов к отправке владельцу.</p>'}<p class="hint">{esc(photo_display_note)}</p></section>
 <section><h2>Рекомендации: сейчас -> рекомендую -> почему</h2><div class="rec-grid">{''.join(rec_cards)}</div></section>
 <section><h2>Фото-аудит</h2><div class="photo-grid">{''.join(photo_audit_cards)}</div>{f'<h3>Порядок фото для загрузки на Ozon и WB</h3><div class="photo-card">{"".join(target_photo_list_items)}</div><div class="table-wrap"><table><thead><tr><th>№</th><th>Что должно быть</th><th>Источник</th><th>Примечание</th></tr></thead><tbody>{"".join(target_photo_rows)}</tbody></table></div>' if target_photo_rows else ''}<p class="hint">{esc(media.get('target_marketplace_photo_set_note') or '')}</p></section>
-<section><h2>Итоговый вариант</h2><div class="field-grid"><div class="field"><span>Название Ozon/WB</span><b>{esc(proposed.get('canonical_title'))}</b></div><div class="field"><span>Длина</span><b>{esc(proposed.get('title_length'))}</b></div><div class="field"><span>Цвет / название цвета</span><b>{esc(color_value)} / {esc(proposed.get('color_name'))}</b></div><div class="field"><span>Ozon хештеги</span><b>{esc(proposed.get('ozon_hashtags'))}</b></div></div><h3>Описание, 3 блока</h3><div class="desc-grid">{''.join(f'<div class="desc-block"><b>Блок {i + 1}</b><p>{esc(block)}</p></div>' for i, block in enumerate(desc_blocks[:3]))}</div><p class="warn"><b>Правило:</b> упаковку, размеры упаковки и вес не пишем в продающем описании.</p></section>
+<section><h2>Итоговый вариант</h2><div class="field-grid"><div class="field"><span>Название Ozon/WB</span><b>{esc(proposed.get('canonical_title'))}</b></div><div class="field"><span>Длина</span><b>{esc(proposed.get('title_length'))}</b></div><div class="field"><span>Цвет / название цвета</span><b>{esc(color_value)} / {esc(color_name)}</b></div><div class="field"><span>Ozon хештеги</span><b>{esc(proposed.get('ozon_hashtags'))}</b></div></div><h3>Описание, 3 блока</h3><div class="desc-grid">{''.join(f'<div class="desc-block"><b>Блок {i + 1}</b><p>{esc(block)}</p></div>' for i, block in enumerate(desc_blocks[:3]))}</div><p class="warn"><b>Правило:</b> упаковку, размеры упаковки и вес не пишем в продающем описании.</p></section>
 <section><h2>SEO-запросы</h2><div class="table-wrap"><table><thead><tr><th>MP</th><th>Запрос</th><th>Частотность</th><th>Роль</th><th>Решение</th></tr></thead><tbody>{''.join(seo_rows)}</tbody></table></div></section>
 <section><h2>Целевые поля Ozon</h2><div class="table-wrap"><table><thead><tr><th>Поле</th><th>Сейчас</th><th>Рекомендую</th><th>Статус</th><th>Почему</th></tr></thead><tbody>{field_rows(data.get('target_editor_fields', []), 'Ozon')}</tbody></table></div></section>
 <section><h2>Целевые поля WB</h2><div class="table-wrap"><table><thead><tr><th>Поле</th><th>Сейчас</th><th>Рекомендую</th><th>Статус</th><th>Почему</th></tr></thead><tbody>{field_rows(data.get('target_editor_fields', []), 'WB')}</tbody></table></div></section>

@@ -322,6 +322,10 @@ cookies, storage state и файлы вне разрешенных директ�
   будущий worker.
 - Постоянный polling требует allowlist и lock-file; второй экземпляр polling
   должен завершаться с ошибкой lock.
+- После изменения кода Telegram-команд или задач, которые бот импортирует
+  напрямую, нужно перезапустить `vital-shevron-telegram-bot.service`. Иначе
+  polling-процесс продолжит работать со старым кодом в памяти, даже если
+  файлы проекта уже исправлены.
 - Live read-only задачи используют per-task lock
   `.sessions/workflows/<task>.lock`; для `/today` это
   `.sessions/workflows/daily-morning-report.lock`, для `/status` -

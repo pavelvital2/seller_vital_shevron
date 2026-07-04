@@ -1,6 +1,14 @@
 from decimal import Decimal
 
-from seller_agent.tasks.wb_actions_discount_plan import _header_index, _find_column
+import pytest
+
+from seller_agent.tasks.wb_actions_discount_plan import (
+    WbActionsSnapshotBusyError,
+    WbActionsSnapshotLock,
+    _find_column,
+    _header_index,
+    _safe_snapshot_error,
+)
 from seller_agent.tasks.wb_actions_discount_plan import ceil_percent_from_price, parse_scheme
 
 
@@ -33,3 +41,26 @@ def test_wb_excel_header_aliases_support_english_export() -> None:
     assert _find_column(idx, ("Товар уже участвует в акции", "Item in promo (Yes / No)")) == 0
     assert _find_column(idx, ("Артикул WB", "WB item No.")) == 4
     assert _find_column(idx, ("Плановая цена для акции", "Target promo price")) == 5
+
+
+def test_wb_actions_snapshot_lock_blocks_parallel_profile_use(tmp_path) -> None:
+    lock_path = tmp_path / "wb_actions.lock"
+
+    with WbActionsSnapshotLock(lock_path):
+        with pytest.raises(WbActionsSnapshotBusyError):
+            with WbActionsSnapshotLock(lock_path):
+                pass
+
+    with WbActionsSnapshotLock(lock_path):
+        pass
+
+
+def test_wb_snapshot_error_hides_chrome_command_line() -> None:
+    message = _safe_snapshot_error(
+        "",
+        "chrome --user-data-dir=/home/pavel/projects/seller_vital_shevron/.sessions/wb/browser-profile "
+        "--disable-features=slate,AutoDeElevate,RenderDocument",
+    )
+
+    assert "WB LK browser profile is busy" in message
+    assert "--disable-features" not in message

@@ -40,9 +40,12 @@ from seller_agent.tasks.catalog_unified import run_build_unified_catalog
 from seller_agent.tasks.actions_apply import run_actions_apply
 from seller_agent.tasks.daily_morning_report import run_daily_morning_report
 from seller_agent.tasks.ozon_cpc_bids_apply import run_ozon_cpc_bids_apply
+from seller_agent.tasks.ozon_card_create_apply import run_ozon_card_create_apply
+from seller_agent.tasks.ozon_card_create_plan import run_ozon_card_create_plan
 from seller_agent.tasks.ozon_elastic_apply import run_ozon_elastic_apply
 from seller_agent.tasks.ozon_cpc_optimization_plan import CpcOptimizationThresholds, run_ozon_cpc_optimization_plan
 from seller_agent.tasks.ozon_elastic_plan import run_ozon_elastic_plan
+from seller_agent.tasks.ozon_product_remove import run_ozon_product_remove_apply, run_ozon_product_remove_plan
 from seller_agent.tasks.pricing_status import run_pricing_status
 from seller_agent.tasks.product_passport_design import run_product_passport_design
 from seller_agent.tasks.reviews_questions import (
@@ -638,6 +641,35 @@ def build_parser() -> argparse.ArgumentParser:
         "--skip-schema",
         action="store_true",
         help="Do not call Ozon/WB schema APIs; summarize only current local snapshots.",
+    )
+
+    ozon_product_remove_plan = subparsers.add_parser(
+        "plan-ozon-product-remove",
+        help="Build a dry-run to delete an uncreated Ozon product or archive an existing Ozon product.",
+    )
+    ozon_product_remove_plan.add_argument("--data-dir", default="data", help="Project data directory.")
+    ozon_product_remove_plan.add_argument("--run-id", default=None, help="Optional stable run id.")
+    ozon_product_remove_plan.add_argument("--offer-id", required=True, help="Ozon offer_id / seller SKU.")
+    ozon_product_remove_plan.add_argument("--product-id", default=None, help="Optional Ozon product_id.")
+    ozon_product_remove_plan.add_argument(
+        "--action",
+        choices=("auto", "delete", "archive"),
+        default="auto",
+        help="auto selects delete for not-created/no-SKU cards and archive for created cards.",
+    )
+    ozon_product_remove_plan.add_argument("--reason", default="", help="Human-readable owner-approved reason.")
+
+    ozon_product_remove_apply = subparsers.add_parser(
+        "apply-ozon-product-remove",
+        help="Apply an approved Ozon product remove/archive dry-run.",
+    )
+    ozon_product_remove_apply.add_argument("--data-dir", default="data", help="Project data directory.")
+    ozon_product_remove_apply.add_argument("--run-id", default=None, help="Optional stable run id.")
+    ozon_product_remove_apply.add_argument("--plan-run-id", default=None, help="Approved plan run id.")
+    ozon_product_remove_apply.add_argument(
+        "--confirmed-by-user",
+        action="store_true",
+        help="Required explicit confirmation for external Ozon write operations.",
     )
 
     passport_design = subparsers.add_parser(
@@ -1295,6 +1327,84 @@ def build_parser() -> argparse.ArgumentParser:
         help="Polling interval in seconds while waiting for WB nmID.",
     )
 
+    plan_ozon_cards = subparsers.add_parser(
+        "plan-ozon-card-create",
+        help="Build dry-run plan for creating WB-only product cards in Ozon.",
+    )
+    plan_ozon_cards.add_argument(
+        "--data-dir",
+        default="data",
+        help="Project data directory.",
+    )
+    plan_ozon_cards.add_argument(
+        "--run-id",
+        default=None,
+        help="Optional stable run id.",
+    )
+    plan_ozon_cards.add_argument(
+        "--internal-sku",
+        action="append",
+        default=[],
+        help="Owner-approved internal SKU to create on Ozon from Layer 3 passport. Can be repeated.",
+    )
+    plan_ozon_cards.add_argument(
+        "--allow-wb-price-fallback",
+        action="store_true",
+        help="Use WB discounted/base price as Ozon create price source when Ozon price is missing; plan keeps manual-review flag.",
+    )
+    plan_ozon_cards.add_argument(
+        "--min-price",
+        default=None,
+        help="Ozon min_price to set through /v1/product/import/prices after card create, for example 400.",
+    )
+    plan_ozon_cards.add_argument(
+        "--skip-schema-api",
+        action="store_true",
+        help="Do not call Ozon category schema/dictionary APIs. For diagnostics only; apply should use schema API.",
+    )
+
+    apply_ozon_cards = subparsers.add_parser(
+        "apply-ozon-card-create",
+        help="Create planned WB-only product cards in Ozon and verify the result.",
+    )
+    apply_ozon_cards.add_argument(
+        "--data-dir",
+        default="data",
+        help="Project data directory.",
+    )
+    apply_ozon_cards.add_argument(
+        "--plan-run-id",
+        default=None,
+        help="Plan run id. Defaults to the latest ozon_card_create_plan_* run.",
+    )
+    apply_ozon_cards.add_argument(
+        "--run-id",
+        default=None,
+        help="Optional stable run id.",
+    )
+    apply_ozon_cards.add_argument(
+        "--confirmed-by-user",
+        action="store_true",
+        help="Required explicit confirmation for external Ozon write operations.",
+    )
+    apply_ozon_cards.add_argument(
+        "--allow-manual-review",
+        action="store_true",
+        help="Allow applying a plan that still has manual-review notes, for example WB price fallback.",
+    )
+    apply_ozon_cards.add_argument(
+        "--wait-seconds",
+        type=int,
+        default=300,
+        help="How long to wait for Ozon import and card visibility.",
+    )
+    apply_ozon_cards.add_argument(
+        "--poll-interval",
+        type=int,
+        default=10,
+        help="Polling interval in seconds while waiting for Ozon import/card visibility.",
+    )
+
     plan_seller_sku_update = subparsers.add_parser(
         "plan-seller-sku-update",
         help="Build dry-run plan for replacing Ozon/WB seller SKU with internal SKU.",
@@ -1519,6 +1629,18 @@ def build_parser() -> argparse.ArgumentParser:
     apply_approved_cards.add_argument("--seller-sku-poll-interval", type=int, default=5)
     apply_approved_cards.add_argument("--wb-create-wait-seconds", type=int, default=600)
     apply_approved_cards.add_argument("--wb-create-poll-interval", type=int, default=30)
+    apply_approved_cards.add_argument(
+        "--ozon-create-min-price",
+        default="",
+        help="Required when the approved batch contains WB-only cards that must be created on Ozon.",
+    )
+    apply_approved_cards.add_argument(
+        "--ozon-create-allow-manual-review",
+        action="store_true",
+        help="Allow Ozon create rows that use owner-approved manual-review price fallback.",
+    )
+    apply_approved_cards.add_argument("--ozon-create-wait-seconds", type=int, default=300)
+    apply_approved_cards.add_argument("--ozon-create-poll-interval", type=int, default=10)
 
     reviews_questions = subparsers.add_parser(
         "reviews-questions",
@@ -2057,6 +2179,30 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["overall_status"] in {"ok", "warning"} else 2
 
+    if args.command == "plan-ozon-product-remove":
+        result = run_ozon_product_remove_plan(
+            credentials=load_credentials(),
+            data_dir=Path(args.data_dir),
+            offer_id=args.offer_id,
+            product_id=args.product_id,
+            action=args.action,
+            reason=args.reason,
+            run_id=args.run_id,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
+
+    if args.command == "apply-ozon-product-remove":
+        result = run_ozon_product_remove_apply(
+            credentials=load_credentials(),
+            data_dir=Path(args.data_dir),
+            plan_run_id=args.plan_run_id,
+            run_id=args.run_id,
+            confirmed_by_user=args.confirmed_by_user,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
+
     if args.command == "design-product-passport":
         result = run_product_passport_design(
             data_dir=Path(args.data_dir),
@@ -2123,6 +2269,19 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
+
+    if args.command == "plan-ozon-card-create":
+        result = run_ozon_card_create_plan(
+            credentials=load_credentials(),
+            data_dir=Path(args.data_dir),
+            run_id=args.run_id,
+            internal_skus=args.internal_sku,
+            allow_wb_price_fallback=args.allow_wb_price_fallback,
+            min_price=args.min_price,
+            skip_schema_api=args.skip_schema_api,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
 
     if args.command == "status-preflight":
         result = run_status_preflight(
@@ -2341,6 +2500,20 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
 
+    if args.command == "apply-ozon-card-create":
+        result = run_ozon_card_create_apply(
+            credentials=load_credentials(),
+            data_dir=Path(args.data_dir),
+            plan_run_id=args.plan_run_id,
+            run_id=args.run_id,
+            confirmed_by_user=args.confirmed_by_user,
+            allow_manual_review=args.allow_manual_review,
+            wait_seconds=args.wait_seconds,
+            poll_interval=args.poll_interval,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
+
     if args.command == "plan-seller-sku-update":
         result = run_seller_sku_update_plan(
             credentials=load_credentials(),
@@ -2433,6 +2606,10 @@ def main(argv: list[str] | None = None) -> int:
             seller_sku_poll_interval=args.seller_sku_poll_interval,
             wb_create_wait_seconds=args.wb_create_wait_seconds,
             wb_create_poll_interval=args.wb_create_poll_interval,
+            ozon_create_min_price=args.ozon_create_min_price,
+            ozon_create_allow_manual_review=args.ozon_create_allow_manual_review,
+            ozon_create_wait_seconds=args.ozon_create_wait_seconds,
+            ozon_create_poll_interval=args.ozon_create_poll_interval,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["overall_status"] in {"ok", "warning"} else 2

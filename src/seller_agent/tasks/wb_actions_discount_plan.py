@@ -5,7 +5,9 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal, ROUND_CEILING
+import fcntl
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -19,6 +21,64 @@ from seller_agent.reports.writer import ensure_dir, write_json
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+
+class WbActionsSnapshotBusyError(RuntimeError):
+    pass
+
+
+class WbActionsSnapshotLock:
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self._handle = None
+
+    def __enter__(self) -> "WbActionsSnapshotLock":
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        handle = self.path.open("a+", encoding="utf-8")
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            handle.close()
+            raise WbActionsSnapshotBusyError(
+                "WB actions dry-run already running: another process is using the WB LK browser profile. "
+                "Дождитесь завершения текущего расчета и повторите /wb-actions."
+            ) from exc
+        handle.seek(0)
+        handle.truncate()
+        handle.write(f"pid={os.getpid()}\n")
+        handle.flush()
+        self._handle = handle
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        if self._handle is None:
+            return
+        fcntl.flock(self._handle.fileno(), fcntl.LOCK_UN)
+        self._handle.close()
+        self._handle = None
+
+
+def _lock_path(data_dir: Path) -> Path:
+    base = data_dir if data_dir.is_absolute() else PROJECT_ROOT / data_dir
+    return base.parent / ".sessions" / "locks" / "wb_actions_discount_plan.lock"
+
+
+def _safe_snapshot_error(stdout: str, stderr: str) -> str:
+    text = (stderr or stdout or "WB snapshot failed").strip()
+    collapsed = re.sub(r"\s+", " ", text)
+    profile_markers = (
+        "ProcessSingleton",
+        "Failed to create a ProcessSingleton",
+        "browser profile",
+        "user-data-dir",
+        ".sessions/wb/browser-profile",
+    )
+    if any(marker in collapsed for marker in profile_markers):
+        return (
+            "WB LK browser profile is busy or locked. "
+            "Вероятно, уже выполняется другой WB actions dry-run/keepalive; дождитесь завершения и повторите."
+        )
+    return collapsed[-2000:]
 
 
 @dataclass
@@ -102,7 +162,7 @@ def _run_snapshot(*, day: str, raw_dir: Path, prices_dir: Path) -> dict[str, Any
         timeout=900,
     )
     if completed.returncode != 0:
-        raise RuntimeError((completed.stderr or completed.stdout or "WB snapshot failed")[-2000:])
+        raise RuntimeError(_safe_snapshot_error(completed.stdout, completed.stderr))
     return json.loads(completed.stdout)
 
 
@@ -399,7 +459,8 @@ def run_wb_actions_discount_plan(
             "pricesPath": str(prices_path),
         }
     else:
-        snapshot = _run_snapshot(day=day, raw_dir=raw_actions_dir, prices_dir=raw_prices_dir)
+        with WbActionsSnapshotLock(_lock_path(data_dir)):
+            snapshot = _run_snapshot(day=day, raw_dir=raw_actions_dir, prices_dir=raw_prices_dir)
         prices_path = Path(snapshot["pricesPath"])
     rows, summary = build_rows(actions_dir=raw_actions_dir, prices_path=prices_path, scheme=scheme)
     rows.sort(key=lambda row: (row["Действие"] == "не менять", abs(int(row["Дельта, п.п."])) * -1, int(row["Артикул WB"])))

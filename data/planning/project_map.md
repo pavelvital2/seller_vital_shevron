@@ -161,8 +161,19 @@
   не начинать marketplace write неполной пачкой при отсутствующем паспорте.
 - `src/seller_agent/tasks/approved_cards_apply.py` - batch owner-approved
   карточный apply: проверка/восстановление Layer 3 passport, content update,
-  seller SKU replacement, WB create/media, финальный catalog-sync и
-  нормализованный post-verify по новым internal SKU.
+  seller SKU replacement, WB create/media, Ozon create при переданном
+  `--ozon-create-min-price`, финальный catalog-sync и нормализованный
+  post-verify по новым internal SKU.
+- `src/seller_agent/tasks/ozon_card_create_plan.py` и
+  `src/seller_agent/tasks/ozon_card_create_apply.py` - штатный безопасный
+  контур создания Ozon-карточек из owner-approved Layer 3 passports:
+  `plan-ozon-card-create`, `apply-ozon-card-create`, `/v3/product/import`,
+  `/v1/product/import/info`, verify по `offer_id=<internal_sku>` и обновление
+  паспорта после успешного создания.
+- `src/seller_agent/tasks/ozon_product_remove.py` - безопасный контур
+  удаления не созданных Ozon-карточек без SKU через `/v2/products/delete` или
+  архивирования созданных карточек через `/v1/product/archive`:
+  `plan-ozon-product-remove`, `apply-ozon-product-remove`.
 - `data/planning/product_card_data_layers_runbook.md` - контракт карточного
   контура: слой 1 source marketplace data, слой 2 agent audit, слой 3
   owner-approved master passport.

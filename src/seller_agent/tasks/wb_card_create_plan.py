@@ -166,7 +166,22 @@ def _infer_wb_target(sku: str, wb_cards: list[dict[str, Any]]) -> dict[str, Any]
 
 
 def _colors(ozon_attrs: dict[str, Any]) -> list[str]:
-    return [value.lower() for value in _attr_values(ozon_attrs, 10096)]
+    return _normalize_wb_colors([value.lower() for value in _attr_values(ozon_attrs, 10096)])
+
+
+WB_COLOR_ALIASES = {
+    "олива": "оливковый",
+    "чёрный": "черный",
+}
+
+
+def _normalize_wb_colors(values: list[str]) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        normalized = WB_COLOR_ALIASES.get(str(value).lower(), str(value))
+        if normalized and normalized not in result:
+            result.append(normalized)
+    return result
 
 
 def _composition(ozon_attrs: dict[str, Any]) -> list[str]:
@@ -364,7 +379,7 @@ def _passport_variant(
     sku = str(identity.get("internal_sku") or "").strip()
     title, _ = _shorten_wb_title(str(content.get("wb_title") or content.get("canonical_title") or sku))
     description = _plain_text(str(content.get("wb_description") or content.get("canonical_description") or ""))
-    colors = _split_values(_passport_attr_value(passport, "Цвет"))
+    colors = _normalize_wb_colors(_split_values(_passport_attr_value(passport, "Цвет")))
     composition = _split_values(_passport_attr_value(passport, "Состав"))
     if not composition:
         composition = [str(item).strip().lower() for item in materials.get("composition") or [] if str(item).strip()]

@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from seller_agent.config import AppCredentials
-from seller_agent.tasks.status_preflight import _overall_status, _summarize_master_catalog
+from seller_agent.tasks.status_preflight import _check_lk_sessions, _overall_status, _summarize_master_catalog
 from seller_agent.tasks.status_preflight import _check_ozon_performance_api
 
 
@@ -115,3 +115,7 @@ def test_ozon_performance_check_skips_missing_credentials() -> None:
 
     assert result["status"] == "skipped"
     assert "Performance" in result["error"]
+
+
+def test_lk_checks_are_omitted_when_lk_is_disabled() -> None:
+    assert _check_lk_sessions(include_lk=False) == {}

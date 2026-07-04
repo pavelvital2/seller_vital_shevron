@@ -173,7 +173,10 @@
 - `data/planning/card_ops/03_card_content_update_ozon_wb.md` - изменение
   параметров существующих карточек Ozon/WB из owner-approved паспорта.
 - `data/planning/card_ops/04_ozon_card_create_later.md` - placeholder
-  будущего маршрута создания карточки на Ozon; пока не применять.
+  маршрута создания карточки на Ozon из owner-approved Layer 3 passport.
+- `data/planning/card_ops/05_ozon_product_remove.md` - безопасное удаление
+  не созданных Ozon-карточек без SKU или архивирование уже созданных карточек
+  через официальные Ozon API.
 - `data/planning/wb_card_create_runbook.md` - безопасный маршрут создания
   новой WB-карточки из owner-approved Layer 3 паспорта: WB barcode,
   `/content/v2/cards/upload`, media upload, verify и обновление локального

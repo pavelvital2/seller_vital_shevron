@@ -146,6 +146,17 @@ class OzonSellerAdapter:
     def import_products(self, items: list[dict[str, Any]]) -> dict[str, Any]:
         return self.post("/v3/product/import", {"items": items})
 
+    def import_product_prices(self, prices: list[dict[str, Any]]) -> dict[str, Any]:
+        return self.post("/v1/product/import/prices", {"prices": prices})
+
+    def archive_products(self, product_ids: list[int | str]) -> dict[str, Any]:
+        normalized = [int(item) for item in product_ids if str(item).strip().isdigit()]
+        return self.post("/v1/product/archive", {"product_id": normalized})
+
+    def delete_products(self, offer_ids: list[str]) -> dict[str, Any]:
+        products = [{"offer_id": str(item).strip()} for item in offer_ids if str(item).strip()]
+        return self.post("/v2/products/delete", {"products": products})
+
     def fetch_product_import_info(self, task_id: int | str) -> dict[str, Any]:
         return self.post("/v1/product/import/info", {"task_id": int(task_id)})
 
@@ -221,6 +232,31 @@ class OzonSellerAdapter:
                 break
             cursor = next_cursor
 
+        return items
+
+    def fetch_product_info_prices_by_offer_ids(
+        self,
+        offer_ids: list[str],
+        *,
+        limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        normalized = [str(item).strip() for item in offer_ids if str(item).strip()]
+        if not normalized:
+            return []
+        items: list[dict[str, Any]] = []
+        page_limit = min(max(int(limit), 1), 1000)
+        for start in range(0, len(normalized), page_limit):
+            batch = normalized[start : start + page_limit]
+            data = self.post(
+                "/v5/product/info/prices",
+                {
+                    "filter": {"offer_id": batch},
+                    "limit": page_limit,
+                },
+            )
+            page_items = data.get("items") or []
+            if isinstance(page_items, list):
+                items.extend(row for row in page_items if isinstance(row, dict))
         return items
 
     def fetch_product_stocks(
