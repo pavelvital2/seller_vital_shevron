@@ -30,7 +30,7 @@ Owner-approved HTML по карточке является review-пакетом
 | --- | --- | --- |
 | Создание карточки на WB из owner-approved HTML / Layer 3 passport | `data/planning/card_ops/01_wb_card_create_from_html.md` | частично автоматизировано: `plan-wb-card-create`, `apply-wb-card-create`; есть ограничение legacy plan |
 | Смена артикулов продавца Ozon/WB на внутренний артикул | `data/planning/card_ops/02_seller_sku_update_ozon_wb.md` | автоматизировано: `plan-seller-sku-update`, `apply-seller-sku-update` |
-| Изменение параметров существующих карточек Ozon/WB | `data/planning/card_ops/03_card_content_update_ozon_wb.md` | быстрый путь: `apply-approved-card`; batch-путь: `apply-approved-cards`; ручной debug-путь: `plan-card-content-update`, `apply-card-content-update` |
+| Изменение параметров существующих карточек Ozon/WB | `data/planning/card_ops/03_card_content_update_ozon_wb.md` | быстрый путь: `apply-approved-card`; batch-путь: `apply-approved-cards`; verify-only: `verify-card-content-update`; ручной debug-путь: `plan-card-content-update`, `apply-card-content-update` |
 | Promotion owner-approved Layer 2 audit/HTML в Layer 3 passport | этот файл | автоматизировано: `promote-approved-card-passport`; также встроено как preflight в `apply-approved-cards` |
 | Создание карточки на Ozon из owner-approved HTML / Layer 3 passport | `data/planning/card_ops/04_ozon_card_create_later.md` | автоматизировано: `plan-ozon-card-create`, `apply-ozon-card-create`; встроено в `apply-approved-cards` при `--ozon-create-min-price`; WB price fallback требует manual review |
 | Удаление не созданной Ozon-карточки без SKU или архивирование созданной карточки | `data/planning/card_ops/05_ozon_product_remove.md` | автоматизировано: `plan-ozon-product-remove`, `apply-ozon-product-remove` |
@@ -88,6 +88,21 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 Команда сама делает точечный `plan -> apply -> targeted verify -> result`.
 Не запускать перед ней или после нее полный refresh каталога, если нет
 отдельной причины.
+
+Если нужно только проверить уже примененную карточку или пачку без нового
+dry-run/apply, использовать verify-only маршрут:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli verify-card-content-update \
+  --internal-sku <internal_sku>
+```
+
+`verify-card-content-update` читает Layer 3 passport, проверяет фактическое
+состояние Ozon/WB по текущим `offer_id`/`vendorCode` и ничего не меняет в
+магазинах. Не заменять эту проверку командой `plan-card-content-update`:
+`plan-*` показывает новый dry-run и не является доказательством результата
+после apply.
 
 ## Batch-путь после согласования пачки карточек
 

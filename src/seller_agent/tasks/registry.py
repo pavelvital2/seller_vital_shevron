@@ -774,8 +774,23 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_mapping=True,
         requires_confirmation=True,
         source_plan_task="card-content-update-plan",
-        verify_task="card-content-update-apply",
+        verify_task="card-content-update-verify",
         lock_keys=("marketplace:ozon", "marketplace:wb", "cards:content"),
+    ),
+    RegisteredTask(
+        name="card-content-update-verify",
+        command="verify-card-content-update",
+        title="Verify card content update",
+        description=(
+            "Read-only verify actual Ozon/WB card state against owner-approved "
+            "Layer 3 passports without preparing a new apply plan."
+        ),
+        mode="verify",
+        risk="low",
+        marketplaces=("ozon", "wb"),
+        runbook_path="data/planning/card_ops/03_card_content_update_ozon_wb.md",
+        requires_credentials=True,
+        requires_mapping=True,
     ),
     RegisteredTask(
         name="approved-card-apply",
@@ -793,7 +808,7 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_mapping=True,
         requires_confirmation=True,
         source_plan_task="owner-approved-card-html-layer3-passport",
-        verify_task="apply-approved-card",
+        verify_task="card-content-update-verify",
         lock_keys=("marketplace:ozon", "marketplace:wb", "cards:approved-card"),
     ),
     RegisteredTask(
@@ -813,7 +828,7 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_mapping=True,
         requires_confirmation=True,
         source_plan_task="owner-approved-card-html-layer3-passport",
-        verify_task="apply-approved-cards",
+        verify_task="card-content-update-verify",
         lock_keys=("marketplace:ozon", "marketplace:wb", "cards:batch-apply"),
     ),
     RegisteredTask(

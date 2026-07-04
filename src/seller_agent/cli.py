@@ -31,7 +31,12 @@ from seller_agent.tasks.card_content_audit_packages import run_card_content_audi
 from seller_agent.tasks.card_content_parameter_inventory import run_card_content_parameter_inventory
 from seller_agent.tasks.card_content_signals import run_collect_card_signals
 from seller_agent.tasks.card_content_snapshot import run_card_content_snapshot
-from seller_agent.tasks.card_content_update import run_apply_approved_card, run_card_content_update_apply, run_card_content_update_plan
+from seller_agent.tasks.card_content_update import (
+    run_apply_approved_card,
+    run_card_content_update_apply,
+    run_card_content_update_plan,
+    run_card_content_update_verify,
+)
 from seller_agent.tasks.card_passport_promotion import run_promote_approved_card_passport
 from seller_agent.tasks.catalog_fetch import run_catalog_fetch
 from seller_agent.tasks.catalog_content_master import run_catalog_content_master
@@ -1570,6 +1575,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="Polling interval for Ozon import task status.",
     )
 
+    verify_card_content_update = subparsers.add_parser(
+        "verify-card-content-update",
+        help="Read-only verify existing Ozon/WB cards against owner-approved Layer 3 passports.",
+    )
+    verify_card_content_update.add_argument("--data-dir", default="data", help="Project data directory.")
+    verify_card_content_update.add_argument("--run-id", default=None, help="Optional stable run id.")
+    verify_card_content_update.add_argument(
+        "--passport",
+        action="append",
+        default=[],
+        help="Approved master passport JSON path. Can be repeated.",
+    )
+    verify_card_content_update.add_argument(
+        "--internal-sku",
+        action="append",
+        default=[],
+        help="Internal SKU from data/catalog/master_passport/approved. Can be repeated.",
+    )
+    verify_card_content_update.add_argument(
+        "--skip-api",
+        action="store_true",
+        help="Use local snapshots only. Intended for local smoke checks.",
+    )
+
     apply_approved_card = subparsers.add_parser(
         "apply-approved-card",
         help="Fast path: plan, apply and targeted-verify owner-approved existing card passports.",
@@ -2575,6 +2604,18 @@ def main(argv: list[str] | None = None) -> int:
             confirmed_by_user=args.confirmed_by_user,
             wait_seconds=args.wait_seconds,
             poll_interval=args.poll_interval,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
+
+    if args.command == "verify-card-content-update":
+        result = run_card_content_update_verify(
+            credentials=load_credentials(),
+            data_dir=Path(args.data_dir),
+            passport_paths=[Path(path) for path in args.passport],
+            internal_skus=args.internal_sku,
+            run_id=args.run_id,
+            skip_api=args.skip_api,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["overall_status"] in {"ok", "warning"} else 2

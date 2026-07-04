@@ -33,6 +33,7 @@ OZON_ATTR_IDS = {
     "factory_packs": 11650,
     "tnved": 22232,
     "marking_required": 23536,
+    "package_weight": 4497,
 }
 WB_CHAR_IDS = {
     "title": 15000000,
@@ -73,6 +74,27 @@ def _split_values(value: Any) -> list[str]:
     if isinstance(value, list):
         return [_normalize_text(item) for item in value if _normalize_text(item)]
     return [_normalize_text(item) for item in re.split(r"[,;]", _normalize_text(value)) if _normalize_text(item)]
+
+
+def _normalize_ozon_hashtags(value: Any) -> str:
+    if isinstance(value, list):
+        raw_items = [_normalize_text(item) for item in value]
+    else:
+        raw_items = re.split(r"[,;]", _normalize_text(value))
+    tags: list[str] = []
+    for raw_item in raw_items:
+        item = _normalize_text(raw_item).lstrip("#")
+        if not item:
+            continue
+        item = re.sub(r"\s+", "_", item)
+        item = re.sub(r"[^\wА-Яа-яЁё]", "_", item, flags=re.UNICODE)
+        item = re.sub(r"_+", "_", item).strip("_")
+        if not item or len(item) > 29:
+            continue
+        tag = f"#{item}"
+        if tag not in tags:
+            tags.append(tag)
+    return " ".join(tags[:30])
 
 
 def _normalize_wb_colors(values: list[str]) -> list[str]:
@@ -230,7 +252,7 @@ def _ozon_target(passport: dict[str, Any]) -> dict[str, Any]:
     return {
         "title": _normalize_text(content.get("ozon_title") or content.get("canonical_title")),
         "description": _normalize_text(content.get("ozon_description") or content.get("canonical_description")),
-        "hashtags": " ".join(hashtags) if isinstance(hashtags, list) else _normalize_text(hashtags),
+        "hashtags": _normalize_ozon_hashtags(hashtags),
         "material": _field_value(ozon_attrs, "Материал") or "Габардин",
         "product_size": _normalize_text(physical.get("product_size_mm")),
         "pack_qty": _normalize_text(physical.get("pack_qty") or "1"),
@@ -273,6 +295,7 @@ def _build_ozon_payload(
     _set_ozon_attr(attrs, OZON_ATTR_IDS["adult"], [target["adult"]])
     _set_ozon_attr(attrs, OZON_ATTR_IDS["factory_packs"], [target["factory_packs"]])
     _set_ozon_attr(attrs, OZON_ATTR_IDS["marking_required"], [target["marking_required"]])
+    _set_ozon_attr(attrs, OZON_ATTR_IDS["package_weight"], [target["weight_g"]])
 
     dimensions = _parse_ozon_package_mm(target["package_mm"])
     price = _price_value(price_row, "ozon_price")
@@ -328,6 +351,42 @@ def _build_ozon_payload(
         {"field": "weight", "current": _normalize_text(current.get("weight")), "target": target["weight_g"]},
     ]
     return item, changes, []
+
+
+def _build_ozon_verify_payload(passport: dict[str, Any], current: dict[str, Any]) -> tuple[dict[str, Any] | None, list[str]]:
+    target = _ozon_target(passport)
+    errors: list[str] = []
+    dimensions = _parse_ozon_package_mm(target["package_mm"])
+    if not dimensions:
+        errors.append("ozon_package_dimensions_missing")
+    if not target["title"] or not target["description"]:
+        errors.append("ozon_title_or_description_missing")
+    if not current.get("offer_id"):
+        errors.append("ozon_current_offer_id_missing")
+    if errors:
+        return None, errors
+
+    attrs = deepcopy(current.get("attributes") or [])
+    _set_ozon_attr(attrs, OZON_ATTR_IDS["title"], [target["title"]])
+    _set_ozon_attr(attrs, OZON_ATTR_IDS["description"], [target["description"]])
+    if target["hashtags"]:
+        _set_ozon_attr(attrs, OZON_ATTR_IDS["hashtags"], [target["hashtags"]])
+    _set_ozon_attr(attrs, OZON_ATTR_IDS["color"], target["colors"])
+    _set_ozon_attr(attrs, OZON_ATTR_IDS["color_name"], [target["color_name"]])
+    _set_ozon_attr(attrs, OZON_ATTR_IDS["marking_required"], [target["marking_required"]])
+    _set_ozon_attr(attrs, OZON_ATTR_IDS["package_weight"], [target["weight_g"]])
+
+    return {
+        "attributes": attrs,
+        "depth": dimensions["depth"],
+        "height": dimensions["height"],
+        "images": list(current.get("images") or []),
+        "name": target["title"],
+        "offer_id": _normalize_text(current.get("offer_id")),
+        "primary_image": _normalize_text(current.get("primary_image")),
+        "weight": int(float(target["weight_g"] or current.get("weight") or 0)),
+        "width": dimensions["width"],
+    }, []
 
 
 def _wb_target(passport: dict[str, Any]) -> dict[str, Any]:
@@ -564,18 +623,47 @@ def _resolve_plan_dir(data_dir: Path, plan_run_id: str | None) -> Path:
     return candidates[-1]
 
 
-def _wait_ozon_import(ozon: OzonSellerAdapter, task_id: int, run_dir: Path, wait_seconds: int, poll_interval: int) -> dict[str, Any]:
+def _wait_ozon_import(
+    ozon: OzonSellerAdapter,
+    task_id: int,
+    run_dir: Path,
+    wait_seconds: int,
+    poll_interval: int,
+    *,
+    artifact_prefix: str = "ozon_import_info",
+) -> dict[str, Any]:
     deadline = time.monotonic() + max(wait_seconds, 0)
     attempt = 0
     result: dict[str, Any] = {}
     while True:
         attempt += 1
         result = ozon.fetch_product_import_info(task_id)
-        write_json(run_dir / f"ozon_import_info_{attempt:02d}.json", result)
+        write_json(run_dir / f"{artifact_prefix}_{attempt:02d}.json", result)
         text = json.dumps(result, ensure_ascii=False).lower()
         if "imported" in text or "failed" in text or time.monotonic() >= deadline:
             return result
         time.sleep(max(poll_interval, 1))
+
+
+def _ozon_attribute_update_items(payloads: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for payload in payloads:
+        attrs = [
+            deepcopy(attr)
+            for attr in payload.get("attributes") or []
+            if attr.get("values")
+        ]
+        offer_id = _normalize_text(payload.get("offer_id"))
+        if offer_id and attrs:
+            items.append({"offer_id": offer_id, "attributes": attrs})
+    return items
+
+
+def _ozon_task_id(response: dict[str, Any]) -> Any:
+    if not isinstance(response, dict):
+        return None
+    result = response.get("result") if isinstance(response.get("result"), dict) else {}
+    return result.get("task_id") or response.get("task_id")
 
 
 def _ozon_attr_values(item: dict[str, Any], attr_id: int) -> list[str]:
@@ -607,12 +695,29 @@ def _same_dimensions(left: dict[str, Any] | None, right: dict[str, Any] | None) 
     return True
 
 
+def _ozon_product_status_is_blocking(statuses: dict[str, Any]) -> bool:
+    status_failed = _normalize_text(statuses.get("status_failed")).lower()
+    status_description = _normalize_text(statuses.get("status_description")).lower()
+    status_tooltip = _normalize_text(statuses.get("status_tooltip")).lower()
+    if status_failed and status_failed not in {"imported"}:
+        return True
+    if "не обновлен" in status_description or "не обновлён" in status_description:
+        return True
+    if "не удалось обновить" in status_tooltip:
+        return True
+    return False
+
+
 def _ozon_target_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "offer_id": _normalize_text(payload.get("offer_id")),
+        "product_id": _normalize_text(payload.get("id") or payload.get("product_id")),
         "name": _normalize_text(payload.get("name")),
         "description": _first_attr_value(payload, OZON_ATTR_IDS["description"]),
+        "hashtags": _ozon_attr_values(payload, OZON_ATTR_IDS["hashtags"]),
         "colors": _ozon_attr_values(payload, OZON_ATTR_IDS["color"]),
+        "marking_required": _ozon_attr_values(payload, OZON_ATTR_IDS["marking_required"]),
+        "package_weight_attr": _ozon_attr_values(payload, OZON_ATTR_IDS["package_weight"]),
         "dimensions": {
             "depth": int(payload.get("depth") or 0),
             "width": int(payload.get("width") or 0),
@@ -627,6 +732,25 @@ def _verify_ozon_payloads(ozon: OzonSellerAdapter, payloads: list[dict[str, Any]
     targets = {_normalize_text(payload.get("offer_id")): _ozon_target_from_payload(payload) for payload in payloads}
     items = ozon.fetch_product_attributes(list(targets))
     write_json(run_dir / "ozon_verify_cards.json", items)
+    product_ids = [
+        _normalize_text(item.get("id") or item.get("product_id"))
+        for item in items
+        if _normalize_text(item.get("id") or item.get("product_id"))
+    ]
+    status_by_offer_id: dict[str, dict[str, Any]] = {}
+    if product_ids:
+        info_items = ozon.fetch_product_info(product_ids)
+        write_json(run_dir / "ozon_verify_product_info.json", info_items)
+        status_by_product_id = {
+            _normalize_text(item.get("id") or item.get("product_id")): item
+            for item in info_items
+            if isinstance(item, dict)
+        }
+        for item in items:
+            offer_id = _normalize_text(item.get("offer_id"))
+            product_id = _normalize_text(item.get("id") or item.get("product_id"))
+            if offer_id and product_id:
+                status_by_offer_id[offer_id] = status_by_product_id.get(product_id, {})
     results = []
     for offer_id, target in targets.items():
         item = next((row for row in items if _normalize_text(row.get("offer_id")) == offer_id), None)
@@ -634,9 +758,16 @@ def _verify_ozon_payloads(ozon: OzonSellerAdapter, payloads: list[dict[str, Any]
         if not item:
             results.append({"offer_id": offer_id, "status": "missing", "checks": checks})
             continue
+        product_info = status_by_offer_id.get(offer_id, {})
+        statuses = product_info.get("statuses") if isinstance(product_info.get("statuses"), dict) else {}
+        product_errors = product_info.get("errors") if isinstance(product_info.get("errors"), list) else []
         checks["name"] = _normalize_space(item.get("name")) == _normalize_space(target["name"])
         checks["description"] = _normalize_space(_first_attr_value(item, OZON_ATTR_IDS["description"])) == _normalize_space(target["description"])
+        if target["hashtags"]:
+            checks["hashtags"] = _same_list(_ozon_attr_values(item, OZON_ATTR_IDS["hashtags"]), target["hashtags"])
         checks["colors"] = _same_list(_ozon_attr_values(item, OZON_ATTR_IDS["color"]), target["colors"])
+        checks["marking_required"] = _same_list(_ozon_attr_values(item, OZON_ATTR_IDS["marking_required"]), target["marking_required"])
+        checks["package_weight_attr"] = _same_list(_ozon_attr_values(item, OZON_ATTR_IDS["package_weight"]), target["package_weight_attr"])
         checks["dimensions"] = {
             "depth": int(item.get("depth") or 0),
             "width": int(item.get("width") or 0),
@@ -644,13 +775,167 @@ def _verify_ozon_payloads(ozon: OzonSellerAdapter, payloads: list[dict[str, Any]
         } == target["dimensions"]
         checks["weight"] = int(float(item.get("weight") or 0)) == target["weight"]
         checks["photo_count"] = ((1 if _normalize_text(item.get("primary_image")) else 0) + len(item.get("images") or [])) >= target["photo_count"]
-        results.append({"offer_id": offer_id, "status": "ok" if all(checks.values()) else "warning", "checks": checks})
+        checks["product_info_errors"] = not product_errors
+        checks["product_status"] = not _ozon_product_status_is_blocking(statuses)
+        results.append(
+            {
+                "offer_id": offer_id,
+                "product_id": _normalize_text(item.get("id") or item.get("product_id")),
+                "status": "ok" if all(checks.values()) else "warning",
+                "checks": checks,
+                "product_statuses": statuses,
+                "product_errors": product_errors,
+            }
+        )
     summary = {
         "status": "ok" if results and all(item["status"] == "ok" for item in results) else "warning",
         "rows": len(results),
         "results": results,
     }
     write_json(run_dir / "ozon_verify_summary.json", summary)
+    return summary
+
+
+def _verify_one(
+    *,
+    passport: dict[str, Any],
+    data_dir: Path,
+    credentials: AppCredentials,
+    skip_api: bool,
+    run_dir: Path,
+) -> dict[str, Any]:
+    identity = passport.get("identity") or {}
+    sku = _normalize_text(identity.get("internal_sku"))
+    row: dict[str, Any] = {"internal_sku": sku, "identity": identity, "status": "ok", "errors": [], "marketplaces": {}}
+
+    ozon_offer_id = _normalize_text(
+        identity.get("ozon_offer_id_after_seller_sku_update")
+        or identity.get("ozon_offer_id")
+        or (passport.get("ozon") or {}).get("offer_id_after_seller_sku_update")
+    )
+    if ozon_offer_id:
+        current_ozon = None
+        if credentials.ozon_seller and not skip_api:
+            current_items = OzonSellerAdapter(credentials.ozon_seller).fetch_product_attributes([ozon_offer_id])
+            current_ozon = current_items[0] if current_items else None
+        current_ozon = current_ozon or _find_local_ozon(data_dir, ozon_offer_id)
+        if not current_ozon:
+            row["marketplaces"]["ozon"] = {"status": "missing", "errors": ["ozon_current_card_not_found"]}
+            row["errors"].append("ozon_current_card_not_found")
+        else:
+            write_json(run_dir / f"ozon_verify_current_{sku}.json", current_ozon)
+            payload, errors = _build_ozon_verify_payload(passport, current_ozon)
+            row["marketplaces"]["ozon"] = {"status": "ready" if payload else "blocked", "payload": payload, "errors": errors}
+            row["errors"].extend(errors)
+
+    wb_vendor_code = _normalize_text(
+        identity.get("wb_vendor_code_after_seller_sku_update")
+        or identity.get("wb_vendor_code")
+        or (passport.get("wb") or {}).get("vendor_code_after_seller_sku_update")
+    )
+    if wb_vendor_code:
+        current_wb = None
+        if credentials.wb and not skip_api:
+            current_wb = WbContentAdapter(credentials.wb).find_cards_by_vendor_codes({wb_vendor_code}).get(wb_vendor_code)
+        current_wb = current_wb or _find_local_wb(data_dir, wb_vendor_code)
+        if not current_wb:
+            row["marketplaces"]["wb"] = {"status": "missing", "errors": ["wb_current_card_not_found"]}
+            row["errors"].append("wb_current_card_not_found")
+        else:
+            write_json(run_dir / f"wb_verify_current_{sku}.json", current_wb)
+            payload, _, errors = _build_wb_payload(passport, current_wb)
+            row["marketplaces"]["wb"] = {"status": "ready" if payload else "blocked", "payload": payload, "errors": errors}
+            row["errors"].extend(errors)
+
+    if not row["marketplaces"]:
+        row["errors"].append("no_marketplace_identity")
+    if row["errors"]:
+        row["status"] = "blocked"
+    return row
+
+
+def run_card_content_update_verify(
+    *,
+    credentials: AppCredentials,
+    data_dir: Path = Path("data"),
+    passport_paths: list[Path] | None = None,
+    internal_skus: list[str] | None = None,
+    run_id: str | None = None,
+    skip_api: bool = False,
+) -> dict[str, Any]:
+    started_at = datetime.now()
+    run_id = run_id or f"card_content_update_verify_{started_at.strftime('%Y%m%dT%H%M%S')}"
+    run_dir = ensure_dir(data_dir / "runs" / started_at.strftime("%Y-%m-%d") / run_id)
+    paths = _passport_paths(data_dir=data_dir, passport_paths=passport_paths or [], internal_skus=internal_skus or [])
+    rows = [
+        _verify_one(
+            passport=_read_json(path),
+            data_dir=data_dir,
+            credentials=credentials,
+            skip_api=skip_api,
+            run_dir=run_dir,
+        )
+        for path in paths
+    ]
+    write_json(run_dir / "card_content_update_verify_targets.json", rows)
+    ozon_payloads = [
+        row["marketplaces"]["ozon"]["payload"]
+        for row in rows
+        if row.get("marketplaces", {}).get("ozon", {}).get("payload")
+    ]
+    wb_payloads = [
+        row["marketplaces"]["wb"]["payload"]
+        for row in rows
+        if row.get("marketplaces", {}).get("wb", {}).get("payload")
+    ]
+    ozon_verify: dict[str, Any] = {"status": "skipped", "rows": 0}
+    wb_verify: dict[str, Any] = {"status": "skipped", "rows": 0}
+    if ozon_payloads:
+        if not credentials.ozon_seller and not skip_api:
+            raise RuntimeError("Ozon credentials are required")
+        if credentials.ozon_seller and not skip_api:
+            ozon_verify = _verify_ozon_payloads(OzonSellerAdapter(credentials.ozon_seller), ozon_payloads, run_dir)
+    if wb_payloads:
+        if not credentials.wb and not skip_api:
+            raise RuntimeError("WB credentials are required")
+        if credentials.wb and not skip_api:
+            wb_verify = _verify_wb_payloads(WbContentAdapter(credentials.wb), wb_payloads, run_dir)
+    blocked_rows = [row for row in rows if row.get("status") == "blocked"]
+    verify_ok = (
+        not blocked_rows
+        and ozon_verify.get("status") in {"ok", "skipped"}
+        and wb_verify.get("status") in {"ok", "skipped"}
+    )
+    summary = {
+        "run_id": run_id,
+        "started_at": started_at.isoformat(timespec="seconds"),
+        "mode": "verify",
+        "overall_status": "ok" if verify_ok else "warning",
+        "input_rows": len(rows),
+        "blocked_rows": len(blocked_rows),
+        "skip_api": skip_api,
+        "verify": {"ozon": ozon_verify, "wb": wb_verify},
+        "artifacts": {
+            "run_dir": str(run_dir),
+            "targets": str(run_dir / "card_content_update_verify_targets.json"),
+            "summary": str(run_dir / "summary.json"),
+        },
+    }
+    write_json(run_dir / "summary.json", summary)
+    manifest = write_summary_run_manifest(
+        data_dir=data_dir,
+        run_dir=run_dir,
+        summary=summary,
+        task="card-content-update-verify",
+        mode="verify",
+        risk="low",
+        marketplaces=["ozon", "wb"],
+        inputs={"passport_paths": [str(path) for path in paths], "internal_skus": internal_skus or [], "skip_api": skip_api},
+        lifecycle_status="closed" if verify_ok else "needs_attention",
+        closed=verify_ok,
+    )
+    summary["artifacts"]["run_manifest"] = manifest["manifest"]
+    write_json(run_dir / "summary.json", summary)
     return summary
 
 
@@ -737,10 +1022,25 @@ def run_card_content_update_apply(
     wb_verify: dict[str, Any] = {"status": "skipped", "rows": 0}
     if ozon_payload:
         ozon = OzonSellerAdapter(credentials.ozon_seller)
+        ozon_attr_update_items = _ozon_attribute_update_items(ozon_payload)
+        if ozon_attr_update_items:
+            write_json(run_dir / "ozon_attributes_update_request.json", {"items": ozon_attr_update_items})
+            ozon_attr_update_result = ozon.update_product_attributes(ozon_attr_update_items)
+            write_json(run_dir / "ozon_attributes_update_response.json", ozon_attr_update_result)
+            task_id = _ozon_task_id(ozon_attr_update_result)
+            if task_id:
+                _wait_ozon_import(
+                    ozon,
+                    int(task_id),
+                    run_dir,
+                    wait_seconds,
+                    poll_interval,
+                    artifact_prefix="ozon_attributes_update_info",
+                )
         write_json(run_dir / "ozon_import_request.json", {"items": ozon_payload})
         ozon_result = ozon.import_products(ozon_payload)
         write_json(run_dir / "ozon_import_response.json", ozon_result)
-        task_id = ((ozon_result.get("result") or {}).get("task_id")) if isinstance(ozon_result, dict) else None
+        task_id = _ozon_task_id(ozon_result)
         if task_id:
             _wait_ozon_import(ozon, int(task_id), run_dir, wait_seconds, poll_interval)
         ozon_verify = _verify_ozon_payloads(ozon, ozon_payload, run_dir)

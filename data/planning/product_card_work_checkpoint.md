@@ -1,6 +1,6 @@
 # Product Card Work Checkpoint
 
-Дата чекпойнта: 2026-06-30
+Дата чекпойнта: 2026-07-04
 
 ## Назначение
 
@@ -34,14 +34,15 @@
 На момент чекпойнта работа идет в ветке:
 
 ```text
-feature/card-content-apply-optimization
+feature/runtime-job-store
 ```
 
-В рабочем дереве есть незакоммиченные изменения по нескольким направлениям:
-карточки, поставки, отзывы/уведомления, акции и новые helper-команды. Нельзя
-откатывать эти изменения без отдельного указания владельца. Перед коммитом
-нужна отдельная ревизия `git diff`, потому что часть изменений сделана в ходе
-других задач.
+В рабочем дереве могут быть незакоммиченные изменения по карточкам,
+инструкциям, run artifacts и локальным catalog-layer файлам. Нельзя откатывать
+эти изменения без отдельного указания владельца. Перед коммитом нужна
+отдельная ревизия `git diff` и проверка `git status --ignored`, потому что
+часть карточных паспортов и run artifacts может не попадать в обычный
+tracked-status.
 
 ## Последняя примененная пачка карточек
 
@@ -85,6 +86,69 @@ Telegram message: 75895
   `owner_review.status=owner_approved_applied_verified`;
 - `marketplace_apply.status=applied_verified`;
 - post-verify report выше.
+
+## Комплекты Позывных Мох
+
+Текущий шаблон серии: `chev_kit2_pz_text0022` / `Турист`.
+
+Статус на 2026-07-04:
+
+- `chev_kit2_pz_text0022` применен и проверен через
+  `apply_approved_cards_20260704T165430`;
+- по шаблону `Турист` создано `76` новых Layer 3 approved-passport файлов для
+  остальных комплектов позывных `мох`;
+- всего в `data/catalog/master_passport/approved/chev_kit2_pz_text*.json`
+  сейчас `77` валидных JSON: `77` примененных и проверенных паспортов;
+- run генерации:
+  `data/runs/2026-07-04/kit_pz_passports_from_tourist_template_20260704T1702`;
+- owner-review первых 5:
+  `data/runs/2026-07-04/kit_pz_first5_owner_review_20260704T1720/report.html`,
+  Telegram document `82076`;
+- владелец согласовал всю серию без просмотра остальных HTML и сказал:
+  `Применяй все. Все комплекты позывных.`;
+- marketplace apply выполнен пачками:
+  `kit_pz_apply_all_batch01_20260704T1732`,
+  `kit_pz_apply_all_batch02_20260704T1735`,
+  `kit_pz_apply_all_batch03_20260704T1738`,
+  `kit_pz_apply_all_batch04_20260704T1740` ...
+  `kit_pz_apply_all_batch08_20260704T1740`;
+- итог apply: `76/76` pending-паспортов получили
+  `marketplace_apply.status=applied_verified`;
+- WB-create: `54` новых WB-карточки, relevant WB card errors `0`,
+  pending media uploads `0`;
+- seller SKU/content/catalog-sync: `ok` по всем 8 пачкам;
+- итоговый runner summary:
+  `data/runs/2026-07-04/kit_pz_apply_all_remaining_20260704T1740/summary.json`;
+- проверка: названия до `60` символов, описание в `3` блока, целевой фотосет
+  `5` фото, marketplace-цвет `зеленый, черный`, `мох` сохранен в названии,
+  названии цвета и описании.
+
+Во всех пачках `content_status=warning` из-за промежуточной Ozon-проверки по
+старым `offer_id` до смены seller SKU. Это не считается блокером, если
+последующие стадии `seller_sku_status=ok`, `catalog_sync_status=ok` и
+`post_verify_status=ok`. По этой серии финальный `post_verify_status=ok` во
+всех 8 пачках.
+
+Исключения из пачки:
+
+- `chev_kit2_pz_text0024` / `pzmh0024` - старый дубль `Турист`, владелец
+  перенес его в архив Ozon, в паспорта и будущий apply не включать;
+- `chev_kit2_pz_text0076` / `pzmh0095` - `Сталкер`; владелец отправил в
+  архив, но Ozon dry-run `ozon_product_remove_plan_20260704T170808` заблокировал
+  archive ошибкой `ozon_archive_requires_zero_stock`. Пока товар не применять,
+  не переносить на WB и не создавать паспорт. Следующий шаг по нему: убрать или
+  обнулить остаток, затем повторить `plan-ozon-product-remove` /
+  `apply-ozon-product-remove`.
+
+Для этой серии владелец согласовал нейтральное описание малого шеврона:
+
+```text
+меньший шеврон дополнен тематическим изображением
+```
+
+Не нужно вручную описывать конкретную картинку каждого малого шеврона в этой
+шаблонной пачке. Это не отменяет полный фото-аудит для других серий и новых
+шаблонов.
 
 ## Текущие статусы Layer 2
 
@@ -211,6 +275,17 @@ curl -sS -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument" \
 - характеристики;
 - группировка только если она явно включена в пакет.
 
+Правило 2026-07-04: если владелец пишет `согласовано`, но не пишет
+`применяй`, агент обязан сразу зафиксировать owner approval в Layer 2,
+создать или обновить Layer 3 master passport со статусом
+`owner_approved_pending_batch_apply` и остановиться без marketplace write.
+Это нужно, чтобы согласованные карточки не терялись между задачами и будущий
+batch apply брал уже готовые паспорта. Если владелец дал правки, сначала
+внести правки в Layer 2/HTML-цель, затем создавать паспорт.
+
+`применяй` означает отдельное разрешение на write в маркетплейсы по уже
+согласованным паспортам. Не смешивать `согласовано` и `применяй`.
+
 Не запрашивать повторное подтверждение одного и того же. Остановиться нужно
 только если:
 
@@ -308,6 +383,10 @@ Ozon policy cleanup:
 - не вставлять упаковку и вес в customer-facing описание;
 - релевантные SEO-запросы из `seo_query_pack` должны естественно входить в
   описание, не только в title/hashtags.
+- для массовых паспортов комплектов позывных `мох` по owner-approved шаблону
+  `Турист` использовать согласованную фразу `меньший шеврон дополнен
+  тематическим изображением`; отдельное описание картинки на каждом малом
+  шевроне в этой пачке не требуется.
 
 ## SEO и хештеги
 
@@ -420,11 +499,277 @@ Layer 2/Layer 3. Смена seller SKU на Ozon/WB - опасная опера�
 6. После 5 согласованных карточек применять batch-командой
    `apply-approved-cards`, если владелец сказал `применяй`.
 
+## Recovery 2026-07-04: Пачка 0001-0005 `seo_priority_20260704`
+
+Пачка из 5 карточек:
+
+- `chev_back_fsb_text0001`;
+- `chev_back_fsb_pict0001`;
+- `chev_back_form_text0001`;
+- `chev_back_form_text0002` / ГБР;
+- `chev_back_mvd_pict0001`.
+
+Итог:
+
+- WB content verified `ok` по всем 5;
+- Ozon content verified `ok` по всем 5;
+- финальный read-only verify:
+  `data/runs/2026-07-04/card_batch_0001_0005_final_readonly_verify_20260704T2055/summary.json`;
+- Layer 3 паспорта помечены `owner_approved_applied_verified`.
+
+Что пошло не так:
+
+1. Первый batch применил content до seller SKU, затем seller SKU stage для WB
+   перезаписал часть карточек старым payload. После смены seller SKU нужно
+   делать финальный verify по новым internal SKU и при необходимости
+   повторять content update по новым SKU.
+2. `plan-card-content-update` с `ready_rows=5` - это не успешный verify, а
+   наличие готового dry-run пакета. Нельзя сообщать владельцу, что карточки
+   проверены, если был только plan.
+3. Ozon `/v1/product/import/info` возвращал `imported` без ошибок, но
+   `/v3/product/info/list` показывал `Не обновлен`. Реальная причина была
+   видна только в ЛК Ozon import history:
+   хештеги были переданы через запятые и с пробелами внутри фраз.
+4. Ozon `#Хештеги` (`23171`) должны идти в API как
+   `#тег #тег_с_подчеркиванием`, без запятых; один хештег с `#` не длиннее
+   `30` символов. Длинные хештеги отфильтровывать.
+5. Для Ozon перед полным `/v3/product/import` подтверждено полезно отправлять
+   owner-approved attributes через `/v1/product/attributes/update`, включая
+   `23536=false` и `4497` вес с упаковкой, и ждать `task_id`.
+
+Проверенные run artifacts:
+
+```text
+data/runs/2026-07-04/ozon_import_history_probe_click_20260704T2028/
+data/runs/2026-07-04/card_batch_0001_0005_content_recovery_apply6_20260704T2045/
+data/runs/2026-07-04/card_batch_0001_0005_final_readonly_verify_20260704T2055/
+```
+
 Текущие явные следующие неподанные карточки в папке
 `seo_priority_20260628`: `0015_chev_pz_ng_text0012`,
 `0016_chev_pz_ng_text0018`. Но приоритет может быть изменен владельцем:
 сейчас предпочтительны карточки с остатком, плохим SEO и слабой продажей; товары
 без остатка и хорошо продающиеся карточки идут ниже.
+
+## Текущая очередь `seo_priority_20260704`
+
+После завершения пачки комплектов позывных `мох` следующая карточка выбрана не
+из устаревших статусов `seo_priority_20260628`, а из текущего
+`card_content_audit_backlog.csv`. Очередь идет по карточкам с остатком,
+плохим/неполным SEO, видимостью в parser и возможностью получить эффект от
+оптимизации.
+
+### 0001 `chev_back_fsb_text0001`
+
+```text
+data/catalog/card_audits/seo_priority_20260704/0001_chev_back_fsb_text0001/
+```
+
+- internal SKU: `chev_back_fsb_text0001`;
+- Ozon: `back0013` / `2158335091` / `2430054760`;
+- WB: `fsbback0001_back0013_222365` / `593399830`;
+- backlog rank: `1`;
+- причина выбора: есть остаток, продажи за 30 дней, parser-видимость,
+  рассинхрон Ozon/WB, 4 фото вместо целевых 5 и пустые SEO-хештеги/теги.
+
+Owner-review HTML:
+
+```text
+data/catalog/card_audits/seo_priority_20260704/0001_chev_back_fsb_text0001/chev_back_fsb_text0001_owner_review_fast.html
+```
+
+Статус:
+
+- HTML отправлен в Telegram topic `-1003683440820/42336`, message `82267`;
+- владелец ответил `Только согласовано. Следующий на согласование`;
+- `audit.json` обновлен до
+  `owner_review.status=owner_approved_pending_batch_apply`;
+- Layer 3 passport создан командой
+  `promote-approved-card-passport --internal-sku chev_back_fsb_text0001 --write`;
+- passport:
+  `data/catalog/master_passport/approved/chev_back_fsb_text0001.json`;
+- layout validation пройден: mobile `390x844`, desktop `1366x1000`, битых
+  изображений нет, горизонтального скролла нет;
+- marketplace write не выполнялся;
+- карточка копится в batch и может применяться через `apply-approved-cards`
+  только после явной команды владельца `применяй`.
+
+В HTML явно показаны будущие опасные действия: изменение контента Ozon/WB,
+seller SKU Ozon/WB на `chev_back_fsb_text0001`, хештеги/теги, упаковка/вес и
+поля карточек. Фото apply сейчас не должен добавлять пятый слайд: фото
+вариантов ношения отсутствует и уже зафиксировано дизайнеру как
+`VS-DESIGN-002`.
+
+### 0002 `chev_back_fsb_pict0001`
+
+```text
+data/catalog/card_audits/seo_priority_20260704/0002_chev_back_fsb_pict0001/
+```
+
+- internal SKU: `chev_back_fsb_pict0001`;
+- Ozon: `back0014` / `2158364923` / `2430081567`;
+- WB: `fsbback0003_back0014_222031` / `593405742`;
+- backlog rank: `2`;
+- причина выбора: есть остаток, продажи за 30 дней, parser-видимость,
+  рассинхрон Ozon/WB, 4 фото вместо целевых 5 и пустые SEO-хештеги/теги.
+
+Owner-review HTML:
+
+```text
+data/catalog/card_audits/seo_priority_20260704/0002_chev_back_fsb_pict0001/chev_back_fsb_pict0001_owner_review_fast.html
+```
+
+Статус:
+
+- HTML отправлен в Telegram topic `-1003683440820/42336`, message `82348`;
+- владелец ответил `согласовано`;
+- `audit.json` обновлен до
+  `owner_review.status=owner_approved_pending_batch_apply`;
+- Layer 3 passport создан командой
+  `promote-approved-card-passport --internal-sku chev_back_fsb_pict0001 --write`;
+- passport:
+  `data/catalog/master_passport/approved/chev_back_fsb_pict0001.json`;
+- layout validation пройден: mobile `390x844`, desktop `1366x1000`, битых
+  изображений нет, горизонтального скролла нет;
+- marketplace write не выполнялся;
+- карточка копится в batch и может применяться через `apply-approved-cards`
+  только после явной команды владельца `применяй`.
+
+В HTML явно показаны будущие опасные действия: изменение контента Ozon/WB,
+seller SKU Ozon/WB на `chev_back_fsb_pict0001`, хештеги/теги, упаковка/вес и
+поля карточек. Фото apply сейчас не должен добавлять пятый слайд: фото
+вариантов ношения отсутствует и уже зафиксировано дизайнеру как
+`VS-DESIGN-033`. Для WB есть риск по ведомственной символике: перед загрузкой
+новых/переносимых фото нужна версия с водяным знаком VitalEmb, если это
+потребуется правилами WB.
+
+### 0003 `chev_back_form_text0001`
+
+```text
+data/catalog/card_audits/seo_priority_20260704/0003_chev_back_form_text0001/
+```
+
+- internal SKU: `chev_back_form_text0001`;
+- Ozon: `back0002` / `2148711862` / `2422699878`;
+- WB: `nevnback0001_back0002_222621` / `589069492`;
+- backlog rank: `3`;
+- причина выбора: есть остаток, продажи за 30 дней, parser-видимость,
+  рассинхрон Ozon/WB, 4 фото вместо целевых 5 и пустые SEO-хештеги/теги.
+
+Owner-review HTML:
+
+```text
+data/catalog/card_audits/seo_priority_20260704/0003_chev_back_form_text0001/chev_back_form_text0001_owner_review_fast.html
+```
+
+Статус:
+
+- HTML отправлен в Telegram topic `-1003683440820/42336`, message `82400`;
+- владелец ответил: `Добавь в описание и хештеги слово пресса. Остальное
+  согласовано.`;
+- правка внесена в Layer 2: слово `пресса` добавлено в первый блок описания,
+  Ozon hashtags и WB tags; HTML пересобран и повторно провалидирован;
+- `audit.json` обновлен до
+  `owner_review.status=owner_approved_pending_batch_apply`;
+- Layer 3 passport создан командой
+  `promote-approved-card-passport --internal-sku chev_back_form_text0001 --write`;
+- passport:
+  `data/catalog/master_passport/approved/chev_back_form_text0001.json`;
+- layout validation пройден: mobile `390x844`, desktop `1366x1000`, битых
+  изображений нет, горизонтального скролла нет;
+- marketplace write не выполнялся;
+- карточка копится в batch и может применяться через `apply-approved-cards`
+  только после явной команды владельца `применяй`.
+
+В HTML явно показаны будущие опасные действия: изменение контента Ozon/WB,
+seller SKU Ozon/WB на `chev_back_form_text0001`, хештеги/теги, упаковка/вес и
+поля карточек. Фото apply сейчас не должен добавлять пятый слайд: фото
+вариантов ношения отсутствует и уже зафиксировано дизайнеру как
+`VS-DESIGN-004`.
+
+### 0004 `chev_back_form_text0002`
+
+```text
+data/catalog/card_audits/seo_priority_20260704/0004_chev_back_form_text0002/
+```
+
+- internal SKU: `chev_back_form_text0002`;
+- Ozon: `back0001` / `2131612956` / `2409731430`;
+- WB: `nevnback0001_back0001_0101228255` / `589057650`;
+- backlog rank: `4`;
+- причина выбора: есть остаток, продажи за 30 дней, parser-видимость,
+  рассинхрон Ozon/WB, 4 фото вместо целевых 5 и пустые SEO-хештеги/теги.
+
+Owner-review HTML:
+
+```text
+data/catalog/card_audits/seo_priority_20260704/0004_chev_back_form_text0002/chev_back_form_text0002_owner_review_fast.html
+```
+
+Статус:
+
+- HTML отправлен в Telegram topic `-1003683440820/42336`, message `82438`;
+- владелец ответил: `Добавь в описание "группа быстрого реагирования".
+  Остальное согласовано.`;
+- правка внесена в Layer 2: точная фраза `группа быстрого реагирования`
+  добавлена в первый блок описания; HTML пересобран и повторно провалидирован;
+- `audit.json` обновлен до
+  `owner_review.status=owner_approved_pending_batch_apply`;
+- Layer 3 passport создан командой
+  `promote-approved-card-passport --internal-sku chev_back_form_text0002 --write`;
+- passport:
+  `data/catalog/master_passport/approved/chev_back_form_text0002.json`;
+- layout validation пройден: mobile `390x844`, desktop `1366x1000`, битых
+  изображений нет, горизонтального скролла нет;
+- marketplace write не выполнялся;
+- карточка копится в batch и может применяться через `apply-approved-cards`
+  только после явной команды владельца `применяй`.
+
+В HTML явно показаны будущие опасные действия: изменение контента Ozon/WB,
+seller SKU Ozon/WB на `chev_back_form_text0002`, хештеги/теги, упаковка/вес и
+поля карточек. Фото apply сейчас не должен добавлять пятый слайд: фото
+вариантов ношения отсутствует и уже зафиксировано дизайнеру как
+`VS-DESIGN-005`.
+
+### 0005 `chev_back_mvd_pict0001`
+
+```text
+data/catalog/card_audits/seo_priority_20260704/0005_chev_back_mvd_pict0001/
+```
+
+- internal SKU: `chev_back_mvd_pict0001`;
+- Ozon: `back0003` / `2149206752` / `2423061067`;
+- WB: `mvdback0001_back0003_222396` / `591206142`;
+- backlog rank: `5`;
+- причина выбора: есть остаток, продажи за 30 дней, parser-видимость,
+  рассинхрон Ozon/WB, 4 фото вместо целевых 5 и пустые SEO-хештеги/теги.
+
+Owner-review HTML:
+
+```text
+data/catalog/card_audits/seo_priority_20260704/0005_chev_back_mvd_pict0001/chev_back_mvd_pict0001_owner_review_fast.html
+```
+
+Статус:
+
+- `audit.json` обновлен до `owner_review.status=submitted_for_owner_review`;
+- HTML отправлен в Telegram topic `-1003683440820/42336`, message `82472`;
+- layout validation пройден: mobile `390x844`, desktop `1366x1000`, битых
+  изображений нет, горизонтального скролла нет;
+- marketplace write не выполнялся;
+- Layer 3 passport еще не создан;
+- если владелец пишет `согласовано`, следующий шаг - записать owner approval
+  в Layer 2 и сразу создать Layer 3 passport со статусом
+  `owner_approved_pending_batch_apply`;
+- если владелец пишет `применяй`, сначала проверить, что passport создан, и
+  только потом запускать безопасный batch apply.
+
+В HTML явно показаны будущие опасные действия: изменение контента Ozon/WB,
+seller SKU Ozon/WB на `chev_back_mvd_pict0001`, хештеги/теги, упаковка/вес и
+поля карточек. Фото apply сейчас не должен добавлять пятый слайд: фото
+вариантов ношения отсутствует и уже зафиксировано дизайнеру как
+`VS-DESIGN-006`. Для новых/обновляемых WB-фото ведомственной тематики нужно
+проверять watermark VitalEmb.
 
 ## Что нельзя делать
 

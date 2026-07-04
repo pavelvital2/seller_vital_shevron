@@ -146,6 +146,9 @@ class OzonSellerAdapter:
     def import_products(self, items: list[dict[str, Any]]) -> dict[str, Any]:
         return self.post("/v3/product/import", {"items": items})
 
+    def update_product_attributes(self, items: list[dict[str, Any]]) -> dict[str, Any]:
+        return self.post("/v1/product/attributes/update", {"items": items})
+
     def import_product_prices(self, prices: list[dict[str, Any]]) -> dict[str, Any]:
         return self.post("/v1/product/import/prices", {"prices": prices})
 

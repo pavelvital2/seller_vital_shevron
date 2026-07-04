@@ -13,6 +13,7 @@ from seller_agent.tasks.card_passport_promotion import ensure_approved_passports
 from seller_agent.tasks.card_content_update import (
     run_card_content_update_apply,
     run_card_content_update_plan,
+    run_card_content_update_verify,
 )
 from seller_agent.tasks.ozon_card_create_apply import run_ozon_card_create_apply
 from seller_agent.tasks.ozon_card_create_plan import run_ozon_card_create_plan
@@ -77,17 +78,16 @@ def _run_post_apply_content_verify(
 ) -> dict[str, Any]:
     if not internal_skus:
         return _stage("skipped", plan=None, ready_skus=[], blocked=[])
-    plan = run_card_content_update_plan(
+    verify = run_card_content_update_verify(
         credentials=credentials,
         data_dir=data_dir,
         internal_skus=internal_skus,
         run_id=f"{base_run_id}_post_verify",
         skip_api=False,
     )
-    plan_path = Path(plan["artifacts"]["plan"])
-    ready_skus, blocked = _ready_skus_from_plan(plan_path)
-    status = "ok" if int(plan.get("blocked_rows") or 0) == 0 else "warning"
-    return _stage(status, plan=plan, ready_skus=ready_skus, blocked=blocked)
+    status = "ok" if verify.get("overall_status") == "ok" else "warning"
+    blocked_count = int(verify.get("blocked_rows") or 0)
+    return _stage(status, verify=verify, ready_skus=internal_skus if status == "ok" else [], blocked_count=blocked_count)
 
 
 def _run_content_stage(

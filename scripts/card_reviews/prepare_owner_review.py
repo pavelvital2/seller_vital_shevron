@@ -331,6 +331,24 @@ def build_html(data: dict[str, Any], audit_dir: Path, output: Path) -> None:
             f"<tr><td>Группировка Ozon</td><td>model_id={esc(model.get('model_id'))}; count={esc(model.get('count'))}</td><td>model_info</td></tr>"
         )
 
+    wb_param_rows = []
+    for characteristic in wb.get("characteristics", []):
+        name = characteristic.get("characteristic_name") or f"characteristic_id {characteristic.get('characteristic_id')}"
+        values = "; ".join(map(str, characteristic.get("values", [])))
+        wb_param_rows.append(
+            f"<tr><td>{esc(name)}</td><td>{esc(values)}</td><td>{esc(characteristic.get('characteristic_id'))}</td></tr>"
+        )
+    wb_dims = wb.get("dimensions") or {}
+    if wb_dims:
+        wb_param_rows.append(
+            f"<tr><td>Габариты/вес упаковки</td><td>{esc(wb_dims.get('length'))}*{esc(wb_dims.get('width'))}*{esc(wb_dims.get('height'))} см; {esc(wb_dims.get('weightBrutto'))} кг</td><td>dimensions</td></tr>"
+        )
+    wb_imt_id = wb.get("imt_id") or wb.get("imtID") or identity.get("wb", {}).get("imtID")
+    if wb_imt_id:
+        wb_param_rows.append(
+            f"<tr><td>Группировка WB</td><td>imtID={esc(wb_imt_id)}</td><td>imtID</td></tr>"
+        )
+
     desc_blocks = proposed.get("description_blocks", ["", "", ""])
     physical = proposed.get("target_physical_parameters") if isinstance(proposed.get("target_physical_parameters"), dict) else {}
     color_value = proposed.get("colors") or proposed.get("color") or proposed.get("colour") or physical.get("color") or ""
@@ -362,6 +380,7 @@ def build_html(data: dict[str, Any], audit_dir: Path, output: Path) -> None:
 <section><h2>Целевые поля Ozon</h2><div class="table-wrap"><table><thead><tr><th>Поле</th><th>Сейчас</th><th>Рекомендую</th><th>Статус</th><th>Почему</th></tr></thead><tbody>{field_rows(data.get('target_editor_fields', []), 'Ozon')}</tbody></table></div></section>
 <section><h2>Целевые поля WB</h2><div class="table-wrap"><table><thead><tr><th>Поле</th><th>Сейчас</th><th>Рекомендую</th><th>Статус</th><th>Почему</th></tr></thead><tbody>{field_rows(data.get('target_editor_fields', []), 'WB')}</tbody></table></div></section>
 <details open><summary>Все текущие параметры Ozon</summary><div class="table-wrap"><table><thead><tr><th>Поле</th><th>Сейчас</th><th>ID/Источник</th></tr></thead><tbody>{''.join(ozon_param_rows)}</tbody></table></div></details>
+<details open><summary>Все текущие параметры WB</summary><div class="table-wrap"><table><thead><tr><th>Поле</th><th>Сейчас</th><th>ID/Источник</th></tr></thead><tbody>{''.join(wb_param_rows)}</tbody></table></div></details>
 <section><h2>Решение владельца</h2><p>Варианты: <b>применяй</b>, <b>поменять ...</b>, <b>отложить</b>, <b>нет</b>.</p><p class="warn">Если после просмотра владелец пишет <b>применяй</b>, это approval только для действий, явно показанных в этом HTML и сохраненных в Layer 2/Layer 3 package.</p></section>
 <p class="footer">Generated {esc(dt.datetime.now().astimezone().isoformat(timespec='seconds'))} from {esc(audit_dir / 'audit.json')}</p>
 </main></body></html>"""
