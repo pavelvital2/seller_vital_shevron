@@ -695,6 +695,38 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         lock_keys=("marketplace:ozon", "cards:ozon:remove"),
     ),
     RegisteredTask(
+        name="ozon-partial-approved-diagnose",
+        command="ozon-partial-approved-diagnose",
+        title="Diagnose Ozon PARTIAL_APPROVED",
+        description=(
+            "Read Ozon PARTIAL_APPROVED cards, classify active item errors versus "
+            "stale visibility, and build an exact recovery dry-run."
+        ),
+        mode="dry_run",
+        risk="normal",
+        marketplaces=("ozon",),
+        runbook_path="data/planning/card_ops/03_card_content_update_ozon_wb.md",
+        requires_credentials=True,
+    ),
+    RegisteredTask(
+        name="ozon-partial-approved-recovery-apply",
+        command="apply-ozon-partial-approved-recovery",
+        title="Apply Ozon PARTIAL_APPROVED recovery",
+        description=(
+            "Apply an owner-approved Ozon PARTIAL_APPROVED recovery package, "
+            "then verify visibility and card attributes."
+        ),
+        mode="apply",
+        risk="high",
+        marketplaces=("ozon",),
+        runbook_path="data/planning/card_ops/03_card_content_update_ozon_wb.md",
+        requires_credentials=True,
+        requires_confirmation=True,
+        source_plan_task="ozon-partial-approved-diagnose",
+        verify_task="ozon-partial-approved-diagnose",
+        lock_keys=("marketplace:ozon", "cards:ozon:partial-approved"),
+    ),
+    RegisteredTask(
         name="seller-sku-update-plan",
         command="plan-seller-sku-update",
         title="Plan seller SKU update",

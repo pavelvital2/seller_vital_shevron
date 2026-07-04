@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 from dataclasses import asdict, dataclass, fields
 from datetime import datetime
+import json
 from pathlib import Path
 from typing import Any
 
@@ -160,6 +161,55 @@ def _index_by_vendor(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         if key and key not in result:
             result[key] = row
     return result
+
+
+def _merge_rows_by_key(
+    existing: list[dict[str, Any]],
+    updates: list[dict[str, Any]],
+    *,
+    keys: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    merged: dict[tuple[str, ...], dict[str, Any]] = {}
+    order: list[tuple[str, ...]] = []
+    for row in existing + updates:
+        key = tuple(normalize_sku(row.get(field)) for field in keys)
+        if not all(key):
+            continue
+        if key not in merged:
+            order.append(key)
+        merged[key] = row
+    return [merged[key] for key in order]
+
+
+def _merge_ozon_content(
+    *,
+    existing_path: Path,
+    new_attributes: list[dict[str, Any]],
+    new_descriptions: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    existing: dict[str, Any] = {}
+    if existing_path.exists():
+        existing = json.loads(existing_path.read_text(encoding="utf-8"))
+    return {
+        "attributes": _merge_rows_by_key(
+            existing.get("attributes") or [],
+            new_attributes,
+            keys=("offer_id",),
+        ),
+        "descriptions": _merge_rows_by_key(
+            existing.get("descriptions") or [],
+            new_descriptions,
+            keys=("offer_id",),
+        ),
+    }
+
+
+def _merge_wb_content(*, existing_path: Path, new_cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    existing: list[dict[str, Any]] = []
+    if existing_path.exists():
+        raw = json.loads(existing_path.read_text(encoding="utf-8"))
+        existing = raw if isinstance(raw, list) else []
+    return _merge_rows_by_key(existing, new_cards, keys=("vendorCode",))
 
 
 def normalize_ozon_card_content(
@@ -324,6 +374,8 @@ def run_card_content_snapshot(
     run_id: str | None = None,
     marketplace: str = "all",
     limit_products: int | None = None,
+    internal_skus: list[str] | None = None,
+    merge_existing: bool = False,
     ozon_adapter: OzonSellerAdapter | None = None,
     wb_adapter: WbContentAdapter | None = None,
 ) -> dict[str, Any]:
@@ -335,6 +387,9 @@ def run_card_content_snapshot(
     output_dir = ensure_dir(output_dir or data_dir / DEFAULT_OUTPUT_DIR)
 
     products = _read_csv(products_path)
+    requested_skus = {normalize_sku(item) for item in internal_skus or [] if normalize_sku(item)}
+    if requested_skus:
+        products = [row for row in products if normalize_sku(row.get("internal_sku")) in requested_skus]
     if limit_products is not None and limit_products > 0:
         products = products[:limit_products]
 
@@ -390,10 +445,27 @@ def run_card_content_snapshot(
     report_path = run_dir / "card_content_snapshot_report.md"
     summary_path = run_dir / "summary.json"
 
-    _write_dict_csv(index_csv_path, index_dicts, CARD_CONTENT_INDEX_FIELDS)
-    write_json(index_json_path, index_dicts)
-    write_json(ozon_content_path, {"attributes": ozon_attributes, "descriptions": ozon_descriptions})
-    write_json(wb_content_path, wb_cards)
+    final_index_dicts = index_dicts
+    final_ozon_content: dict[str, Any] = {"attributes": ozon_attributes, "descriptions": ozon_descriptions}
+    final_wb_cards = wb_cards
+    if merge_existing:
+        existing_index = _read_csv(index_csv_path) if index_csv_path.exists() else []
+        final_index_dicts = _merge_rows_by_key(
+            existing_index,
+            index_dicts,
+            keys=("marketplace", "native_id"),
+        )
+        final_ozon_content = _merge_ozon_content(
+            existing_path=ozon_content_path,
+            new_attributes=ozon_attributes,
+            new_descriptions=ozon_descriptions,
+        )
+        final_wb_cards = _merge_wb_content(existing_path=wb_content_path, new_cards=wb_cards)
+
+    _write_dict_csv(index_csv_path, final_index_dicts, CARD_CONTENT_INDEX_FIELDS)
+    write_json(index_json_path, final_index_dicts)
+    write_json(ozon_content_path, final_ozon_content)
+    write_json(wb_content_path, final_wb_cards)
     write_json(raw_dir / "ozon_product_attributes.json", ozon_attributes)
     write_json(raw_dir / "ozon_product_descriptions.json", ozon_descriptions)
     write_json(raw_dir / "wb_cards.json", wb_cards)
@@ -421,6 +493,8 @@ def run_card_content_snapshot(
             "products_path": str(products_path),
             "marketplace": marketplace,
             "limit_products": limit_products or "",
+            "internal_skus": sorted(requested_skus),
+            "merge_existing": merge_existing,
         },
         "artifacts": artifacts,
     }

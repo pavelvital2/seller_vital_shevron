@@ -168,10 +168,14 @@ get_status(job_id) -> JobStatus
 Реализовано:
 
 - `JobService.submit(task_id, params, actor)` создает queued job;
-- `JobService.run(job_id)` запускает только read-only задачи через текущий
+- `JobService.run(job_id)` запускает read-only задачи через текущий
   `WorkflowRunner`;
-- apply-задачи в JobService v1 безопасно блокируются как `failed`;
-- `JobService.cancel(job_id)` отменяет только `created/queued`;
+- apply-задачи без `confirmed_by_user=true` переводятся в
+  `waiting_confirmation`, а не выполняются;
+- первый apply handler подключен для `apply-approved-cards`: job запускает
+  owner-approved batch только при `confirmed_by_user=true`, с TaskRegistry
+  metadata `source_plan_task`, `verify_task` и `lock_keys`;
+- `JobService.cancel(job_id)` отменяет `created/queued/waiting_confirmation`;
 - `JobRunner.run_next()` выполняет первый queued job;
 - CLI-команды `jobs list/show/submit/run/run-next/cancel`;
 - тесты `tests/test_job_service.py`.

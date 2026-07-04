@@ -105,6 +105,77 @@ def test_card_content_snapshot_writes_artifacts_with_fake_adapters(tmp_path: Pat
     assert raw["run_id"] == "card_content_snapshot_test"
 
 
+def test_card_content_snapshot_merge_existing_updates_only_target_rows(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    products_path = data_dir / "catalog" / "unified" / "products.csv"
+    _write_csv(
+        products_path,
+        [
+            {
+                "internal_product_id": "p1",
+                "internal_sku": "sku-1",
+                "mapping_status": "confirmed",
+                "product_name": "Old",
+                "ozon_offer_id": "oz-1",
+                "wb_vendor_code": "wb-1",
+            },
+            {
+                "internal_product_id": "p2",
+                "internal_sku": "sku-2",
+                "mapping_status": "confirmed",
+                "product_name": "Keep",
+                "ozon_offer_id": "oz-2",
+                "wb_vendor_code": "wb-2",
+            },
+        ],
+    )
+    output_dir = data_dir / "catalog" / "content"
+    _write_csv(
+        output_dir / "card_content_index.csv",
+        [
+            {
+                "marketplace": "ozon",
+                "internal_product_id": "p1",
+                "internal_sku": "sku-1",
+                "native_id": "oz-1",
+                "title": "Old title",
+            },
+            {
+                "marketplace": "ozon",
+                "internal_product_id": "p2",
+                "internal_sku": "sku-2",
+                "native_id": "oz-2",
+                "title": "Keep title",
+            },
+        ],
+    )
+    (output_dir / "ozon_card_content.json").write_text(
+        json.dumps({"attributes": [{"offer_id": "oz-2"}], "descriptions": [{"offer_id": "oz-2"}]}),
+        encoding="utf-8",
+    )
+    (output_dir / "wb_card_content.json").write_text(json.dumps([{"vendorCode": "wb-2"}]), encoding="utf-8")
+
+    result = run_card_content_snapshot(
+        credentials=AppCredentials(ozon_seller=None, ozon_performance=None, wb=None),
+        data_dir=data_dir,
+        products_path=products_path,
+        output_dir=output_dir,
+        run_id="merge_test",
+        marketplace="ozon",
+        internal_skus=["sku-1"],
+        merge_existing=True,
+        ozon_adapter=_FakeOzonCardAdapter(),
+    )
+
+    assert result["overall_status"] == "ok"
+    rows = list(csv.DictReader((output_dir / "card_content_index.csv").open(encoding="utf-8")))
+    by_key = {(row["marketplace"], row["native_id"]): row for row in rows}
+    assert by_key[("ozon", "oz-1")]["title"] == "Шеврон СВО"
+    assert by_key[("ozon", "oz-2")]["title"] == "Keep title"
+    ozon_content = json.loads((output_dir / "ozon_card_content.json").read_text(encoding="utf-8"))
+    assert {row["offer_id"] for row in ozon_content["attributes"]} == {"oz-1", "oz-2"}
+
+
 def test_task_registry_contains_card_content_snapshot() -> None:
     task = get_task_definition("fetch-card-content")
 

@@ -3,6 +3,77 @@
 Файл для контрольных задач, которые нужно не потерять между сессиями агентов.
 Если задача закрыта, обновить статус, дату закрытия и ссылку на отчет.
 
+## Completed
+
+### FU-2026-07-04-001 - Закрыть 14 Ozon PARTIAL_APPROVED по OFFER_ID_EDIT_WRONG_SOURCE
+
+Статус: `completed`
+
+Закрыто: 2026-07-04
+
+Источник:
+
+- read-only проверка Ozon `PARTIAL_APPROVED` от 2026-07-04;
+- targeted fixes:
+  `data/runs/2026-07-04/ozon_partial_approved_fix_attrs_20260704T201918`;
+- follow-up targeted fix:
+  `data/runs/2026-07-04/ozon_partial_approved_fix_marking_vvu_pvo_20260704T202037`.
+- route probe:
+  `data/runs/2026-07-04/ozon_offer_id_warning_route_probe_20260704T202849`;
+- confirmed one-SKU apply:
+  `data/runs/2026-07-04/ozon_offer_id_warning_noop_attr_apply_20260704T203447`.
+- batch dry-run:
+  `data/runs/2026-07-04/ozon_partial_visibility_stale_batch_dry_run_20260704T204611`.
+- batch apply:
+  `data/runs/2026-07-04/ozon_partial_visibility_stale_batch_apply_20260704T205729`.
+
+Что уже сделано:
+
+- `chev_kit2_pz_text0013` закрыт по `23536 / Нужен код маркировки=false`;
+- `chev_nr_voisk_pict0012` закрыт по `10096 / Цвет товара` и
+  `23536 / Нужен код маркировки=false`;
+- счетчик Ozon `PARTIAL_APPROVED` снизился с `17` до `15`;
+- на `chev_kit2_pz_text0043` подтвержден recovery-маршрут:
+  точечный `/v1/product/attributes/update` по текущему `offer_id` с
+  `23536 / Нужен код маркировки=false`;
+- после confirmed one-SKU apply счетчик `PARTIAL_APPROVED` снизился `15 -> 14`;
+- свежая проверка после one-SKU apply показала: оставшиеся `14` строк все еще
+  возвращаются через `/v3/product/list` с `visibility=PARTIAL_APPROVED`, но
+  `/v3/product/info/list` уже показывает по ним `status_name=Продается`,
+  `validation_status=success` и пустой `item_errors`;
+- batch dry-run на `14` строк готов: действие после approval - повторно
+  отправить только текущее значение `23536 / Нужен код маркировки=false` через
+  `/v1/product/attributes/update`, чтобы принудительно пересохранить карточки
+  и проверить, уйдет ли stale `PARTIAL_APPROVED`.
+- batch apply после approval владельца выполнен: Ozon `task_id=4997786982`,
+  счетчик `PARTIAL_APPROVED` снизился `14 -> 0`, целевых товаров в
+  `PARTIAL_APPROVED` не осталось, `23536=false` подтвержден у всех `14`.
+
+Оставшиеся offer_id:
+
+```text
+chev_kit2_pz_text0044
+chev_kit2_pz_text0045
+chev_kit2_pz_text0047
+chev_kit2_pz_text0048
+chev_kit2_pz_text0049
+chev_kit2_pz_text0050
+chev_kit2_pz_text0051
+chev_kit2_pz_text0052
+chev_kit2_pz_text0054
+chev_kit2_pz_text0056
+chev_kit2_pz_text0057
+chev_kit2_pz_text0058
+chev_kit2_pz_text0061
+chev_kit2_pz_text0066
+```
+
+Итоговая проверка:
+
+- `PARTIAL_APPROVED`: `14 -> 0`;
+- `target_offers_still_partial_count`: `0`;
+- `23536=false`: `14 из 14`.
+
 ## Pending
 
 ### FU-2026-07-01-001 - Разобрать важные уведомления Ozon от 2026-06-30

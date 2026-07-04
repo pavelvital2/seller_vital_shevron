@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from seller_agent.config import AppCredentials, load_credentials
+from seller_agent.tasks.approved_cards_apply import run_apply_approved_cards
 from seller_agent.tasks.daily_morning_report import run_daily_morning_report
 from seller_agent.tasks.pricing_status import run_pricing_status
 from seller_agent.tasks.registry import RegisteredTask, TaskRegistry, default_task_registry
@@ -54,6 +55,15 @@ class WorkflowRunner:
         self.handlers = handlers or default_workflow_handlers()
 
     def run_read_only(self, task_name: str, *, inputs: dict[str, Any] | None = None) -> WorkflowRunResult:
+        return self.run_task(task_name, inputs=inputs, allowed_modes={"read_only"})
+
+    def run_task(
+        self,
+        task_name: str,
+        *,
+        inputs: dict[str, Any] | None = None,
+        allowed_modes: set[str] | None = None,
+    ) -> WorkflowRunResult:
         try:
             task = self.registry.get(task_name)
         except KeyError as exc:
@@ -69,7 +79,9 @@ class WorkflowRunner:
                 error=_safe_error(exc),
             )
 
-        if not task.is_read_only:
+        allowed_modes = allowed_modes or {"read_only"}
+        if task.mode not in allowed_modes:
+            blocked_reason = "not_read_only" if allowed_modes == {"read_only"} else "mode_not_allowed"
             return WorkflowRunResult(
                 task=task.name,
                 command=task.command,
@@ -78,8 +90,8 @@ class WorkflowRunner:
                 status="blocked",
                 mode=task.mode,
                 risk=task.risk,
-                blocked_reason="not_read_only",
-                error=f"Task `{task.name}` is `{task.mode}`, not read_only.",
+                blocked_reason=blocked_reason,
+                error=f"Task `{task.name}` is `{task.mode}`, allowed modes: {sorted(allowed_modes)}.",
             )
 
         handler = self.handlers.get(task.name)
@@ -177,6 +189,7 @@ def default_workflow_handlers() -> dict[str, WorkflowHandler]:
         "daily-morning-report": _daily_morning_report_handler,
         "pricing-status": _pricing_status_handler,
         "status-preflight": _status_preflight_handler,
+        "approved-cards-batch-apply": _approved_cards_batch_apply_handler,
     }
 
 
@@ -232,6 +245,38 @@ def _pricing_status_handler(
         run_id=_optional_str(inputs.get("run_id")),
         refresh_api=_bool_input(inputs, "refresh_api", False),
         refresh_marketplace=_optional_str(inputs.get("refresh_marketplace")) or "all",
+    )
+
+
+def _approved_cards_batch_apply_handler(
+    task: RegisteredTask,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    if credentials is None:
+        raise ValueError(f"Task `{task.name}` requires credentials.")
+    internal_skus = inputs.get("internal_skus") or inputs.get("internal_sku") or []
+    if isinstance(internal_skus, str):
+        internal_skus = [item.strip() for item in internal_skus.replace(",", " ").split() if item.strip()]
+    if not isinstance(internal_skus, list) or not internal_skus:
+        raise ValueError("approved-cards-batch-apply requires internal_skus list.")
+    return run_apply_approved_cards(
+        credentials=credentials,
+        data_dir=data_dir,
+        internal_skus=[str(item) for item in internal_skus],
+        run_id=_optional_str(inputs.get("run_id")),
+        confirmed_by_user=_bool_input(inputs, "confirmed_by_user", False),
+        content_wait_seconds=int(inputs.get("content_wait_seconds") or 180),
+        content_poll_interval=int(inputs.get("content_poll_interval") or 10),
+        seller_sku_wait_seconds=int(inputs.get("seller_sku_wait_seconds") or 60),
+        seller_sku_poll_interval=int(inputs.get("seller_sku_poll_interval") or 5),
+        wb_create_wait_seconds=int(inputs.get("wb_create_wait_seconds") or 600),
+        wb_create_poll_interval=int(inputs.get("wb_create_poll_interval") or 30),
+        ozon_create_min_price=_optional_str(inputs.get("ozon_create_min_price")) or "",
+        ozon_create_allow_manual_review=_bool_input(inputs, "ozon_create_allow_manual_review", False),
+        ozon_create_wait_seconds=int(inputs.get("ozon_create_wait_seconds") or 300),
+        ozon_create_poll_interval=int(inputs.get("ozon_create_poll_interval") or 10),
     )
 
 

@@ -31,9 +31,18 @@ DEFAULT_LOCK_FILE = Path(".sessions/telegram/vital_shevron_bot_polling.lock")
 TELEGRAM_MAX_TEXT_LENGTH = 4096
 SAFE_CHUNK_LENGTH = 3900
 SAFE_DOCUMENT_ARTIFACT_KEYS = {"report"}
-SAFE_DOCUMENT_EXTENSIONS = {".csv", ".md", ".pdf", ".txt", ".xlsx"}
+SAFE_DOCUMENT_EXTENSIONS = {".csv", ".html", ".md", ".pdf", ".txt", ".xlsx"}
 SAFE_DOCUMENT_MAX_BYTES = 20 * 1024 * 1024
 UNSAFE_PATH_MARKERS = ("token", "secret", "cookie", "storage", "auth", "password", "credential")
+UNSAFE_HTML_CONTENT_MARKERS = (
+    "api-key",
+    "api_key",
+    "authorization:",
+    "bot_token",
+    "client_secret",
+    "cookie",
+    "storage_state",
+)
 
 
 class TelegramRunnerError(RuntimeError):
@@ -536,10 +545,20 @@ def safe_report_attachment_paths(
         lowered_path = str(resolved).lower()
         if any(marker in lowered_path for marker in UNSAFE_PATH_MARKERS):
             continue
+        if resolved.suffix.lower() == ".html" and _html_contains_unsafe_marker(resolved):
+            continue
         if not any(_is_relative_to(resolved, root) for root in allowed_roots):
             continue
         paths.append(resolved)
     return paths
+
+
+def _html_contains_unsafe_marker(path: Path) -> bool:
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore").lower()
+    except OSError:
+        return True
+    return any(marker in text for marker in UNSAFE_HTML_CONTENT_MARKERS)
 
 
 def _send_command_artifacts(

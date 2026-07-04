@@ -40,6 +40,46 @@ def test_send_telegram_report_sends_summary_and_document(tmp_path: Path, monkeyp
     assert calls[1][2] == report_path.resolve()
 
 
+def test_send_telegram_report_allows_safe_html_from_runs(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    report_path = tmp_path / "data" / "runs" / "2026-07-04" / "card_review" / "review.html"
+    report_path.parent.mkdir(parents=True)
+    report_path.write_text("<!doctype html><title>review</title>", encoding="utf-8")
+    calls: list[tuple[str, dict, Path | None]] = []
+
+    result = run_send_telegram_report(
+        token="test-token",
+        chat_id=-1001,
+        report_path=Path("data/runs/2026-07-04/card_review/review.html"),
+        summary="Карточка на проверку",
+        data_dir=Path("data"),
+        api_request=lambda token, method, payload: calls.append((method, payload, None)) or {"ok": True},
+        document_api_request=lambda token, method, payload, document_path: calls.append((method, payload, document_path)) or {"ok": True},
+    )
+
+    assert result["overall_status"] == "ok"
+    assert calls[1][2] == report_path.resolve()
+
+
+def test_send_telegram_report_blocks_html_with_secret_marker(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    report_path = tmp_path / "data" / "runs" / "2026-07-04" / "card_review" / "review.html"
+    report_path.parent.mkdir(parents=True)
+    report_path.write_text("<html>client_secret</html>", encoding="utf-8")
+
+    result = run_send_telegram_report(
+        token="test-token",
+        chat_id=-1001,
+        report_path=Path("data/runs/2026-07-04/card_review/review.html"),
+        summary="Карточка на проверку",
+        data_dir=Path("data"),
+        api_request=lambda *args, **kwargs: {"ok": True},  # type: ignore[arg-type]
+        document_api_request=lambda *args, **kwargs: {"ok": True},  # type: ignore[arg-type]
+    )
+
+    assert result["overall_status"] == "blocked"
+
+
 def test_send_telegram_report_blocks_missing_or_unsafe_report(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     result = run_send_telegram_report(

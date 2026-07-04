@@ -62,6 +62,10 @@ from seller_agent.tasks.registry import default_task_registry, get_task_definiti
 from seller_agent.tasks.seo_query_pack import build_seo_query_pack
 from seller_agent.tasks.seller_sku_update import run_seller_sku_update_apply, run_seller_sku_update_plan
 from seller_agent.tasks.ozon_messenger_workflow import run_ozon_messenger_workflow
+from seller_agent.tasks.ozon_partial_approved import (
+    run_ozon_partial_approved_diagnose,
+    run_ozon_partial_approved_recovery_apply,
+)
 from seller_agent.tasks.status_preflight import run_status_preflight
 from seller_agent.tasks.supply_workbooks_plan import run_supply_workbooks_plan
 from seller_agent.tasks.telegram_report_sender import run_send_telegram_report
@@ -515,6 +519,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional product limit for smoke checks.",
     )
+    card_content.add_argument(
+        "--internal-sku",
+        action="append",
+        default=[],
+        help="Fetch only selected internal SKU. Can be repeated.",
+    )
+    card_content.add_argument(
+        "--merge-existing",
+        action="store_true",
+        help="Merge selected rows into existing content index instead of replacing it.",
+    )
 
     card_backlog = subparsers.add_parser(
         "card-content-audit-backlog",
@@ -676,6 +691,28 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Required explicit confirmation for external Ozon write operations.",
     )
+
+    ozon_partial_diagnose = subparsers.add_parser(
+        "ozon-partial-approved-diagnose",
+        help="Diagnose Ozon PARTIAL_APPROVED cards and build exact recovery dry-run.",
+    )
+    ozon_partial_diagnose.add_argument("--data-dir", default="data", help="Project data directory.")
+    ozon_partial_diagnose.add_argument("--run-id", default=None, help="Optional stable run id.")
+
+    ozon_partial_apply = subparsers.add_parser(
+        "apply-ozon-partial-approved-recovery",
+        help="Apply approved Ozon PARTIAL_APPROVED recovery dry-run and verify.",
+    )
+    ozon_partial_apply.add_argument("--data-dir", default="data", help="Project data directory.")
+    ozon_partial_apply.add_argument("--run-id", default=None, help="Optional stable run id.")
+    ozon_partial_apply.add_argument("--plan-run-id", default=None, help="Approved diagnose run id.")
+    ozon_partial_apply.add_argument(
+        "--confirmed-by-user",
+        action="store_true",
+        help="Required explicit confirmation for external Ozon write operations.",
+    )
+    ozon_partial_apply.add_argument("--wait-seconds", type=int, default=120)
+    ozon_partial_apply.add_argument("--poll-interval", type=int, default=5)
 
     passport_design = subparsers.add_parser(
         "design-product-passport",
@@ -2162,6 +2199,8 @@ def main(argv: list[str] | None = None) -> int:
             run_id=args.run_id,
             marketplace=args.marketplace,
             limit_products=args.limit_products,
+            internal_skus=args.internal_sku,
+            merge_existing=args.merge_existing,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["overall_status"] in {"ok", "warning"} else 2
@@ -2228,6 +2267,28 @@ def main(argv: list[str] | None = None) -> int:
             plan_run_id=args.plan_run_id,
             run_id=args.run_id,
             confirmed_by_user=args.confirmed_by_user,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
+
+    if args.command == "ozon-partial-approved-diagnose":
+        result = run_ozon_partial_approved_diagnose(
+            credentials=load_credentials(),
+            data_dir=Path(args.data_dir),
+            run_id=args.run_id,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
+
+    if args.command == "apply-ozon-partial-approved-recovery":
+        result = run_ozon_partial_approved_recovery_apply(
+            credentials=load_credentials(),
+            data_dir=Path(args.data_dir),
+            plan_run_id=args.plan_run_id,
+            run_id=args.run_id,
+            confirmed_by_user=args.confirmed_by_user,
+            wait_seconds=args.wait_seconds,
+            poll_interval=args.poll_interval,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["overall_status"] in {"ok", "warning"} else 2

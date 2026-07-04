@@ -161,6 +161,20 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 аудитом, перед большой пачкой изменений, после серии apply или если точечный
 verify показывает рассинхрон, который нельзя проверить по конкретным SKU.
 
+Если после карточного apply нужно обновить только затронутые строки локального
+контентного слоя, использовать targeted merge-refresh:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli fetch-card-content \
+  --internal-sku <internal_sku> \
+  --merge-existing
+```
+
+Флаг `--merge-existing` сохраняет существующий полный
+`data/catalog/content/card_content_index.*`, `ozon_card_content.json` и
+`wb_card_content.json`, заменяя только выбранные строки.
+
 ## API-маршруты
 
 Ozon:
@@ -175,6 +189,25 @@ attributes, category/type, barcode, фото, габариты, вес, price, o
 currency и VAT. Если этих данных нет, команда блокирует Ozon update.
 
 ## Подтвержденные recovery-ситуации Ozon
+
+Штатная диагностика Ozon `PARTIAL_APPROVED`:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli ozon-partial-approved-diagnose
+```
+
+Команда читает `/v3/product/list` с `visibility=PARTIAL_APPROVED`,
+`/v3/product/info/list`, `/v4/product/info/attributes`, классифицирует строки
+как `active_errors`, `stale_visibility` или `needs_manual_review` и сохраняет
+exact dry-run recovery. Применение только после approval владельца:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli apply-ozon-partial-approved-recovery \
+  --plan-run-id <diagnose_run_id> \
+  --confirmed-by-user
+```
 
 - Если Ozon отклоняет позывные с `DESCRIPTION_DECLINE` по атрибуту
   `4180 / Название`, не возвращать кавычки без отдельного решения владельца.
@@ -204,6 +237,37 @@ currency и VAT. Если этих данных нет, команда блок�
   `/v1/product/attributes/update` и дождаться его `task_id`. Этот endpoint
   может вернуть `task_id` в корне ответа, а `/v3/product/import` - в
   `result.task_id`; обработчик должен поддерживать оба формата.
+- Recovery 2026-07-04: если карточка Ozon находится в `PARTIAL_APPROVED`
+  только из-за отдельных атрибутов, не запускать полный карточный apply без
+  необходимости. Сначала сделать точечный `/v1/product/attributes/update` по
+  конкретным `offer_id` и `attribute_id`, затем проверить
+  `/v4/product/info/attributes`, `/v3/product/info/list` и счетчик
+  `PARTIAL_APPROVED`. В кейсе `chev_kit2_pz_text0013` и
+  `chev_nr_voisk_pict0012` были закрыты `23536 / Нужен код маркировки=false`
+  и `10096 / Цвет товара`; после исправления цвета у ВВУ ПВО Ozon дополнительно
+  показал пустой `23536`, который также был закрыт точечным обновлением. Если
+  после точечного patch остается только `OFFER_ID_EDIT_WRONG_SOURCE`, это уже
+  отдельный блок смены seller SKU, а не проблема содержания карточки.
+- Recovery 2026-07-04 для `OFFER_ID_EDIT_WRONG_SOURCE`: если
+  `/v1/product/update/offer-id` уже успешно сменил `offer_id`, проверка
+  `/v3/product/info/list` по `product_id` показывает новый `offer_id`, карточка
+  продается, а в `PARTIAL_APPROVED` остался warning
+  `OFFER_ID_EDIT_WRONG_SOURCE / editing offerID is prohibited for this upload
+  source`, не повторять смену артикула. Подтвержденный маршрут на
+  `chev_kit2_pz_text0043`: точечно пересохранить текущий `offer_id` через
+  `/v1/product/attributes/update` с обязательным атрибутом
+  `23536 / Нужен код маркировки=false`. После apply проверить
+  `/v4/product/info/attributes`, `/v3/product/info/list` и счетчик
+  `PARTIAL_APPROVED`. В тесте warning ушел, счетчик снизился `15 -> 14`,
+  карточка осталась в продаже. Этот маршрут можно масштабировать на аналогичные
+  строки только через batch dry-run с exact payload и owner approval.
+- Batch recovery 2026-07-04: после one-SKU recovery Ozon перестал показывать
+  `OFFER_ID_EDIT_WRONG_SOURCE` в `/v3/product/info/list`, но
+  `/v3/product/list` с `visibility=PARTIAL_APPROVED` еще возвращал `14`
+  товаров. После owner-approved batch dry-run повторное сохранение только
+  текущего `23536=false` через `/v1/product/attributes/update` очистило stale
+  видимость: счетчик `PARTIAL_APPROVED` снизился `14 -> 0`, `23536=false`
+  подтвердился у всех `14`.
 - Если `/v1/product/import/info` сначала возвращает `status=imported`, но
   карточка остается `Не обновлен`, нужно повторно прочитать import info после
   задержки: Ozon может позднее показать детальную ошибку, которой не было в

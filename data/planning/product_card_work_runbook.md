@@ -48,6 +48,12 @@ Checkpoint фиксирует место остановки, последние 
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   -m seller_agent.cli fetch-card-content
 
+# Точечное обновление после apply без перезаписи полного индекса:
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli fetch-card-content \
+  --internal-sku <internal_sku> \
+  --merge-existing
+
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   -m seller_agent.cli build-content-master
 

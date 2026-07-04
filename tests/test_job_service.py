@@ -49,16 +49,45 @@ def test_job_service_submits_and_runs_read_only_workflow(tmp_path: Path) -> None
     ]
 
 
-def test_job_service_blocks_apply_task_in_v1(tmp_path: Path) -> None:
+def test_job_service_waits_confirmation_for_apply_task(tmp_path: Path) -> None:
     service = JobService(store=JobStore(tmp_path / "runtime.db"), data_dir=tmp_path / "data")
 
     job = service.submit(task_id="ozon-elastic-apply", params={"plan_run_id": "x"})
     result = service.run(job.job_id)
 
     assert result.ok is False
-    assert result.status == "blocked"
-    assert result.job.status == "failed"
-    assert "read-only" in result.job.error
+    assert result.status == "waiting_confirmation"
+    assert result.job.status == "waiting_confirmation"
+    assert "confirmed_by_user" in result.job.error
+
+
+def test_job_service_runs_confirmed_apply_workflow(tmp_path: Path) -> None:
+    def handler(task, data_dir, credentials, inputs):  # type: ignore[no-untyped-def]
+        assert task.name == "approved-cards-batch-apply"
+        assert inputs["confirmed_by_user"] is True
+        return {"run_id": "apply_job_test", "overall_status": "ok", "artifacts": {"report": str(data_dir / "runs/report.md")}}
+
+    store = JobStore(tmp_path / "runtime.db")
+    service = JobService(
+        store=store,
+        workflow_runner=WorkflowRunner(
+            data_dir=tmp_path / "data",
+            lock_dir=tmp_path / "locks",
+            credentials=object(),  # type: ignore[arg-type]
+            handlers={"approved-cards-batch-apply": handler},
+        ),
+        data_dir=tmp_path / "data",
+    )
+    job = service.submit(
+        task_id="apply-approved-cards",
+        params={"confirmed_by_user": True, "internal_skus": ["sku-1"]},
+    )
+
+    result = service.run(job.job_id)
+
+    assert result.ok is True
+    assert result.job.status == "success"
+    assert result.job.result["summary"]["run_id"] == "apply_job_test"
 
 
 def test_job_service_can_cancel_queued_job(tmp_path: Path) -> None:

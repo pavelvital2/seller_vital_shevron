@@ -65,7 +65,7 @@ class JobService:
         job = self.store.get_job(job_id)
         if job is None:
             raise KeyError(f"Unknown job: {job_id}")
-        if job.status not in {"created", "queued"}:
+        if job.status not in {"created", "queued", "waiting_confirmation"}:
             return JobServiceResult(
                 job=job,
                 ok=False,
@@ -74,17 +74,26 @@ class JobService:
             )
 
         task = self.registry.get(job.task_id)
-        if not task.is_read_only:
+        if task.is_write and not _confirmed(job.params):
+            waiting = self.store.update_job_status(
+                job_id,
+                "waiting_confirmation",
+                error="confirmed_by_user=true is required for apply jobs.",
+                message="Job is waiting for explicit owner confirmation.",
+            )
+            return JobServiceResult(job=waiting, ok=False, status="waiting_confirmation", message=waiting.error)
+        if not task.is_read_only and not task.is_write:
             failed = self.store.update_job_status(
                 job_id,
                 "failed",
-                error=f"JobService v1 supports only read-only tasks; `{task.name}` is `{task.mode}`.",
-                message="Job blocked because task is not read-only.",
+                error=f"JobService supports read-only tasks and explicitly confirmed apply tasks; `{task.name}` is `{task.mode}`.",
+                message="Job blocked because task mode is unsupported.",
             )
             return JobServiceResult(job=failed, ok=False, status="blocked", message=failed.error)
 
         self.store.update_job_status(job_id, "running", message="Job runner started.")
-        result = self.workflow_runner.run_read_only(task.name, inputs=job.params)
+        allowed_modes = {"read_only"} if task.is_read_only else {"apply"}
+        result = self.workflow_runner.run_task(task.name, inputs=job.params, allowed_modes=allowed_modes)
         result_data = result.to_dict()
 
         if result.ok:
@@ -135,3 +144,12 @@ def default_job_service(
     runtime_db: Path = DEFAULT_RUNTIME_DB,
 ) -> JobService:
     return JobService(data_dir=data_dir, runtime_db=runtime_db)
+
+
+def _confirmed(params: dict[str, Any]) -> bool:
+    value = params.get("confirmed_by_user", False)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return bool(value)

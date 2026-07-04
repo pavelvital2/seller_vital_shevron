@@ -289,10 +289,13 @@ wba_apply:<wb_actions_discount_plan_run_id>
 
 - ключ `artifacts.report`;
 - существующий файл внутри `data/runs/` или `data/reports/`;
-- расширения `.md`, `.txt`, `.csv`, `.xlsx`, `.pdf`;
+- расширения `.md`, `.txt`, `.csv`, `.xlsx`, `.pdf`, `.html`;
 - файл размером не больше 20 MB;
 - путь без маркеров `token`, `secret`, `cookie`, `storage`, `auth`,
   `password`, `credential`.
+- для `.html` дополнительно выполняется scan содержимого на unsafe-маркеры
+  `api_key`, `api-key`, `authorization:`, `bot_token`, `client_secret`,
+  `cookie`, `storage_state`.
 
 Технические артефакты вроде `summary.json`, `manifest.json`, raw snapshots,
 cookies, storage state и файлы вне разрешенных директорий не прикрепляются.
