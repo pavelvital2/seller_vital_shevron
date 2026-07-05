@@ -330,6 +330,10 @@
   WB Statistics API sales/stock signals, классифицирует `apply_ready`,
   `review_only`, `watch`, `reduce_or_stop_review`, `blocked`; parser не
   используется как источник продаж.
+- `src/seller_agent/tasks/wb_promotion_bid_parser_enriched_apply.py` -
+  применение owner-approved `apply_ready` строк parser-enriched WB ставок:
+  fresh preflight/report/signals/base-plan/enriched-plan, partial drift skip,
+  WB `PATCH /api/advert/v1/bids`, verify и idempotency marker.
 - `src/seller_agent/tasks/wb_promotion_bids_apply.py` - применение
   согласованных ставок WB promotion через Promotion API с fresh report,
   drift-check и verify.

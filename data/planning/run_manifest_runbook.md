@@ -73,6 +73,7 @@ data/runs/index.jsonl
 - `wb-actions-discount-apply`: `mode=apply`, `risk=high`;
 - `wb-promotion-bid-plan`: `mode=dry_run`, `risk=normal`;
 - `wb-promotion-bids-parser-enriched-plan`: `mode=dry_run`, `risk=normal`;
+- `wb-promotion-bids-parser-enriched-apply`: `mode=apply`, `risk=high`;
 - `wb-promotion-bids-apply`: `mode=apply`, `risk=high`;
 - `wb-card-create-plan`: `mode=dry_run`, `risk=high`;
 - `wb-card-create-apply`: `mode=apply`, `risk=high`;

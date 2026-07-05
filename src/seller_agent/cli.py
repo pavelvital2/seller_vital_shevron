@@ -82,6 +82,7 @@ from seller_agent.tasks.wb_actions_discount_plan import run_wb_actions_discount_
 from seller_agent.tasks.wb_card_create_apply import run_wb_card_create_apply
 from seller_agent.tasks.wb_card_create_plan import run_wb_card_create_plan
 from seller_agent.tasks.wb_parser_warehouse_analytics import run_wb_parser_warehouse_analytics
+from seller_agent.tasks.wb_promotion_bid_parser_enriched_apply import run_wb_promotion_bid_parser_enriched_apply
 from seller_agent.tasks.wb_promotion_bid_parser_enriched_plan import run_wb_promotion_bid_parser_enriched_plan
 from seller_agent.tasks.wb_promotion_bid_plan import WbPromotionBidThresholds, run_wb_promotion_bid_plan
 from seller_agent.tasks.wb_promotion_bids_apply import run_wb_promotion_bids_apply
@@ -1349,6 +1350,32 @@ def build_parser() -> argparse.ArgumentParser:
     wb_promotion_parser_enriched.add_argument("--min-stock", type=int, default=4)
     wb_promotion_parser_enriched.add_argument("--parser-test-increase-percent", default="10")
     wb_promotion_parser_enriched.add_argument("--min-bid", default="1.00")
+
+    apply_wb_promotion_parser_enriched = subparsers.add_parser(
+        "apply-wb-promotion-bids-parser-enriched",
+        help=(
+            "Apply owner-approved WB Promotion parser-enriched bid changes after "
+            "fresh report, fresh signals, fresh enriched plan, partial drift skip and verify."
+        ),
+    )
+    apply_wb_promotion_parser_enriched.add_argument("--data-dir", default="data", help="Project data directory.")
+    apply_wb_promotion_parser_enriched.add_argument(
+        "--plan-run-id",
+        default=None,
+        help="Approved parser-enriched WB promotion bid plan run id. Defaults to latest.",
+    )
+    apply_wb_promotion_parser_enriched.add_argument("--run-id", default=None, help="Optional stable run id.")
+    apply_wb_promotion_parser_enriched.add_argument(
+        "--confirmed-by-user",
+        action="store_true",
+        help="Required explicit confirmation for external WB write operations.",
+    )
+    apply_wb_promotion_parser_enriched.add_argument(
+        "--wait-seconds",
+        type=int,
+        default=45,
+        help="Seconds to wait before verify because WB bid changes are asynchronous.",
+    )
 
     apply_wb_promotion_bids = subparsers.add_parser(
         "apply-wb-promotion-bids",
@@ -2742,6 +2769,18 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
+
+    if args.command == "apply-wb-promotion-bids-parser-enriched":
+        result = run_wb_promotion_bid_parser_enriched_apply(
+            credentials=load_credentials(),
+            data_dir=Path(args.data_dir),
+            plan_run_id=args.plan_run_id,
+            run_id=args.run_id,
+            confirmed_by_user=args.confirmed_by_user,
+            wait_seconds=args.wait_seconds,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
 
     if args.command == "apply-wb-promotion-bids":
         result = run_wb_promotion_bids_apply(

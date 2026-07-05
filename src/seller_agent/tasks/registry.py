@@ -700,6 +700,25 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_mapping=True,
     ),
     RegisteredTask(
+        name="wb-promotion-bids-parser-enriched-apply",
+        command="apply-wb-promotion-bids-parser-enriched",
+        title="Apply WB promotion bids with parser signals",
+        description=(
+            "Apply owner-approved parser-enriched WB Promotion bid changes after "
+            "fresh WB report, fresh sales/stock/parser signals, partial drift skip and verify."
+        ),
+        mode="apply",
+        risk="high",
+        marketplaces=("wb",),
+        runbook_path="data/planning/wb_promotion_runbook.md",
+        requires_credentials=True,
+        requires_confirmation=True,
+        requires_mapping=True,
+        source_plan_task="wb-promotion-bid-parser-enriched-plan",
+        verify_task="wb-promotion-bids-parser-enriched-apply",
+        lock_keys=("marketplace:wb", "ads:wb:promotion-bids"),
+    ),
+    RegisteredTask(
         name="wb-promotion-bids-apply",
         command="apply-wb-promotion-bids",
         title="Apply WB promotion bids",

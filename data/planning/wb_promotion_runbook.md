@@ -303,16 +303,34 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 - `blocked/reduce` - нет текущей ставки, нет подтвержденного остатка, высокий
   ДРР или расход без заказов.
 
-Если владелец явно согласовал все кандидаты, включая review-only/test строки,
-их можно включить в apply-пакет, но только через fresh drift-check:
+Штатная apply-команда parser-enriched ставок:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli apply-wb-promotion-bids-parser-enriched \
+  --plan-run-id <wb_promotion_bid_parser_enriched_plan_run_id> \
+  --confirmed-by-user
+```
+
+Команда принимает только owner-approved строки из
+`wb_promotion_bid_parser_enriched_apply_preview.csv`. Если владелец явно
+согласовал все кандидаты, включая review-only/test строки, сначала нужно
+сформировать отдельный approved apply-preview с этими строками; без этого
+штатный контур применяет только `apply_ready`.
+
+Apply выполняется только через fresh-проверку:
 
 ```text
-approved parser-enriched package -> fresh wb-promotion-report ->
-drift-check by advert_id/nm_id/placement/current_bid/target_bid ->
+approved parser-enriched package -> API-only preflight ->
+fresh wb-promotion-report -> fresh collect-card-signals from WB API/parser ->
+fresh plan-wb-promotion-bids -> fresh plan-wb-promotion-bids-parser-enriched ->
+partial drift-check by advert_id/nm_id/placement/current_bid/final_target_bid/action ->
 PATCH /api/advert/v1/bids -> wait -> fetch campaigns -> verify target bids
 ```
 
-Строки с drift должны быть пропущены, а не применены автоматически.
+Строки с drift должны быть пропущены, а не применены автоматически. Новые
+строки свежего плана, которых не было в owner-approved пакете, тоже не
+применяются без нового согласования.
 
 Подтвержденный apply:
 
@@ -330,10 +348,11 @@ data/runs/2026-06-28/wb_promotion_bids_apply_all23_20260628T221859
 - прирост ставок: `+3.32`;
 - verify: `ok`, mismatches `0`.
 
-Ограничение: parser-enriched apply 2026-06-28 был выполнен кастомным
-безопасным контуром поверх WB Promotion API. С 2026-07-05 появился штатный
-read-only/dry-run планировщик `plan-wb-promotion-bids-parser-enriched`, но
-apply-команда для него еще не реализована. Следующий технический шаг -
-сделать отдельный `apply-wb-promotion-bids-parser-enriched`, который будет
-принимать только owner-approved parser-enriched CSV и выполнять тот же
-fresh-report/drift-check/apply/verify маршрут без одноразового скрипта.
+Штатный контур с 2026-07-05:
+
+- dry-run: `plan-wb-promotion-bids-parser-enriched`;
+- apply: `apply-wb-promotion-bids-parser-enriched`;
+- task id: `wb-promotion-bids-parser-enriched-apply`;
+- обязательный owner approval: `--confirmed-by-user`;
+- idempotency: approved parser-enriched plan нельзя применить повторно;
+- verify: ставки перечитываются из настроек кампаний WB после ожидания.
