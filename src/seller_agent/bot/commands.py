@@ -14,6 +14,12 @@ from seller_agent.core.workflow_runner import WorkflowRunner
 from seller_agent.tasks.ozon_elastic_apply import run_ozon_elastic_apply
 from seller_agent.tasks.ozon_elastic_plan import run_ozon_elastic_plan
 from seller_agent.tasks.approvals import run_approvals_status
+from seller_agent.tasks.inbox_workflow import (
+    run_ozon_inbox_apply,
+    run_ozon_inbox_triage,
+    run_wb_inbox_apply,
+    run_wb_inbox_triage,
+)
 from seller_agent.tasks.registry import default_task_registry
 from seller_agent.tasks.wb_actions_discount_apply import run_wb_actions_discount_apply
 from seller_agent.tasks.wb_actions_discount_plan import run_wb_actions_discount_plan
@@ -26,6 +32,8 @@ SUPPORTED_COMMANDS = {
     "/status",
     "/today",
     "/reviews",
+    "/ozon-inbox",
+    "/wb-inbox",
     "/approvals",
     "/catalog",
     "/runs",
@@ -39,6 +47,8 @@ TELEGRAM_TITLES = {
     "/help": "Помощь",
     "/jobs": "Runtime jobs",
     "/reviews": "Отзывы и вопросы",
+    "/ozon-inbox": "Ozon входящие",
+    "/wb-inbox": "WB входящие",
     "/runs": "Запуски",
     "/status": "Статус проекта",
     "/today": "Ежедневный отчет",
@@ -76,6 +86,10 @@ def handle_telegram_command(
         return _ozon_elastic_plan(data_dir=data_dir, credentials=credentials)
     if command in {"/wb-actions", "/wb_actions", "/wb-actions-70-55-55"}:
         return _wb_actions_plan(data_dir=data_dir, credentials=credentials)
+    if command in {"/ozon-inbox", "/ozon_inbox"}:
+        return _ozon_inbox_plan(data_dir=data_dir, credentials=credentials)
+    if command in {"/wb-inbox", "/wb_inbox"}:
+        return _wb_inbox_plan(data_dir=data_dir, credentials=credentials)
     if command == "/jobs":
         return _jobs(runtime_db=runtime_db)
     if command == "/job" and argument:
@@ -154,6 +168,12 @@ def handle_telegram_callback(
     if data.startswith("wba_apply:"):
         plan_run_id = data.removeprefix("wba_apply:").strip()
         return _wb_actions_apply(plan_run_id=plan_run_id, data_dir=data_dir, credentials=credentials)
+    if data.startswith("ozin_apply:"):
+        source_run_id = data.removeprefix("ozin_apply:").strip()
+        return _ozon_inbox_apply(source_run_id=source_run_id, data_dir=data_dir, credentials=credentials)
+    if data.startswith("wbin_apply:"):
+        source_run_id = data.removeprefix("wbin_apply:").strip()
+        return _wb_inbox_apply(source_run_id=source_run_id, data_dir=data_dir, credentials=credentials)
     return TelegramCommandResult(
         command="callback",
         ok=False,
@@ -193,11 +213,246 @@ def _help() -> TelegramCommandResult:
             "- Кнопка применения Ozon Elastic запускает apply только по конкретному показанному `plan_run_id`.",
             "- `/wb-actions` строит свежий dry-run WB акций по схеме 70-55-55 и показывает кнопку применения.",
             "- Кнопка применения WB акций запускает apply только по конкретному показанному `plan_run_id`.",
+            "- `/ozon-inbox` собирает свежие Ozon отзывы/вопросы/чаты/уведомления и показывает кнопку применения согласованного пакета.",
+            "- `/wb-inbox` собирает свежие WB отзывы/вопросы; WB уведомления показываются отдельным неподключенным источником до реализации маршрута.",
             "- Остальные команды показывают последние runtime-данные и статусы.",
             "- Другие изменения в Ozon/WB через Telegram не выполняются.",
         ]
     )
     return TelegramCommandResult(command="/help", ok=True, text="\n".join(lines))
+
+
+def _ozon_inbox_plan(
+    *,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+) -> TelegramCommandResult:
+    try:
+        result = run_ozon_inbox_triage(
+            credentials=credentials or load_credentials(),
+            data_dir=data_dir,
+        )
+    except Exception as exc:  # noqa: BLE001 - Telegram must return a safe failure.
+        return TelegramCommandResult(
+            command="/ozon-inbox",
+            ok=False,
+            mode="dry_run",
+            blocked_reason="ozon_inbox_failed",
+            text=(
+                "Ozon входящие\n\n"
+                "Итог: свежий пакет отзывов, вопросов и уведомлений Ozon не удалось собрать.\n\n"
+                f"Причина: `{_safe_error(exc)}`\n\n"
+                "Изменений в Ozon не выполнял."
+            ),
+        )
+
+    reviews = result.get("reviews") if isinstance(result.get("reviews"), dict) else {}
+    messenger = result.get("messenger") if isinstance(result.get("messenger"), dict) else {}
+    messenger_counts = _messenger_counts_from_pending(data_dir=data_dir, run_id=str(result.get("run_id") or ""))
+    actions_count = int(result.get("actions_count") or 0)
+    run_id = str(result.get("run_id") or "")
+    lines = [
+        "Ozon входящие",
+        "",
+        f"Итог: свежий dry-run построен, статус `{result.get('overall_status') or 'н/д'}`. Ответы не отправлены, уведомления не отмечены.",
+        f"Run ID: `{run_id or 'н/д'}`",
+        "",
+        "Сводка:",
+        f"- отзывы/вопросы к действию: `{_int(reviews.get('actions_count'))}`",
+        f"- Messenger/уведомления к действию: `{sum(messenger_counts.values())}`",
+        f"- ответы покупателям в чатах: `{_int(messenger_counts.get('send_chat_message'))}`",
+        f"- уведомления отметить прочитанными: `{_int(messenger_counts.get('mark_chat_read'))}`",
+        f"- ручная проверка чатов: `{_int(messenger_counts.get('manual_chat_review'))}`",
+        f"- total_unread_count API: `{_int(messenger.get('total_unread_count'))}`",
+        "",
+        "Что дальше:",
+    ]
+    if actions_count:
+        lines.extend(
+            [
+                "Нажатие кнопки ниже является явным подтверждением владельца для этого Ozon-пакета.",
+                "Apply отправит согласованные ответы, отметит согласованные уведомления и сохранит результат.",
+            ]
+        )
+    else:
+        lines.append("Действий к применению нет, кнопку apply не показываю.")
+    artifacts = _safe_artifacts(result)
+    if artifacts:
+        lines.extend(["", "Файлы:"])
+        if artifacts.get("report"):
+            lines.append(f"- отчет: `{artifacts['report']}`")
+    reply_markup: dict[str, Any] = {}
+    if actions_count and run_id:
+        reply_markup = {
+            "inline_keyboard": [[{"text": "✅ Применить Ozon входящие", "callback_data": f"ozin_apply:{run_id}"}]]
+        }
+    return TelegramCommandResult(
+        command="/ozon-inbox",
+        ok=True,
+        mode="dry_run",
+        text="\n".join(lines),
+        artifacts=artifacts,
+        reply_markup=reply_markup,
+    )
+
+
+def _wb_inbox_plan(
+    *,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+) -> TelegramCommandResult:
+    try:
+        result = run_wb_inbox_triage(
+            credentials=credentials or load_credentials(),
+            data_dir=data_dir,
+        )
+    except Exception as exc:  # noqa: BLE001 - Telegram must return a safe failure.
+        return TelegramCommandResult(
+            command="/wb-inbox",
+            ok=False,
+            mode="dry_run",
+            blocked_reason="wb_inbox_failed",
+            text=(
+                "WB входящие\n\n"
+                "Итог: свежий пакет отзывов и вопросов WB не удалось собрать.\n\n"
+                f"Причина: `{_safe_error(exc)}`\n\n"
+                "Изменений в WB не выполнял."
+            ),
+        )
+
+    reviews = result.get("reviews") if isinstance(result.get("reviews"), dict) else {}
+    notifications = result.get("wb_notifications") if isinstance(result.get("wb_notifications"), dict) else {}
+    run_id = str(result.get("run_id") or "")
+    actions_count = int(result.get("actions_count") or 0)
+    lines = [
+        "WB входящие",
+        "",
+        f"Итог: свежий dry-run построен, статус `{result.get('overall_status') or 'н/д'}`. Ответы не отправлены.",
+        f"Run ID: `{run_id or 'н/д'}`",
+        "",
+        "Сводка:",
+        f"- WB отзывы/вопросы к действию: `{_int(reviews.get('actions_count'))}`",
+        f"- WB уведомления: `{notifications.get('status') or 'н/д'}`",
+        "",
+        "Важно:",
+        "- WB вопросы входят в этот пакет через официальный Feedbacks API.",
+        "- WB уведомления отдельно показаны как неподключенный источник; изменений по ним бот не делает.",
+        "",
+        "Что дальше:",
+    ]
+    if actions_count:
+        lines.extend(
+            [
+                "Нажатие кнопки ниже является явным подтверждением владельца для этого WB-пакета.",
+                "Apply отправит согласованные ответы на WB отзывы и вопросы.",
+            ]
+        )
+    else:
+        lines.append("Действий к применению нет, кнопку apply не показываю.")
+    artifacts = _safe_artifacts(result)
+    if artifacts:
+        lines.extend(["", "Файлы:"])
+        if artifacts.get("report"):
+            lines.append(f"- отчет: `{artifacts['report']}`")
+    reply_markup: dict[str, Any] = {}
+    if actions_count and run_id:
+        reply_markup = {
+            "inline_keyboard": [[{"text": "✅ Применить WB входящие", "callback_data": f"wbin_apply:{run_id}"}]]
+        }
+    return TelegramCommandResult(
+        command="/wb-inbox",
+        ok=True,
+        mode="dry_run",
+        text="\n".join(lines),
+        artifacts=artifacts,
+        reply_markup=reply_markup,
+    )
+
+
+def _ozon_inbox_apply(
+    *,
+    source_run_id: str,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+) -> TelegramCommandResult:
+    if not _valid_inbox_run_id(source_run_id, prefix="ozon_inbox_"):
+        return TelegramCommandResult(
+            command="/ozon_inbox_apply",
+            ok=False,
+            mode="apply",
+            blocked_reason="invalid_source_run_id",
+            text=(
+                "Ozon входящие apply\n\n"
+                "Итог: apply заблокирован - некорректный `run_id`.\n\n"
+                f"Получено: `{_truncate(source_run_id, 100)}`\n\n"
+                "Изменений в Ozon не выполнял."
+            ),
+        )
+    try:
+        result = run_ozon_inbox_apply(
+            credentials=credentials or load_credentials(),
+            data_dir=data_dir,
+            source_run_id=source_run_id,
+            confirmed_by_user=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return TelegramCommandResult(
+            command="/ozon_inbox_apply",
+            ok=False,
+            mode="apply",
+            blocked_reason="ozon_inbox_apply_failed",
+            text=(
+                "Ozon входящие apply\n\n"
+                "Итог: apply не выполнен или остановлен safety-контуром.\n\n"
+                f"Run ID: `{source_run_id}`\n"
+                f"Причина: `{_safe_error(exc)}`\n\n"
+                "Нужен новый dry-run и новое подтверждение, если пакет устарел."
+            ),
+        )
+    return _inbox_apply_result_text(command="/ozon_inbox_apply", title="Ozon входящие apply", result=result)
+
+
+def _wb_inbox_apply(
+    *,
+    source_run_id: str,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+) -> TelegramCommandResult:
+    if not _valid_inbox_run_id(source_run_id, prefix="wb_inbox_"):
+        return TelegramCommandResult(
+            command="/wb_inbox_apply",
+            ok=False,
+            mode="apply",
+            blocked_reason="invalid_source_run_id",
+            text=(
+                "WB входящие apply\n\n"
+                "Итог: apply заблокирован - некорректный `run_id`.\n\n"
+                f"Получено: `{_truncate(source_run_id, 100)}`\n\n"
+                "Изменений в WB не выполнял."
+            ),
+        )
+    try:
+        result = run_wb_inbox_apply(
+            credentials=credentials or load_credentials(),
+            data_dir=data_dir,
+            source_run_id=source_run_id,
+            confirmed_by_user=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return TelegramCommandResult(
+            command="/wb_inbox_apply",
+            ok=False,
+            mode="apply",
+            blocked_reason="wb_inbox_apply_failed",
+            text=(
+                "WB входящие apply\n\n"
+                "Итог: apply не выполнен или остановлен safety-контуром.\n\n"
+                f"Run ID: `{source_run_id}`\n"
+                f"Причина: `{_safe_error(exc)}`\n\n"
+                "Нужен новый dry-run и новое подтверждение, если пакет устарел."
+            ),
+        )
+    return _inbox_apply_result_text(command="/wb_inbox_apply", title="WB входящие apply", result=result)
 
 
 def _wb_actions_plan(
@@ -1319,6 +1574,72 @@ def _wb_latest_history_data(verify: dict[str, Any]) -> dict[str, Any]:
         if isinstance(data, dict) and data:
             return data
     return {}
+
+
+def _messenger_counts_from_pending(*, data_dir: Path, run_id: str) -> dict[str, int]:
+    path = data_dir / "pending" / f"{run_id}_pending" / "inbox_pending.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    actions = data.get("messenger_actions") if isinstance(data, dict) else []
+    if not isinstance(actions, list):
+        return {}
+    counts: dict[str, int] = {}
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+        action_type = str(action.get("action_type") or "")
+        if not action_type:
+            continue
+        counts[action_type] = counts.get(action_type, 0) + 1
+    return counts
+
+
+def _valid_inbox_run_id(value: str, *, prefix: str) -> bool:
+    text = str(value or "")
+    if not text.startswith(prefix):
+        return False
+    return all(char.isalnum() or char in {"_", "-"} for char in text)
+
+
+def _inbox_apply_result_text(*, command: str, title: str, result: dict[str, Any]) -> TelegramCommandResult:
+    reviews = result.get("reviews") if isinstance(result.get("reviews"), dict) else {}
+    review_apply = reviews.get("apply") if isinstance(reviews.get("apply"), dict) else {}
+    messenger = result.get("messenger") if isinstance(result.get("messenger"), dict) else {}
+    applied_counts = review_apply.get("applied_counts") if isinstance(review_apply.get("applied_counts"), dict) else {}
+    mark_read = messenger.get("mark_read") if isinstance(messenger.get("mark_read"), list) else []
+    lines = [
+        title,
+        "",
+        f"Итог: apply завершен со статусом `{result.get('overall_status') or 'н/д'}`.",
+        f"Run ID: `{result.get('run_id') or 'н/д'}`",
+        "",
+        "Применено:",
+        f"- отзывы Ozon: `{_int(applied_counts.get('ozon_public_review_replies'))}`",
+        f"- отметки Ozon отзывов просмотренными: `{_int(applied_counts.get('ozon_marked_viewed'))}`",
+        f"- отзывы WB: `{_int(applied_counts.get('wb_public_review_replies'))}`",
+        f"- вопросы WB: `{_int(applied_counts.get('wb_question_answers'))}`",
+    ]
+    if messenger:
+        lines.extend(
+            [
+                f"- Ozon Messenger: `{messenger.get('status') or 'н/д'}`",
+                f"- Ozon уведомления mark-read: `{sum(1 for row in mark_read if isinstance(row, dict) and row.get('ok'))}` из `{len(mark_read)}`",
+            ]
+        )
+    artifacts = _safe_artifacts(result)
+    if artifacts:
+        lines.extend(["", "Файлы:"])
+        if artifacts.get("report"):
+            lines.append(f"- отчет: `{artifacts['report']}`")
+    return TelegramCommandResult(
+        command=command,
+        ok=str(result.get("overall_status") or "") in {"ok", "warning"},
+        mode="apply",
+        text="\n".join(lines),
+        artifacts=artifacts,
+    )
 
 
 def _dict_value(source: dict[str, Any], key: str) -> dict[str, Any]:

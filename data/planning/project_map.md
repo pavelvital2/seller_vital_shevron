@@ -1,6 +1,6 @@
 # Vital Shevron Project Map
 
-Дата: 2026-06-21
+Дата: 2026-07-04
 
 ```text
 /home/pavel/projects/seller_vital_shevron
@@ -193,13 +193,15 @@
   будущего Telegram-бота.
 - `src/seller_agent/bot/commands.py` - Telegram MVP command layer:
   `/help`, `/status`, `/today`, `/reviews`, `/approvals`, `/catalog`,
-  `/runs`, `/elastic`, `/wb-actions`; `/catalog` показывает последний
+  `/runs`, `/elastic`, `/wb-actions`, `/ozon-inbox`, `/wb-inbox`;
+  `/catalog` показывает последний
   `catalog-build-unified`, `/catalog <запрос>` ищет карточку товара в unified
   catalog, а `/today` и `/status` могут запускать свежие read-only задачи
   через `WorkflowRunner`, если включены `--live-today`/`--live-status`.
   Write-действия разрешены только точечными callback-кнопками:
-  `oe_apply:<ozon_elastic_plan_run_id>` и
-  `wba_apply:<wb_actions_discount_plan_run_id>`.
+  `oe_apply:<ozon_elastic_plan_run_id>`,
+  `wba_apply:<wb_actions_discount_plan_run_id>`,
+  `ozin_apply:<ozon_inbox_run_id>` и `wbin_apply:<wb_inbox_run_id>`.
 - `src/seller_agent/bot/telegram_runner.py` - Telegram Bot API adapter:
   загрузка токена из внешнего файла/env, `sendMessage` с inline-keyboard,
   `answerCallbackQuery`, безопасный `sendDocument` для `artifacts.report`,
@@ -210,6 +212,13 @@
   inline-кнопка apply. Callback `oe_apply:<plan_run_id>` запускает
   `apply-ozon-elastic` только для показанного plan run через штатный
   fresh preflight/drift-check/verify.
+- `src/seller_agent/tasks/inbox_workflow.py` - раздельные Telegram/CLI
+  inbox-workflows для входящих Ozon/WB: `ozon-inbox`, `apply-ozon-inbox`,
+  `wb-inbox`, `apply-wb-inbox`. Ozon route объединяет отзывы/вопросы,
+  Messenger и уведомления, использует `/v3/chat/list`, `/v3/chat/history`,
+  CDP fallback отправки сообщений и `/v2/chat/read`; WB route объединяет
+  отзывы и вопросы через Feedbacks API, а WB уведомления пока явно
+  маркирует как `not_implemented`.
 - `src/seller_agent/tasks/telegram_report_sender.py` - maintenance helper
   `send-telegram-report`: отправляет owner-facing summary и безопасно
   прикрепляет сохраненный report-файл из `data/runs`/`data/reports`; блокирует

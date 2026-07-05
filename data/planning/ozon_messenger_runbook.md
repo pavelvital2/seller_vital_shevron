@@ -509,21 +509,51 @@ approved package.
 - имена/телефоны/адреса/прочие персональные данные;
 - файлы и изображения из переписки без отдельного решения по хранению PII.
 
-## Будущая автоматизация
+## Telegram/CLI автоматизация
 
-Штатный entrypoint уже зарегистрирован:
+На 2026-07-04 штатный ежедневный маршрут для владельца подключен в Telegram:
+
+```text
+/ozon-inbox
+```
+
+Команда строит fresh dry-run по Ozon отзывам/вопросам и Ozon
+Messenger/уведомлениям, сохраняет пакет в `data/pending/` и прикрепляет
+owner-facing report. Inline-кнопка `ozin_apply:<ozon_inbox_run_id>` является
+explicit owner approval только для показанного пакета и запускает:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli apply-ozon-inbox \
+  --source-run-id <ozon_inbox_run_id> \
+  --confirmed-by-user
+```
+
+Текущий Ozon inbox route:
+
+- читает `/v3/chat/list` и `/v3/chat/history`;
+- разделяет `Customer`, `NotificationUser`, `ChatBot`/прочих отправителей;
+- для простых покупательских чатов готовит черновик ответа;
+- для площадочных уведомлений готовит `mark_chat_read` после согласования;
+- отправку ответов покупателям выполняет через
+  `scripts/messenger/ozon_send_messages_cdp.js`;
+- уведомления отмечает прочитанными через `/v2/chat/read`;
+- сложные покупательские сообщения без безопасного шаблона ответа оставляет
+  как `manual_chat_review`, а не выдумывает ответ.
+
+Низкоуровневый entrypoint `ozon-messenger-workflow` остается
+task-runner-каркасом для будущей полной декомпозиции triage/apply/verify:
 
 ```bash
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli \
   ozon-messenger-workflow --stage triage
 ```
 
-На 2026-06-29 команда является безопасным task-runner каркасом и честно
-возвращает `blocked: workflow_adapter_not_implemented`, пока не подключены
-адаптеры triage/apply/verify/cleanup. Ее назначение - быть единым местом
-дальнейшей реализации, а не продолжать ручные одноразовые скрипты.
+Если он возвращает `blocked: workflow_adapter_not_implemented`, это не
+отменяет рабочий Telegram route `/ozon-inbox`; это означает, что отдельный
+низкоуровневый workflow еще не перенесен на полноценные adapter-классы.
 
-Рекомендуемый порядок:
+Дальнейший порядок:
 
 1. Реализовать ежедневный read-only CLI `ozon-notifications-report` или
    `ozon-messenger-report` через официальный Seller

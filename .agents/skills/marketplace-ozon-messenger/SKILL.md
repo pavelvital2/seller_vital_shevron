@@ -10,6 +10,9 @@ description: "Use for Ozon Messenger and notification workflows: buyer chats, un
 - Read `AGENTS.md`, `data/planning/ozon_messenger_runbook.md`, and
   `data/planning/chat_report_templates.md`.
 - Treat buyer replies and marking notifications read as write operations.
+- Use `/ozon-inbox` as the owner-facing Telegram route for Ozon reviews,
+  questions, Messenger buyer chats and platform notifications. The callback
+  `ozin_apply:<run_id>` is approval only for the exact saved inbox package.
 - Daily Messenger work must not stop at reporting: after approval, send
   approved replies, mark approved notifications read, verify, and save
   non-secret closed/tail state so old items do not reappear as new tasks.

@@ -50,6 +50,12 @@ from seller_agent.tasks.ozon_card_create_plan import run_ozon_card_create_plan
 from seller_agent.tasks.ozon_elastic_apply import run_ozon_elastic_apply
 from seller_agent.tasks.ozon_cpc_optimization_plan import CpcOptimizationThresholds, run_ozon_cpc_optimization_plan
 from seller_agent.tasks.ozon_elastic_plan import run_ozon_elastic_plan
+from seller_agent.tasks.inbox_workflow import (
+    run_ozon_inbox_apply,
+    run_ozon_inbox_triage,
+    run_wb_inbox_apply,
+    run_wb_inbox_triage,
+)
 from seller_agent.tasks.ozon_product_remove import run_ozon_product_remove_apply, run_ozon_product_remove_plan
 from seller_agent.tasks.pricing_status import run_pricing_status
 from seller_agent.tasks.product_passport_design import run_product_passport_design
@@ -1818,6 +1824,46 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Required explicit confirmation for external Ozon write operations.",
     )
+
+    ozon_inbox = subparsers.add_parser(
+        "ozon-inbox",
+        help="Build fresh Ozon reviews/questions plus Messenger/notifications approval package.",
+    )
+    ozon_inbox.add_argument("--data-dir", default="data", help="Project data directory.")
+    ozon_inbox.add_argument("--run-id", default=None, help="Optional stable run id.")
+    ozon_inbox.add_argument("--limit", type=int, default=100, help="Maximum rows/chats to inspect.")
+
+    apply_ozon_inbox = subparsers.add_parser(
+        "apply-ozon-inbox",
+        help="Apply owner-approved Ozon inbox package from a Telegram dry-run.",
+    )
+    apply_ozon_inbox.add_argument("--data-dir", default="data", help="Project data directory.")
+    apply_ozon_inbox.add_argument("--source-run-id", required=True, help="Ozon inbox dry-run id.")
+    apply_ozon_inbox.add_argument(
+        "--confirmed-by-user",
+        action="store_true",
+        help="Required explicit confirmation for marketplace write operations.",
+    )
+
+    wb_inbox = subparsers.add_parser(
+        "wb-inbox",
+        help="Build fresh WB reviews/questions approval package and WB notification status.",
+    )
+    wb_inbox.add_argument("--data-dir", default="data", help="Project data directory.")
+    wb_inbox.add_argument("--run-id", default=None, help="Optional stable run id.")
+    wb_inbox.add_argument("--limit", type=int, default=100, help="Maximum rows to inspect.")
+
+    apply_wb_inbox = subparsers.add_parser(
+        "apply-wb-inbox",
+        help="Apply owner-approved WB inbox package from a Telegram dry-run.",
+    )
+    apply_wb_inbox.add_argument("--data-dir", default="data", help="Project data directory.")
+    apply_wb_inbox.add_argument("--source-run-id", required=True, help="WB inbox dry-run id.")
+    apply_wb_inbox.add_argument(
+        "--confirmed-by-user",
+        action="store_true",
+        help="Required explicit confirmation for marketplace write operations.",
+    )
     return parser
 
 
@@ -2756,6 +2802,46 @@ def main(argv: list[str] | None = None) -> int:
             run_id=args.run_id,
             stage=args.stage,
             approved_path=Path(args.approved_path) if args.approved_path else None,
+            confirmed_by_user=args.confirmed_by_user,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
+
+    if args.command == "ozon-inbox":
+        result = run_ozon_inbox_triage(
+            credentials=load_credentials(),
+            data_dir=Path(args.data_dir),
+            run_id=args.run_id,
+            limit=args.limit,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
+
+    if args.command == "apply-ozon-inbox":
+        result = run_ozon_inbox_apply(
+            credentials=load_credentials(),
+            data_dir=Path(args.data_dir),
+            source_run_id=args.source_run_id,
+            confirmed_by_user=args.confirmed_by_user,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
+
+    if args.command == "wb-inbox":
+        result = run_wb_inbox_triage(
+            credentials=load_credentials(),
+            data_dir=Path(args.data_dir),
+            run_id=args.run_id,
+            limit=args.limit,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
+
+    if args.command == "apply-wb-inbox":
+        result = run_wb_inbox_apply(
+            credentials=load_credentials(),
+            data_dir=Path(args.data_dir),
+            source_run_id=args.source_run_id,
             confirmed_by_user=args.confirmed_by_user,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))

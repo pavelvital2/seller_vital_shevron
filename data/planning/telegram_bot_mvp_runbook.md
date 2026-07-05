@@ -227,6 +227,14 @@ summary и безопасный report-файл.
   без `--live-today` показывает последний `daily-morning-report` из
   `data/runs/index.jsonl`.
 - `/reviews` - последний `reviews-questions` из `data/runs/index.jsonl`.
+- `/ozon-inbox` - строит свежий dry-run по Ozon отзывам/вопросам,
+  Ozon Messenger и Ozon уведомлениям, прикрепляет report-файл и при наличии
+  действий показывает inline-кнопку `Применить Ozon входящие`.
+- `/wb-inbox` - строит свежий dry-run по WB отзывам и WB вопросам,
+  прикрепляет report-файл и при наличии действий показывает inline-кнопку
+  `Применить WB входящие`. WB уведомления в отчете показываются отдельным
+  источником со статусом `not_implemented`, пока для них не реализован
+  подтвержденный API/LK маршрут.
 - `/approvals` - текущий обзор `approvals status`.
 - `/jobs` - последние runtime job из SQLite `runtime/runtime.db`, статусы и
   команды для просмотра/отмены.
@@ -258,6 +266,8 @@ Callback должен быть узким и безопасным. На 2026-06-
 ```text
 oe_apply:<ozon_elastic_plan_run_id>
 wba_apply:<wb_actions_discount_plan_run_id>
+ozin_apply:<ozon_inbox_run_id>
+wbin_apply:<wb_inbox_run_id>
 ```
 
 Правила:
@@ -266,11 +276,20 @@ wba_apply:<wb_actions_discount_plan_run_id>
   `ozon_elastic_plan_`;
 - WB actions callback принимает только `plan_run_id`, начинающийся с
   `wb_actions_discount_plan_`;
+- Ozon inbox callback принимает только `run_id`, начинающийся с
+  `ozon_inbox_`;
+- WB inbox callback принимает только `run_id`, начинающийся с `wb_inbox_`;
 - нажатие кнопки = explicit owner approval для этого dry-run;
 - Ozon Elastic apply запускается через
   `run_ozon_elastic_apply(..., confirmed_by_user=True)`;
 - WB actions apply запускается через
   `run_wb_actions_discount_apply(..., confirmed_by_user=True)`;
+- Ozon inbox apply запускается через
+  `run_ozon_inbox_apply(..., confirmed_by_user=True)` и применяет только
+  пакет, сохраненный в `data/pending/<ozon_inbox_run_id>_pending/`;
+- WB inbox apply запускается через
+  `run_wb_inbox_apply(..., confirmed_by_user=True)` и применяет только
+  пакет, сохраненный в `data/pending/<wb_inbox_run_id>_pending/`;
 - перед записью Ozon Elastic apply выполняет свежий scoped preflight только для
   Ozon API, новый dry-run, partial drift-check и verify;
 - перед записью WB actions apply выполняет штатный WB preflight, новый dry-run
@@ -308,7 +327,7 @@ cookies, storage state и файлы вне разрешенных директ�
 - MVP не создает универсальный approved package для всех операций; Ozon Elastic
   и WB actions пока используют `plan_run_id` как approved identity для
   существующих apply-контуров.
-- MVP не отправляет ответы покупателям.
+- MVP не отправляет ответы покупателям без inline callback/approval.
 - MVP не меняет цены, акции, ставки, карточки, фото, остатки или поставки.
 - Исключение: `/elastic` + inline-кнопка Ozon Elastic применяет только
   конкретный показанный Ozon Elastic dry-run через `apply-ozon-elastic` и
@@ -316,6 +335,13 @@ cookies, storage state и файлы вне разрешенных директ�
 - Исключение: `/wb-actions` + inline-кнопка WB actions применяет только
   конкретный показанный WB `70-55-55` dry-run через
   `apply-wb-actions-discounts` и штатный safety-контур.
+- Исключение: `/ozon-inbox` + inline-кнопка Ozon inbox применяет только
+  конкретный показанный пакет Ozon отзывов/вопросов/Messenger/уведомлений:
+  публичные ответы, отметку просмотренных отзывов, ответы в Ozon Messenger и
+  `mark-read` уведомлений.
+- Исключение: `/wb-inbox` + inline-кнопка WB inbox применяет только конкретный
+  показанный пакет WB отзывов и вопросов. WB уведомления пока не применяются,
+  потому что route имеет статус `not_implemented`.
 - MVP запускает из Telegram только live read-only `/today` и `/status`, если
   явно включены `--live-today` и `--live-status`. Остальные команды показывают
   уже сохраненные runtime-данные.

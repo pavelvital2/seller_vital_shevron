@@ -669,6 +669,148 @@ def test_bot_wb_actions_callback_rejects_invalid_plan_id(tmp_path: Path) -> None
     assert "Изменений в Ozon/WB не выполнял" in result.text
 
 
+def test_bot_ozon_inbox_builds_fresh_package_and_apply_button(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from seller_agent.bot import commands
+
+    pending_dir = tmp_path / "pending" / "ozon_inbox_test_pending"
+    pending_dir.mkdir(parents=True)
+    (pending_dir / "inbox_pending.json").write_text(
+        json.dumps(
+            {
+                "messenger_actions": [
+                    {"action_type": "send_chat_message"},
+                    {"action_type": "mark_chat_read"},
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    report = tmp_path / "runs" / "2026-07-04" / "ozon_inbox_test" / "ozon_inbox_approval.md"
+
+    def fake_triage(**kwargs: object) -> dict:
+        assert kwargs["data_dir"] == tmp_path
+        return {
+            "run_id": "ozon_inbox_test",
+            "overall_status": "ok",
+            "actions_count": 3,
+            "reviews": {"actions_count": 1},
+            "messenger": {"total_unread_count": 2},
+            "artifacts": {"report": str(report)},
+        }
+
+    monkeypatch.setattr(commands, "run_ozon_inbox_triage", fake_triage)
+
+    result = dispatch_message("/ozon-inbox", data_dir=tmp_path)
+
+    assert result.ok is True
+    assert result.mode == "dry_run"
+    assert "Ozon входящие" in result.text
+    assert "ответы покупателям в чатах: `1`" in result.text
+    assert result.reply_markup["inline_keyboard"][0][0]["callback_data"] == "ozin_apply:ozon_inbox_test"
+    assert result.artifacts["report"] == str(report)
+
+
+def test_bot_wb_inbox_builds_fresh_package_and_reports_notifications(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from seller_agent.bot import commands
+
+    report = tmp_path / "runs" / "2026-07-04" / "wb_inbox_test" / "wb_inbox_approval.md"
+
+    def fake_triage(**kwargs: object) -> dict:
+        assert kwargs["data_dir"] == tmp_path
+        return {
+            "run_id": "wb_inbox_test",
+            "overall_status": "warning",
+            "actions_count": 2,
+            "reviews": {"actions_count": 2},
+            "wb_notifications": {"status": "not_implemented"},
+            "artifacts": {"report": str(report)},
+        }
+
+    monkeypatch.setattr(commands, "run_wb_inbox_triage", fake_triage)
+
+    result = dispatch_message("/wb-inbox", data_dir=tmp_path)
+
+    assert result.ok is True
+    assert "WB вопросы входят" in result.text
+    assert "WB уведомления: `not_implemented`" in result.text
+    assert result.reply_markup["inline_keyboard"][0][0]["callback_data"] == "wbin_apply:wb_inbox_test"
+
+
+def test_bot_inbox_callbacks_apply_specific_packages(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from seller_agent.bot import commands
+
+    calls: list[tuple[str, dict]] = []
+
+    def fake_ozon_apply(**kwargs: object) -> dict:
+        calls.append(("ozon", kwargs))
+        return {
+            "run_id": "ozon_inbox_test_apply",
+            "overall_status": "ok",
+            "reviews": {
+                "apply": {
+                    "applied_counts": {
+                        "ozon_public_review_replies": 1,
+                        "ozon_marked_viewed": 2,
+                    }
+                }
+            },
+            "messenger": {"status": "ok", "mark_read": [{"ok": True}]},
+            "artifacts": {"report": str(tmp_path / "ozon_apply.md")},
+        }
+
+    def fake_wb_apply(**kwargs: object) -> dict:
+        calls.append(("wb", kwargs))
+        return {
+            "run_id": "wb_inbox_test_apply",
+            "overall_status": "ok",
+            "reviews": {
+                "apply": {
+                    "applied_counts": {
+                        "wb_public_review_replies": 1,
+                        "wb_question_answers": 1,
+                    }
+                }
+            },
+            "artifacts": {"report": str(tmp_path / "wb_apply.md")},
+        }
+
+    monkeypatch.setattr(commands, "run_ozon_inbox_apply", fake_ozon_apply)
+    monkeypatch.setattr(commands, "run_wb_inbox_apply", fake_wb_apply)
+
+    ozon_result = dispatch_callback("ozin_apply:ozon_inbox_test", data_dir=tmp_path)
+    wb_result = dispatch_callback("wbin_apply:wb_inbox_test", data_dir=tmp_path)
+
+    assert ozon_result.ok is True
+    assert "Ozon входящие apply" in ozon_result.text
+    assert "Ozon уведомления mark-read: `1` из `1`" in ozon_result.text
+    assert wb_result.ok is True
+    assert "вопросы WB: `1`" in wb_result.text
+    assert calls[0][1]["source_run_id"] == "ozon_inbox_test"
+    assert calls[0][1]["confirmed_by_user"] is True
+    assert calls[1][1]["source_run_id"] == "wb_inbox_test"
+    assert calls[1][1]["confirmed_by_user"] is True
+
+
+def test_bot_inbox_callbacks_reject_invalid_ids(tmp_path: Path) -> None:
+    ozon_result = dispatch_callback("ozin_apply:../../bad", data_dir=tmp_path)
+    wb_result = dispatch_callback("wbin_apply:../../bad", data_dir=tmp_path)
+
+    assert ozon_result.ok is False
+    assert ozon_result.blocked_reason == "invalid_source_run_id"
+    assert wb_result.ok is False
+    assert wb_result.blocked_reason == "invalid_source_run_id"
+
+
 def test_cli_bot_preview_text_and_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["bot", "preview", "--message", "/help", "--data-dir", str(tmp_path)]) == 0
     assert "Telegram bot" in capsys.readouterr().out

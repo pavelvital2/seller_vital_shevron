@@ -12,6 +12,9 @@ description: "Use for Ozon/Wildberries reviews and questions workflows: read-onl
 - Replies to buyers and marking reviews viewed are write operations.
 - Use the full chain:
   `read-only -> dry-run -> review -> approved -> apply -> verify -> cleanup`.
+- For Telegram automation, keep Ozon and WB inboxes separate:
+  `/ozon-inbox` and `/wb-inbox`. Do not merge approvals across marketplaces
+  unless the owner explicitly asks for one combined package.
 - Do not produce identical boilerplate replies for every review.
 - A review with photo/video but no text still needs a public reply when the
   marketplace allows it.
@@ -28,6 +31,9 @@ description: "Use for Ozon/Wildberries reviews and questions workflows: read-onl
 - WB: official Feedbacks/Questions API first.
 - Ozon: Seller Review/Question API first; if unavailable or 403, use the
   documented LK/CDP fallback from the runbook.
+- WB questions are part of the WB inbox route. WB platform notifications are
+  not yet a confirmed source; report them as `not_implemented` until a
+  docs-first API/LK route is implemented. Do not invent notification counts.
 - For Ozon review media details use
   `scripts/reviews/ozon_review_media_detail_cdp.js` when the list source only
   contains media counts.

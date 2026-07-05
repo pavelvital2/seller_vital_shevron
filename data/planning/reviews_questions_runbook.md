@@ -17,6 +17,58 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 Команда выполняет read-only сбор отзывов и вопросов, готовит отчет и не
 публикует ответы.
 
+## Telegram inbox-кнопки
+
+На 2026-07-04 для регулярной работы через Telegram добавлены раздельные
+кнопки:
+
+```text
+/ozon-inbox
+/wb-inbox
+```
+
+`/ozon-inbox` собирает fresh dry-run по Ozon отзывам/вопросам и дополнительно
+подключает Ozon Messenger/уведомления. После owner approval inline-кнопка
+вызывает `run_ozon_inbox_apply(..., confirmed_by_user=True)`.
+
+`/wb-inbox` собирает fresh dry-run по WB отзывам и WB вопросам через
+официальный Feedbacks API. WB уведомления в отчете показываются отдельным
+источником со статусом `not_implemented`, пока для них не создан
+подтвержденный API/LK маршрут. Это не блокирует ответы на WB отзывы и WB
+вопросы.
+
+CLI-эквиваленты:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli ozon-inbox
+
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli wb-inbox
+```
+
+Apply выполнять только через конкретный `source_run_id` после согласования:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli apply-ozon-inbox \
+  --source-run-id <ozon_inbox_run_id> \
+  --confirmed-by-user
+
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli apply-wb-inbox \
+  --source-run-id <wb_inbox_run_id> \
+  --confirmed-by-user
+```
+
+Каждый inbox dry-run сохраняет пакет в:
+
+```text
+data/pending/<marketplace_inbox_run_id>_pending/
+```
+
+Повторный apply того же inbox-пакета должен блокироваться idempotency marker.
+
 ## Apply
 
 Ответы покупателям - опасная операция.
