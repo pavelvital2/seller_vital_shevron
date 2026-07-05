@@ -686,6 +686,20 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         runbook_path="data/planning/wb_promotion_runbook.md",
     ),
     RegisteredTask(
+        name="wb-promotion-bid-parser-enriched-plan",
+        command="plan-wb-promotion-bids-parser-enriched",
+        title="Plan WB promotion bids with parser signals",
+        description=(
+            "Build dry-run WB Promotion bid recommendations enriched with "
+            "WB parser visibility, stock and sales signals."
+        ),
+        mode="dry_run",
+        risk="normal",
+        marketplaces=("wb",),
+        runbook_path="data/planning/wb_promotion_runbook.md",
+        requires_mapping=True,
+    ),
+    RegisteredTask(
         name="wb-promotion-bids-apply",
         command="apply-wb-promotion-bids",
         title="Apply WB promotion bids",

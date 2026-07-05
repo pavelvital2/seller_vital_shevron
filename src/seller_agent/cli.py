@@ -82,6 +82,7 @@ from seller_agent.tasks.wb_actions_discount_plan import run_wb_actions_discount_
 from seller_agent.tasks.wb_card_create_apply import run_wb_card_create_apply
 from seller_agent.tasks.wb_card_create_plan import run_wb_card_create_plan
 from seller_agent.tasks.wb_parser_warehouse_analytics import run_wb_parser_warehouse_analytics
+from seller_agent.tasks.wb_promotion_bid_parser_enriched_plan import run_wb_promotion_bid_parser_enriched_plan
 from seller_agent.tasks.wb_promotion_bid_plan import WbPromotionBidThresholds, run_wb_promotion_bid_plan
 from seller_agent.tasks.wb_promotion_bids_apply import run_wb_promotion_bids_apply
 from seller_agent.tasks.wb_promotion_report import run_wb_promotion_report
@@ -1322,6 +1323,32 @@ def build_parser() -> argparse.ArgumentParser:
     wb_promotion_bid_plan.add_argument("--scale-mid-drr-percent", default="15")
     wb_promotion_bid_plan.add_argument("--scale-high-drr-percent", default="10")
     wb_promotion_bid_plan.add_argument("--min-bid", default="1.00")
+
+    wb_promotion_parser_enriched = subparsers.add_parser(
+        "plan-wb-promotion-bids-parser-enriched",
+        help="Build dry-run WB Promotion bid recommendations enriched with parser, stock and sales signals.",
+    )
+    wb_promotion_parser_enriched.add_argument("--data-dir", default="data", help="Project data directory.")
+    wb_promotion_parser_enriched.add_argument("--run-id", default=None, help="Optional stable run id.")
+    wb_promotion_parser_enriched.add_argument(
+        "--base-plan-run-id",
+        default=None,
+        help="Base wb_promotion_bid_plan_* run id. Defaults to latest.",
+    )
+    wb_promotion_parser_enriched.add_argument(
+        "--base-plan-csv",
+        default=None,
+        help="Explicit base wb_promotion_bid_plan.csv.",
+    )
+    wb_promotion_parser_enriched.add_argument(
+        "--signals-csv",
+        action="append",
+        default=[],
+        help="Signal CSV with parser/stock/sales fields. Can be passed multiple times. Defaults to data/catalog/content/signals/*.csv.",
+    )
+    wb_promotion_parser_enriched.add_argument("--min-stock", type=int, default=4)
+    wb_promotion_parser_enriched.add_argument("--parser-test-increase-percent", default="10")
+    wb_promotion_parser_enriched.add_argument("--min-bid", default="1.00")
 
     apply_wb_promotion_bids = subparsers.add_parser(
         "apply-wb-promotion-bids",
@@ -2698,6 +2725,20 @@ def main(argv: list[str] | None = None) -> int:
                 scale_high_drr_percent=args.scale_high_drr_percent,
                 min_bid=args.min_bid,
             ),
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "plan-wb-promotion-bids-parser-enriched":
+        result = run_wb_promotion_bid_parser_enriched_plan(
+            data_dir=Path(args.data_dir),
+            run_id=args.run_id,
+            base_plan_run_id=args.base_plan_run_id,
+            base_plan_csv=Path(args.base_plan_csv) if args.base_plan_csv else None,
+            signals_csv=[Path(path) for path in args.signals_csv],
+            min_stock=args.min_stock,
+            parser_test_increase_percent=Decimal(args.parser_test_increase_percent),
+            min_bid=Decimal(args.min_bid),
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0

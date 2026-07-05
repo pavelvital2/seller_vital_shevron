@@ -325,6 +325,11 @@
   продвижению через Promotion API.
 - `src/seller_agent/tasks/wb_promotion_bid_plan.py` - dry-run план изменений
   ставок WB продвижения по активным CPC-кампаниям.
+- `src/seller_agent/tasks/wb_promotion_bid_parser_enriched_plan.py` -
+  read-only/dry-run надстройка над WB bid plan: добавляет WB parser visibility,
+  WB Statistics API sales/stock signals, классифицирует `apply_ready`,
+  `review_only`, `watch`, `reduce_or_stop_review`, `blocked`; parser не
+  используется как источник продаж.
 - `src/seller_agent/tasks/wb_promotion_bids_apply.py` - применение
   согласованных ставок WB promotion через Promotion API с fresh report,
   drift-check и verify.

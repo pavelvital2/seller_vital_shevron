@@ -261,14 +261,38 @@ fresh dry-run, drift-check и явного подтверждения владе
 ## Parser-enriched bid recommendations
 
 Подтвержденный сценарий 2026-06-28: для увеличения продаж можно расширять
-штатный dry-run ставок данными WB parser и stock/sales signals.
+штатный dry-run ставок данными WB parser и WB API stock/sales signals.
 
 Источники для такого расчета:
 
 - свежий `wb-promotion-report` за период 14 дней;
 - штатный `plan-wb-promotion-bids` как базовый расчет эффективности;
-- последний WB parser positions run;
-- свежие WB stock/sales signals через `collect-card-signals`.
+- последний WB parser positions/warehouse run - только видимость, позиции,
+  buyer-visible price/quantity и поисковый контекст;
+- свежие WB stock/sales signals через `collect-card-signals` без
+  `--skip-api`; продажи должны приходить из WB Statistics API
+  `/api/v1/supplier/sales`, parser не является источником продаж.
+
+Штатная команда parser-enriched dry-run:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli plan-wb-promotion-bids-parser-enriched \
+  --base-plan-run-id <wb_promotion_bid_plan_run_id>
+```
+
+Если `sales_signals.csv`/`all_signals.csv` не содержит строк из WB API sales,
+строки получают флаг `missing_wb_statistics_sales_signal`. Это не значит, что продаж не
+было; это значит, что в текущем расчете нет отдельного подтверждения продаж из
+WB Statistics API. Перед финальным owner-review ставок нужно обновить signals
+через API:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli collect-card-signals \
+  --marketplace wb \
+  --parser-source latest
+```
 
 Правило сегментации:
 
@@ -306,7 +330,10 @@ data/runs/2026-06-28/wb_promotion_bids_apply_all23_20260628T221859
 - прирост ставок: `+3.32`;
 - verify: `ok`, mismatches `0`.
 
-Ограничение: этот parser-enriched apply пока выполнен кастомным безопасным
-контуром поверх WB Promotion API. Рекомендуется сделать штатную CLI-команду,
-которая будет принимать parser-enriched approval CSV и выполнять тот же
+Ограничение: parser-enriched apply 2026-06-28 был выполнен кастомным
+безопасным контуром поверх WB Promotion API. С 2026-07-05 появился штатный
+read-only/dry-run планировщик `plan-wb-promotion-bids-parser-enriched`, но
+apply-команда для него еще не реализована. Следующий технический шаг -
+сделать отдельный `apply-wb-promotion-bids-parser-enriched`, который будет
+принимать только owner-approved parser-enriched CSV и выполнять тот же
 fresh-report/drift-check/apply/verify маршрут без одноразового скрипта.
