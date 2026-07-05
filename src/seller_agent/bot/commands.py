@@ -29,11 +29,15 @@ SUPPORTED_COMMANDS = {
     "/elastic",
     "/help",
     "/jobs",
+    "/menu",
     "/status",
+    "/start",
     "/today",
     "/reviews",
     "/ozon-inbox",
     "/ozon-actions",
+    "/ozon",
+    "/wb",
     "/wb-inbox",
     "/approvals",
     "/catalog",
@@ -47,9 +51,13 @@ TELEGRAM_TITLES = {
     "/elastic": "Ozon Elastic",
     "/help": "Помощь",
     "/jobs": "Runtime jobs",
+    "/menu": "Главное меню",
     "/reviews": "Отзывы и вопросы",
+    "/ozon": "Ozon",
     "/ozon-inbox": "Ozon входящие",
     "/ozon-actions": "Ozon все акции",
+    "/start": "Главное меню",
+    "/wb": "Wildberries",
     "/wb-inbox": "WB входящие",
     "/runs": "Запуски",
     "/status": "Статус проекта",
@@ -82,8 +90,15 @@ def handle_telegram_command(
     credentials: AppCredentials | None = None,
 ) -> TelegramCommandResult:
     command, argument = _parse_command(message)
+    command = _normalize_button_command(command)
+    if command in {"/start", "/menu"}:
+        return _main_menu()
     if command == "/help":
         return _help()
+    if command == "/ozon":
+        return _ozon_menu()
+    if command in {"/wb", "/wildberries", "/вайлдберриз"}:
+        return _wb_menu()
     if command in {"/elastic", "/ozon-elastic", "/ozon_elastic"}:
         return _ozon_elastic_plan(data_dir=data_dir, credentials=credentials)
     if command in {"/ozon-actions", "/ozon_actions", "/ozon-all-actions"}:
@@ -193,6 +208,84 @@ def handle_telegram_callback(
     )
 
 
+MAIN_MENU_KEYBOARD: dict[str, Any] = {
+    "keyboard": [
+        [{"text": "Статус"}, {"text": "Помощь"}],
+        [{"text": "Общий вчерашний отчет"}],
+        [{"text": "Озон"}, {"text": "Вайлдберриз"}],
+    ],
+    "resize_keyboard": True,
+    "is_persistent": True,
+}
+
+OZON_MENU_KEYBOARD: dict[str, Any] = {
+    "keyboard": [
+        [{"text": "Ozon акции"}, {"text": "Ozon эластик"}],
+        [{"text": "Ozon входящие"}],
+        [{"text": "Назад"}],
+    ],
+    "resize_keyboard": True,
+    "is_persistent": True,
+}
+
+WB_MENU_KEYBOARD: dict[str, Any] = {
+    "keyboard": [
+        [{"text": "WB акции"}],
+        [{"text": "WB входящие"}],
+        [{"text": "Назад"}],
+    ],
+    "resize_keyboard": True,
+    "is_persistent": True,
+}
+
+
+def _main_menu() -> TelegramCommandResult:
+    return TelegramCommandResult(
+        command="/menu",
+        ok=True,
+        text=(
+            "Главное меню\n\n"
+            "Итог: выбери нужный раздел кнопкой ниже.\n\n"
+            "Первый экран:\n"
+            "- Статус\n"
+            "- Помощь\n"
+            "- Общий вчерашний отчет\n"
+            "- Озон\n"
+            "- Вайлдберриз"
+        ),
+        reply_markup=MAIN_MENU_KEYBOARD,
+    )
+
+
+def _ozon_menu() -> TelegramCommandResult:
+    return TelegramCommandResult(
+        command="/ozon",
+        ok=True,
+        text=(
+            "Ozon\n\n"
+            "Итог: выбери операцию Ozon.\n\n"
+            "- Ozon акции - сравнение всех акций Ozon.\n"
+            "- Ozon эластик - только эластичный бустинг.\n"
+            "- Ozon входящие - отзывы, вопросы, чаты и уведомления."
+        ),
+        reply_markup=OZON_MENU_KEYBOARD,
+    )
+
+
+def _wb_menu() -> TelegramCommandResult:
+    return TelegramCommandResult(
+        command="/wb",
+        ok=True,
+        text=(
+            "Wildberries\n\n"
+            "Итог: выбери операцию Wildberries.\n\n"
+            "- WB акции - акции и скидки по схеме 70-55-55.\n"
+            "- WB входящие - отзывы, вопросы и уведомления."
+        ),
+        reply_markup=WB_MENU_KEYBOARD,
+    )
+
+
 def _help() -> TelegramCommandResult:
     registry = default_task_registry()
     tasks = registry.list(telegram_only=True)
@@ -228,7 +321,12 @@ def _help() -> TelegramCommandResult:
             "- Другие изменения в Ozon/WB через Telegram не выполняются.",
         ]
     )
-    return TelegramCommandResult(command="/help", ok=True, text="\n".join(lines))
+    return TelegramCommandResult(
+        command="/help",
+        ok=True,
+        text="\n".join(lines),
+        reply_markup=MAIN_MENU_KEYBOARD,
+    )
 
 
 def _ozon_inbox_plan(
@@ -2007,8 +2105,48 @@ def _safe_error(exc: BaseException) -> str:
     return _truncate(text, 500)
 
 
+def _normalize_button_command(command: str) -> str:
+    text = str(command or "").strip().lower().replace("ё", "е")
+    aliases = {
+        "статус": "/status",
+        "помощь": "/help",
+        "общий вчерашний отчет": "/today",
+        "общий вчерашний отчёт": "/today",
+        "отчет за вчера": "/today",
+        "отчёт за вчера": "/today",
+        "озон": "/ozon",
+        "ozon": "/ozon",
+        "вайлдберриз": "/wb",
+        "wildberries": "/wb",
+        "wb": "/wb",
+        "вб": "/wb",
+        "назад": "/menu",
+        "главное меню": "/menu",
+        "меню": "/menu",
+        "ozon акции": "/ozon-actions",
+        "озон акции": "/ozon-actions",
+        "ozon все акции": "/ozon-actions",
+        "озон все акции": "/ozon-actions",
+        "ozon эластик": "/elastic",
+        "ozon elastic": "/elastic",
+        "озон эластик": "/elastic",
+        "ozon входящие": "/ozon-inbox",
+        "озон входящие": "/ozon-inbox",
+        "wb акции": "/wb-actions",
+        "вб акции": "/wb-actions",
+        "wildberries акции": "/wb-actions",
+        "wb входящие": "/wb-inbox",
+        "вб входящие": "/wb-inbox",
+        "wildberries входящие": "/wb-inbox",
+    }
+    return aliases.get(text, command)
+
+
 def _parse_command(message: str) -> tuple[str, str]:
     text = str(message or "").strip()
+    normalized_full = _normalize_button_command(text)
+    if normalized_full != text and normalized_full.startswith("/"):
+        return normalized_full, ""
     raw_command, _, argument = text.partition(" ")
     command = raw_command.lower()
     if "@" in command:

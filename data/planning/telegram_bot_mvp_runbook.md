@@ -21,12 +21,18 @@ command layer. Adapter умеет отправить preview-ответ, оди�
 `bot run-job-next` или будущим worker/timer.
 
 С 2026-06-30 подключены точечные write-кнопки: Ozon Elastic и WB акции
-`70-55-55`. Команды `/elastic` и `/wb-actions` строят fresh dry-run,
+`70-55-55`. С 2026-07-05 добавлен второй Ozon-контур `Ozon все акции`.
+Команды `/elastic`, `/ozon-actions` и `/wb-actions` строят fresh dry-run,
 отправляют отчет и inline-кнопку применения. Нажатие кнопки является явным
 подтверждением владельца только для показанного `plan_run_id`; apply
-выполняется существующими контурами `apply-ozon-elastic` и
-`apply-wb-actions-discounts` с fresh-check, partial drift-check, verify и
-idempotency guard.
+выполняется существующими контурами `apply-ozon-elastic`,
+`apply-ozon-actions-optimizer` и `apply-wb-actions-discounts` с fresh-check,
+partial drift-check, verify и idempotency guard.
+
+С 2026-07-05 добавлен минимальный первый экран Telegram-бота через persistent
+reply-клавиатуру. `/start` и `/menu` показывают кнопки `Статус`, `Помощь`,
+`Общий вчерашний отчет`, `Озон`, `Вайлдберриз`. Эти кнопки только маршрутизируют
+в существующие команды; сами по себе они не являются approval для write-действий.
 
 Токен бота не хранится в проекте. Если токен был отправлен в чат или попал в
 логи, считать его засвеченным и перевыпустить через BotFather перед
@@ -216,6 +222,8 @@ summary и безопасный report-файл.
 
 ## Поддерживаемые команды
 
+- `/start` - показывает первый экран reply-клавиатуры.
+- `/menu` - возвращает на первый экран reply-клавиатуры.
 - `/help` - список доступных read-only экранов.
 - `/status` - при `--live-status` строит свежий read-only `status-preflight`;
   при дополнительном `--runtime-jobs` ставит `status-preflight` в SQLite
@@ -252,19 +260,78 @@ summary и безопасный report-файл.
 - `/elastic` - строит свежий dry-run Ozon Elastic, показывает summary и
   прикрепляет report-файл. Если есть строки к применению, добавляет
   inline-кнопку `Применить Ozon Elastic`.
+- `/ozon-actions` - строит свежий dry-run второго Ozon-контура `Ozon все
+  акции`: сравнивает Elastic и доступные Ozon акции по товару, учитывает
+  `min_price`, FBO-остаток и доступный boost%, показывает summary и
+  прикрепляет report-файл. Если есть строки к применению, добавляет
+  inline-кнопку `Применить Ozon акции`.
 - `/wb-actions` - строит свежий dry-run WB акций по схеме `70-55-55`,
   показывает summary, бизнес-причины изменения скидки и прикрепляет
   report-файл. Если есть строки к применению, добавляет inline-кнопку
   `Применить WB 70-55-55`.
 - `/runs` - краткий список последних runtime-статусов по Telegram-задачам.
 
+## Reply-кнопки первого экрана
+
+Первый экран создается через Telegram `ReplyKeyboardMarkup`, чтобы владелец мог
+быстро запускать частые операции без ввода команд вручную.
+
+Главная клавиатура:
+
+```text
+Статус | Помощь
+Общий вчерашний отчет
+Озон | Вайлдберриз
+```
+
+Маршрутизация кнопок:
+
+- `Статус` -> `/status`;
+- `Помощь` -> `/help`;
+- `Общий вчерашний отчет` -> `/today`;
+- `Озон` -> `/ozon`;
+- `Вайлдберриз` -> `/wb`;
+- `Назад` -> `/menu`.
+
+Подменю Ozon:
+
+```text
+Ozon акции | Ozon эластик
+Ozon входящие
+Назад
+```
+
+Маршрутизация:
+
+- `Ozon акции` -> `/ozon-actions`;
+- `Ozon эластик` -> `/elastic`;
+- `Ozon входящие` -> `/ozon-inbox`.
+
+Подменю Wildberries:
+
+```text
+WB акции
+WB входящие
+Назад
+```
+
+Маршрутизация:
+
+- `WB акции` -> `/wb-actions`;
+- `WB входящие` -> `/wb-inbox`.
+
+Важно: reply-кнопка только отправляет текст команды от имени пользователя.
+Она не подтверждает write-операцию. Подтверждением write остается только
+inline-кнопка, показанная под конкретным fresh dry-run/report.
+
 ## Inline-кнопки и callback
 
 Бот обрабатывает Telegram `callback_query` только для разрешенных chat_id.
-Callback должен быть узким и безопасным. На 2026-06-30 поддерживается:
+Callback должен быть узким и безопасным. На 2026-07-05 поддерживается:
 
 ```text
 oe_apply:<ozon_elastic_plan_run_id>
+oza_apply:<ozon_actions_optimizer_plan_run_id>
 wba_apply:<wb_actions_discount_plan_run_id>
 ozin_apply:<ozon_inbox_run_id>
 wbin_apply:<wb_inbox_run_id>
@@ -274,6 +341,8 @@ wbin_apply:<wb_inbox_run_id>
 
 - Ozon Elastic callback принимает только `plan_run_id`, начинающийся с
   `ozon_elastic_plan_`;
+- Ozon actions optimizer callback принимает только `plan_run_id`,
+  начинающийся с `ozon_actions_optimizer_plan_`;
 - WB actions callback принимает только `plan_run_id`, начинающийся с
   `wb_actions_discount_plan_`;
 - Ozon inbox callback принимает только `run_id`, начинающийся с
@@ -282,6 +351,8 @@ wbin_apply:<wb_inbox_run_id>
 - нажатие кнопки = explicit owner approval для этого dry-run;
 - Ozon Elastic apply запускается через
   `run_ozon_elastic_apply(..., confirmed_by_user=True)`;
+- Ozon actions optimizer apply запускается через
+  `run_ozon_actions_optimizer_apply(..., confirmed_by_user=True)`;
 - WB actions apply запускается через
   `run_wb_actions_discount_apply(..., confirmed_by_user=True)`;
 - Ozon inbox apply создает runtime job `ozon-inbox-apply` через `JobService`
@@ -292,6 +363,9 @@ wbin_apply:<wb_inbox_run_id>
   сохраненный в `data/pending/<wb_inbox_run_id>_pending/`;
 - перед записью Ozon Elastic apply выполняет свежий scoped preflight только для
   Ozon API, новый dry-run, partial drift-check и verify;
+- перед записью Ozon actions optimizer apply выполняет штатный Ozon preflight,
+  новый dry-run, partial drift-check и verify; применять можно только строки
+  из показанного `ozon_actions_optimizer_plan_*`;
 - перед записью WB actions apply выполняет штатный WB preflight, новый dry-run
   по схеме утвержденного плана, partial drift-check `nmID + price + discount`,
   upload и verify через WB history/buffer;
@@ -332,6 +406,9 @@ cookies, storage state и файлы вне разрешенных директ�
 - Исключение: `/elastic` + inline-кнопка Ozon Elastic применяет только
   конкретный показанный Ozon Elastic dry-run через `apply-ozon-elastic` и
   штатный safety-контур.
+- Исключение: `/ozon-actions` + inline-кнопка Ozon actions применяет только
+  конкретный показанный dry-run второго Ozon-контура через
+  `apply-ozon-actions-optimizer` и штатный safety-контур.
 - Исключение: `/wb-actions` + inline-кнопка WB actions применяет только
   конкретный показанный WB `70-55-55` dry-run через
   `apply-wb-actions-discounts` и штатный safety-контур.

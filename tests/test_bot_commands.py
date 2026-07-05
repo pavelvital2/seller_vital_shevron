@@ -32,6 +32,57 @@ def test_bot_help_lists_read_only_mvp_commands() -> None:
     assert "`/ozon-actions`" in result.text
     assert "`/wb-actions`" in result.text
     assert "`/jobs`" in result.text
+    assert result.reply_markup["keyboard"][0][0]["text"] == "Статус"
+
+
+def test_bot_start_shows_main_reply_keyboard() -> None:
+    result = dispatch_message("/start")
+
+    assert result.ok is True
+    assert result.command == "/menu"
+    assert "Главное меню" in result.text
+    assert result.reply_markup["keyboard"] == [
+        [{"text": "Статус"}, {"text": "Помощь"}],
+        [{"text": "Общий вчерашний отчет"}],
+        [{"text": "Озон"}, {"text": "Вайлдберриз"}],
+    ]
+    assert result.reply_markup["resize_keyboard"] is True
+
+
+def test_bot_main_keyboard_buttons_dispatch_existing_commands(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from seller_agent.bot import commands
+
+    def fake_latest_run_command(**kwargs: object) -> commands.TelegramCommandResult:
+        return commands.TelegramCommandResult(
+            command=str(kwargs["command"]),
+            ok=True,
+            text=f"handled {kwargs['command']}",
+        )
+
+    monkeypatch.setattr(commands, "_latest_run_command", fake_latest_run_command)
+
+    status = dispatch_message("Статус", data_dir=tmp_path)
+    today = dispatch_message("Общий вчерашний отчет", data_dir=tmp_path)
+
+    assert status.command == "/status"
+    assert "handled /status" in status.text
+    assert today.command == "/today"
+    assert "handled /today" in today.text
+
+
+def test_bot_marketplace_buttons_show_submenus() -> None:
+    ozon = dispatch_message("Озон")
+    wb = dispatch_message("Вайлдберриз")
+
+    assert ozon.ok is True
+    assert ozon.command == "/ozon"
+    assert ozon.reply_markup["keyboard"][0][0]["text"] == "Ozon акции"
+    assert wb.ok is True
+    assert wb.command == "/wb"
+    assert wb.reply_markup["keyboard"][0][0]["text"] == "WB акции"
 
 
 def test_bot_status_uses_latest_run_manifest(tmp_path: Path) -> None:

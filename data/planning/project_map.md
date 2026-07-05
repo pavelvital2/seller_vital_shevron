@@ -193,14 +193,18 @@
 - `src/seller_agent/bot/dispatcher.py` - thin layer над `TaskRegistry` для
   будущего Telegram-бота.
 - `src/seller_agent/bot/commands.py` - Telegram MVP command layer:
-  `/help`, `/status`, `/today`, `/reviews`, `/approvals`, `/catalog`,
-  `/runs`, `/elastic`, `/wb-actions`, `/ozon-inbox`, `/wb-inbox`;
+  `/start`, `/menu`, `/help`, `/status`, `/today`, `/reviews`,
+  `/approvals`, `/catalog`, `/runs`, `/elastic`, `/ozon-actions`,
+  `/wb-actions`, `/ozon-inbox`, `/wb-inbox`; `/start` и `/menu` показывают
+  первый экран reply-клавиатуры: `Статус`, `Помощь`,
+  `Общий вчерашний отчет`, `Озон`, `Вайлдберриз`;
   `/catalog` показывает последний
   `catalog-build-unified`, `/catalog <запрос>` ищет карточку товара в unified
   catalog, а `/today` и `/status` могут запускать свежие read-only задачи
   через `WorkflowRunner`, если включены `--live-today`/`--live-status`.
   Write-действия разрешены только точечными callback-кнопками:
   `oe_apply:<ozon_elastic_plan_run_id>`,
+  `oza_apply:<ozon_actions_optimizer_plan_run_id>`,
   `wba_apply:<wb_actions_discount_plan_run_id>`,
   `ozin_apply:<ozon_inbox_run_id>` и `wbin_apply:<wb_inbox_run_id>`.
 - `src/seller_agent/bot/telegram_runner.py` - Telegram Bot API adapter:
@@ -213,6 +217,11 @@
   inline-кнопка apply. Callback `oe_apply:<plan_run_id>` запускает
   `apply-ozon-elastic` только для показанного plan run через штатный
   fresh preflight/drift-check/verify.
+- `/ozon-actions` - Telegram-команда второго Ozon-контура `Ozon все акции`:
+  свежий dry-run сравнения Elastic и всех доступных Ozon акций, report и
+  inline-кнопка apply. Callback `oza_apply:<plan_run_id>` запускает
+  `apply-ozon-actions-optimizer` только для показанного plan run через
+  штатный fresh preflight/drift-check/verify.
 - `src/seller_agent/tasks/inbox_workflow.py` - раздельные Telegram/CLI
   inbox-workflows для входящих Ozon/WB: `ozon-inbox`, `apply-ozon-inbox`,
   `wb-inbox`, `apply-wb-inbox`. Ozon route объединяет отзывы/вопросы,
