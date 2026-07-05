@@ -178,3 +178,124 @@ def test_workflow_runner_runs_wb_inbox_apply_default_handler(monkeypatch, tmp_pa
     assert result.artifacts["report"].endswith("report.md")
     assert calls[0]["source_run_id"] == "wb_inbox_test"
     assert calls[0]["confirmed_by_user"] is True
+
+
+def test_workflow_runner_runs_ozon_elastic_apply_default_handler(monkeypatch, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+    calls: list[dict] = []
+
+    def fake_apply(**kwargs):  # type: ignore[no-untyped-def]
+        calls.append(kwargs)
+        return {
+            "run_id": "ozon_elastic_apply_test",
+            "overall_status": "ok",
+            "plan_run_id": kwargs["plan_run_id"],
+            "artifacts": {"report": str(tmp_path / "elastic.md")},
+        }
+
+    monkeypatch.setattr(workflow_runner, "run_ozon_elastic_apply", fake_apply)
+
+    runner = WorkflowRunner(
+        data_dir=tmp_path / "data",
+        lock_dir=tmp_path / "locks",
+        credentials=object(),  # type: ignore[arg-type]
+    )
+    result = runner.run_task(
+        "ozon-elastic-apply",
+        inputs={"plan_run_id": "ozon_elastic_plan_test", "confirmed_by_user": True},
+        allowed_modes={"apply"},
+    )
+
+    assert result.ok is True
+    assert result.task == "ozon-elastic-apply"
+    assert calls[0]["plan_run_id"] == "ozon_elastic_plan_test"
+    assert calls[0]["confirmed_by_user"] is True
+
+
+def test_workflow_runner_runs_wb_actions_apply_default_handler(monkeypatch, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+    calls: list[dict] = []
+
+    def fake_apply(**kwargs):  # type: ignore[no-untyped-def]
+        calls.append(kwargs)
+        return {
+            "run_id": "wb_actions_apply_test",
+            "overall_status": "ok",
+            "artifacts": {"report": str(tmp_path / "wb_actions.md")},
+        }
+
+    monkeypatch.setattr(workflow_runner, "run_wb_actions_discount_apply", fake_apply)
+
+    runner = WorkflowRunner(
+        data_dir=tmp_path / "data",
+        lock_dir=tmp_path / "locks",
+        credentials=object(),  # type: ignore[arg-type]
+    )
+    result = runner.run_task(
+        "wb-actions-discount-apply",
+        inputs={"plan_run_id": "wb_actions_discount_plan_test", "confirmed_by_user": True},
+        allowed_modes={"apply"},
+    )
+
+    assert result.ok is True
+    assert result.task == "wb-actions-discount-apply"
+    assert calls[0]["plan_run_id"] == "wb_actions_discount_plan_test"
+    assert calls[0]["confirmed_by_user"] is True
+
+
+def test_workflow_runner_runs_wb_promotion_parser_enriched_apply_default_handler(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:  # type: ignore[no-untyped-def]
+    calls: list[dict] = []
+
+    def fake_apply(**kwargs):  # type: ignore[no-untyped-def]
+        calls.append(kwargs)
+        return {
+            "run_id": "wb_promotion_parser_enriched_apply_test",
+            "overall_status": "warning",
+            "artifacts": {"report": str(tmp_path / "wb_promo.md")},
+        }
+
+    monkeypatch.setattr(workflow_runner, "run_wb_promotion_bid_parser_enriched_apply", fake_apply)
+
+    runner = WorkflowRunner(
+        data_dir=tmp_path / "data",
+        lock_dir=tmp_path / "locks",
+        credentials=object(),  # type: ignore[arg-type]
+    )
+    result = runner.run_task(
+        "wb-promotion-bids-parser-enriched-apply",
+        inputs={
+            "plan_run_id": "wb_promotion_bid_parser_enriched_plan_test",
+            "confirmed_by_user": "true",
+            "approved_actions": "apply_ready,review_only",
+            "wait_seconds": "3",
+        },
+        allowed_modes={"apply"},
+    )
+
+    assert result.ok is True
+    assert result.status == "warning"
+    assert result.task == "wb-promotion-bids-parser-enriched-apply"
+    assert calls[0]["plan_run_id"] == "wb_promotion_bid_parser_enriched_plan_test"
+    assert calls[0]["confirmed_by_user"] is True
+    assert calls[0]["approved_actions"] == {"apply_ready", "review_only"}
+    assert calls[0]["wait_seconds"] == 3
+
+
+def test_workflow_runner_blocks_apply_without_required_plan_run_id(tmp_path: Path) -> None:
+    runner = WorkflowRunner(
+        data_dir=tmp_path / "data",
+        lock_dir=tmp_path / "locks",
+        credentials=object(),  # type: ignore[arg-type]
+    )
+
+    result = runner.run_task(
+        "ozon-elastic-apply",
+        inputs={"confirmed_by_user": True},
+        allowed_modes={"apply"},
+    )
+
+    assert result.ok is False
+    assert result.status == "error"
+    assert result.blocked_reason == "workflow_failed"
+    assert "plan_run_id" in result.error

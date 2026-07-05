@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+from decimal import Decimal
 import fcntl
 from pathlib import Path
 from typing import Any, Callable
@@ -9,10 +10,17 @@ from seller_agent.config import AppCredentials, load_credentials
 from seller_agent.tasks.approved_cards_apply import run_apply_approved_cards
 from seller_agent.tasks.daily_morning_report import run_daily_morning_report
 from seller_agent.tasks.inbox_workflow import run_ozon_inbox_apply, run_wb_inbox_apply
+from seller_agent.tasks.ozon_actions_optimizer_apply import run_ozon_actions_optimizer_apply
+from seller_agent.tasks.ozon_cpc_bids_apply import run_ozon_cpc_bids_apply
+from seller_agent.tasks.ozon_elastic_apply import run_ozon_elastic_apply
 from seller_agent.tasks.pricing_status import run_pricing_status
 from seller_agent.tasks.registry import RegisteredTask, TaskRegistry, default_task_registry
+from seller_agent.tasks.reviews_questions import run_reviews_questions_apply
 from seller_agent.tasks.status_preflight import run_status_preflight
+from seller_agent.tasks.wb_actions_discount_apply import run_wb_actions_discount_apply
 from seller_agent.tasks.wb_parser_warehouse_analytics import run_wb_parser_warehouse_analytics
+from seller_agent.tasks.wb_promotion_bid_parser_enriched_apply import run_wb_promotion_bid_parser_enriched_apply
+from seller_agent.tasks.wb_promotion_bids_apply import run_wb_promotion_bids_apply
 
 
 DEFAULT_WORKFLOW_LOCK_DIR = Path(".sessions/workflows")
@@ -193,8 +201,15 @@ def default_workflow_handlers() -> dict[str, WorkflowHandler]:
         "status-preflight": _status_preflight_handler,
         "wb-parser-warehouse-analytics": _wb_parser_warehouse_analytics_handler,
         "approved-cards-batch-apply": _approved_cards_batch_apply_handler,
+        "ozon-actions-optimizer-apply": _ozon_actions_optimizer_apply_handler,
+        "ozon-cpc-bids-apply": _ozon_cpc_bids_apply_handler,
+        "ozon-elastic-apply": _ozon_elastic_apply_handler,
         "ozon-inbox-apply": _ozon_inbox_apply_handler,
+        "reviews-questions-apply": _reviews_questions_apply_handler,
+        "wb-actions-discount-apply": _wb_actions_discount_apply_handler,
         "wb-inbox-apply": _wb_inbox_apply_handler,
+        "wb-promotion-bids-apply": _wb_promotion_bids_apply_handler,
+        "wb-promotion-bids-parser-enriched-apply": _wb_promotion_bids_parser_enriched_apply_handler,
     }
 
 
@@ -300,6 +315,58 @@ def _approved_cards_batch_apply_handler(
     )
 
 
+def _ozon_actions_optimizer_apply_handler(
+    task: RegisteredTask,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    if credentials is None:
+        raise ValueError(f"Task `{task.name}` requires credentials.")
+    return run_ozon_actions_optimizer_apply(
+        credentials=credentials,
+        data_dir=data_dir,
+        plan_run_id=_required_str(inputs, "plan_run_id", task.name),
+        run_id=_optional_str(inputs.get("run_id")),
+        confirmed_by_user=_bool_input(inputs, "confirmed_by_user", False),
+    )
+
+
+def _ozon_elastic_apply_handler(
+    task: RegisteredTask,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    if credentials is None:
+        raise ValueError(f"Task `{task.name}` requires credentials.")
+    return run_ozon_elastic_apply(
+        credentials=credentials,
+        data_dir=data_dir,
+        plan_run_id=_required_str(inputs, "plan_run_id", task.name),
+        run_id=_optional_str(inputs.get("run_id")),
+        confirmed_by_user=_bool_input(inputs, "confirmed_by_user", False),
+    )
+
+
+def _ozon_cpc_bids_apply_handler(
+    task: RegisteredTask,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    if credentials is None:
+        raise ValueError(f"Task `{task.name}` requires credentials.")
+    return run_ozon_cpc_bids_apply(
+        credentials=credentials,
+        data_dir=data_dir,
+        plan_run_id=_required_str(inputs, "plan_run_id", task.name),
+        run_id=_optional_str(inputs.get("run_id")),
+        confirmed_by_user=_bool_input(inputs, "confirmed_by_user", False),
+        min_bid=Decimal(_optional_str(inputs.get("min_bid")) or "1.00"),
+    )
+
+
 def _ozon_inbox_apply_handler(
     task: RegisteredTask,
     data_dir: Path,
@@ -315,6 +382,40 @@ def _ozon_inbox_apply_handler(
         credentials=credentials,
         data_dir=data_dir,
         source_run_id=source_run_id,
+        confirmed_by_user=_bool_input(inputs, "confirmed_by_user", False),
+    )
+
+
+def _reviews_questions_apply_handler(
+    task: RegisteredTask,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    if credentials is None:
+        raise ValueError(f"Task `{task.name}` requires credentials.")
+    return run_reviews_questions_apply(
+        credentials=credentials,
+        data_dir=data_dir,
+        approved_path=Path(_required_str(inputs, "approved_path", task.name)),
+        run_id=_optional_str(inputs.get("run_id")),
+        confirmed_by_user=_bool_input(inputs, "confirmed_by_user", False),
+    )
+
+
+def _wb_actions_discount_apply_handler(
+    task: RegisteredTask,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    if credentials is None:
+        raise ValueError(f"Task `{task.name}` requires credentials.")
+    return run_wb_actions_discount_apply(
+        credentials=credentials,
+        data_dir=data_dir,
+        plan_run_id=_required_str(inputs, "plan_run_id", task.name),
+        run_id=_optional_str(inputs.get("run_id")),
         confirmed_by_user=_bool_input(inputs, "confirmed_by_user", False),
     )
 
@@ -335,6 +436,44 @@ def _wb_inbox_apply_handler(
         data_dir=data_dir,
         source_run_id=source_run_id,
         confirmed_by_user=_bool_input(inputs, "confirmed_by_user", False),
+    )
+
+
+def _wb_promotion_bids_apply_handler(
+    task: RegisteredTask,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    if credentials is None:
+        raise ValueError(f"Task `{task.name}` requires credentials.")
+    return run_wb_promotion_bids_apply(
+        credentials=credentials,
+        data_dir=data_dir,
+        plan_run_id=_required_str(inputs, "plan_run_id", task.name),
+        run_id=_optional_str(inputs.get("run_id")),
+        confirmed_by_user=_bool_input(inputs, "confirmed_by_user", False),
+        allowed_actions=_csv_set_input(inputs, "allowed_actions", {"scale_candidate"}),
+        wait_seconds=_int_input(inputs, "wait_seconds", 45),
+    )
+
+
+def _wb_promotion_bids_parser_enriched_apply_handler(
+    task: RegisteredTask,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    if credentials is None:
+        raise ValueError(f"Task `{task.name}` requires credentials.")
+    return run_wb_promotion_bid_parser_enriched_apply(
+        credentials=credentials,
+        data_dir=data_dir,
+        plan_run_id=_required_str(inputs, "plan_run_id", task.name),
+        run_id=_optional_str(inputs.get("run_id")),
+        confirmed_by_user=_bool_input(inputs, "confirmed_by_user", False),
+        wait_seconds=_int_input(inputs, "wait_seconds", 45),
+        approved_actions=_csv_set_input(inputs, "approved_actions", {"apply_ready"}),
     )
 
 
@@ -371,6 +510,24 @@ def _optional_str(value: Any) -> str | None:
 def _optional_path(value: Any) -> Path | None:
     text = _optional_str(value)
     return Path(text) if text else None
+
+
+def _required_str(inputs: dict[str, Any], key: str, task_name: str) -> str:
+    value = _optional_str(inputs.get(key))
+    if not value:
+        raise ValueError(f"{task_name} requires {key}.")
+    return value
+
+
+def _csv_set_input(inputs: dict[str, Any], key: str, default: set[str]) -> set[str]:
+    value = inputs.get(key)
+    if value in (None, ""):
+        return set(default)
+    if isinstance(value, str):
+        return {item.strip() for item in value.replace(";", ",").split(",") if item.strip()}
+    if isinstance(value, (list, tuple, set)):
+        return {str(item).strip() for item in value if str(item).strip()}
+    return set(default)
 
 
 def _bool_input(inputs: dict[str, Any], key: str, default: bool) -> bool:

@@ -602,6 +602,9 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         runbook_path="data/planning/ozon_actions_optimizer_runbook.md",
         requires_credentials=True,
         requires_confirmation=True,
+        source_plan_task="ozon-actions-optimizer-plan",
+        verify_task="ozon-actions-optimizer-apply",
+        lock_keys=("marketplace:ozon", "actions:ozon"),
     ),
     RegisteredTask(
         name="ozon-elastic-apply",
@@ -614,6 +617,9 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         runbook_path="data/planning/ozon_elastic_runbook.md",
         requires_credentials=True,
         requires_confirmation=True,
+        source_plan_task="ozon-elastic-plan",
+        verify_task="ozon-elastic-apply",
+        lock_keys=("marketplace:ozon", "actions:ozon:elastic"),
     ),
     RegisteredTask(
         name="ozon-cpc-optimization-plan",
@@ -636,6 +642,9 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         runbook_path="data/planning/ozon_cpc_efficiency_runbook.md",
         requires_credentials=True,
         requires_confirmation=True,
+        source_plan_task="ozon-cpc-optimization-plan",
+        verify_task="ozon-cpc-bids-apply",
+        lock_keys=("marketplace:ozon", "ads:ozon:cpc"),
     ),
     RegisteredTask(
         name="wb-actions-discount-plan",
@@ -661,6 +670,9 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         runbook_path="data/planning/wb_actions_runbook.md",
         requires_credentials=True,
         requires_confirmation=True,
+        source_plan_task="wb-actions-discount-plan",
+        verify_task="wb-actions-discount-apply",
+        lock_keys=("marketplace:wb", "actions:wb:discounts"),
     ),
     RegisteredTask(
         name="wb-promotion-report",
@@ -729,6 +741,9 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         runbook_path="data/planning/wb_promotion_runbook.md",
         requires_credentials=True,
         requires_confirmation=True,
+        source_plan_task="wb-promotion-bid-plan",
+        verify_task="wb-promotion-bids-apply",
+        lock_keys=("marketplace:wb", "ads:wb:promotion-bids"),
     ),
     RegisteredTask(
         name="actions-apply",
@@ -1022,6 +1037,9 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_credentials=True,
         requires_lk=True,
         requires_confirmation=True,
+        source_plan_task="reviews-questions",
+        verify_task="reviews-questions-apply",
+        lock_keys=("marketplace:ozon", "marketplace:wb", "reviews-questions"),
     ),
     RegisteredTask(
         name="reviews-questions-prepare-approved",

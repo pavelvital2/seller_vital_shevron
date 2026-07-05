@@ -158,11 +158,14 @@ audit/HTML. После смены seller SKU запускает нормализ
 }
 ```
 
-На 2026-06-30 v2-поля добавлены совместимо и не блокируют существующие
-команды. `tasks policy` показывает незаполненные обязательные элементы для
-будущего жесткого apply-gate: `source_plan_task`, `verify_task`, `lock_keys`.
-Перед переводом Ozon Elastic/WB actions apply callbacks на `JobService` эти
-поля нужно заполнить хотя бы для соответствующих apply-задач.
+На 2026-07-05 v2-поля добавлены совместимо и не блокируют существующие
+команды. `source_plan_task`, `verify_task` и `lock_keys` заполнены для
+основных write-контуров, которые можно запускать через `WorkflowRunner` и
+`JobService`: Ozon actions optimizer, Ozon Elastic, Ozon CPC, WB actions, WB
+promotion bids, WB parser-enriched promotion bids, reviews/questions и
+approved card batch. `tasks policy` должен показывать пробелы только у legacy
+`actions-apply`; этот старый смешанный маршрут не использовать для новых
+кнопок и не продвигать в Telegram.
 
 ## Safety-правила
 
@@ -310,11 +313,34 @@ audit/HTML. После смены seller SKU запускает нормализ
 - marketplace: `ozon`;
 - requires_credentials: `true`;
 - requires_confirmation: `true`;
+- source_plan_task: `ozon-elastic-plan`;
+- verify_task: `ozon-elastic-apply`;
+- lock_keys: `marketplace:ozon`, `actions:ozon:elastic`;
 - Telegram: запускается только callback-кнопкой `oe_apply:<plan_run_id>` после
   показанного dry-run `/elastic`; callback считается явным подтверждением
   владельца для конкретного `plan_run_id`;
 - apply делает fresh preflight, fresh dry-run, partial drift-check, verify и
   idempotency guard.
+
+Поддержанные apply handler-ы `WorkflowRunner`:
+
+- `approved-cards-batch-apply`: требует `internal_skus` и
+  `confirmed_by_user=true`;
+- `ozon-actions-optimizer-apply`: требует `plan_run_id` и
+  `confirmed_by_user=true`;
+- `ozon-cpc-bids-apply`: требует `plan_run_id` и `confirmed_by_user=true`;
+- `ozon-elastic-apply`: требует `plan_run_id` и `confirmed_by_user=true`;
+- `ozon-inbox-apply`: требует `source_run_id` и `confirmed_by_user=true`;
+- `reviews-questions-apply`: требует `approved_path` и
+  `confirmed_by_user=true`;
+- `wb-actions-discount-apply`: требует `plan_run_id` и
+  `confirmed_by_user=true`;
+- `wb-inbox-apply`: требует `source_run_id` и `confirmed_by_user=true`;
+- `wb-promotion-bids-apply`: требует `plan_run_id` и
+  `confirmed_by_user=true`;
+- `wb-promotion-bids-parser-enriched-apply`: требует `plan_run_id` и
+  `confirmed_by_user=true`; допускает `approved_actions=apply_ready` или
+  owner-approved `review_only`.
 
 `plan-internal-skus`:
 
@@ -330,10 +356,12 @@ audit/HTML. После смены seller SKU запускает нормализ
 
 ## Следующий шаг
 
-1. Подключить генерацию CLI/help или документации из registry без изменения
+1. Переключать Telegram callback-и write-операций на `JobService` по одному:
+   сначала Ozon Elastic и WB actions, затем Ozon optimizer/WB promotion.
+2. Подключить генерацию CLI/help или документации из registry без изменения
    внешнего поведения команд.
-2. Расширять `WorkflowRunner` только через задачи, уже описанные в registry и
+3. Расширять `WorkflowRunner` только через задачи, уже описанные в registry и
    профильных runbook-ах.
-3. Проектировать общий `SafetyGuard`, чтобы
+4. Проектировать общий `SafetyGuard`, чтобы
    apply-команды не дублировали проверки подтверждения, preflight, drift-check
    и idempotency.

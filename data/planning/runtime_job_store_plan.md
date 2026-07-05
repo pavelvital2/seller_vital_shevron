@@ -144,7 +144,7 @@ MVP-функции:
 
 ### Этап 2. JobService / JobRunner v1
 
-Статус: реализован первый read-only MVP в ветке `feature/runtime-job-store`.
+Статус: реализован первый MVP в ветке `feature/runtime-job-store`.
 
 Добавить:
 
@@ -175,6 +175,12 @@ get_status(job_id) -> JobStatus
 - первый apply handler подключен для `apply-approved-cards`: job запускает
   owner-approved batch только при `confirmed_by_user=true`, с TaskRegistry
   metadata `source_plan_task`, `verify_task` и `lock_keys`;
+- WorkflowRunner handlers подключены для основных подтверждаемых apply-контуров:
+  `ozon-actions-optimizer-apply`, `ozon-cpc-bids-apply`,
+  `ozon-elastic-apply`, `reviews-questions-apply`,
+  `wb-actions-discount-apply`, `wb-promotion-bids-apply`,
+  `wb-promotion-bids-parser-enriched-apply`; все они требуют явный
+  `plan_run_id` или `approved_path` и `confirmed_by_user=true`;
 - `JobService.cancel(job_id)` отменяет `created/queued/waiting_confirmation`;
 - `JobRunner.run_next()` выполняет первый queued job;
 - CLI-команды `jobs list/show/submit/run/run-next/cancel`;
@@ -223,13 +229,16 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 - v2-поля добавлены в `RegisteredTask` с безопасными дефолтами;
 - `policy_issues()` показывает незаполненные элементы apply-gate без
   принудительной блокировки существующих задач;
-- CLI `tasks policy` выводит текущие пробелы `source_plan_task`,
-  `verify_task`, `lock_keys`.
+- `source_plan_task`, `verify_task` и `lock_keys` заполнены для основных
+  подтверждаемых apply-контуров: Ozon actions optimizer, Ozon Elastic,
+  Ozon CPC, WB actions, WB promotion bids, WB parser-enriched promotion bids,
+  reviews/questions и approved card batch;
+- CLI `tasks policy` сейчас оставляет пробелы только у legacy
+  `actions-apply`, который не нужно продвигать в новые кнопки.
 
 Еще не сделано:
 
-- заполнить `source_plan_task`, `verify_task`, `lock_keys`, timeout и schemas
-  для всех apply-задач;
+- заполнить timeout и schemas для apply-задач;
 - включить жесткое policy validation для write-кнопок после заполнения
   metadata.
 
@@ -302,8 +311,9 @@ worker/job runner -> result -> send final report
 
 Ограничение: systemd-шаблоны worker/timer подготовлены, но не включены и не
 запущены. До включения после постановки в очередь job нужно выполнить вручную
-через `bot run-job-next` или `bot run-job-loop --max-iterations N`. Apply
-callbacks Ozon Elastic/WB actions пока не переведены на JobService.
+через `bot run-job-next` или `bot run-job-loop --max-iterations N`. Основные
+apply handler-ы уже есть в `WorkflowRunner`, но Telegram callbacks нужно
+переключать на `JobService` по одному и проверять на smoke/dry-run.
 
 ### Этап 6. Атомарные approvals и resource leases
 

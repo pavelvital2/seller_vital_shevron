@@ -1,6 +1,6 @@
 # WorkflowRunner Runbook
 
-Дата актуализации: 2026-06-24
+Дата актуализации: 2026-07-05
 
 ## Итог
 
@@ -8,14 +8,19 @@
 task-runner. Он нужен, чтобы бот и будущие timers запускали задачи единым
 образом, а не вызывали отдельные функции напрямую.
 
-Первый MVP поддерживает только read-only задачи:
+MVP поддерживает read-only задачи:
 
 - `daily-morning-report`;
 - `pricing-status` включая optional input `refresh_api=true`, если runner
   получил credentials;
-- `status-preflight`.
+- `status-preflight`;
+- `wb-parser-warehouse-analytics`.
 
-Write-операции через `WorkflowRunner` не включены.
+Также подключены подтверждаемые apply handler-ы. Они не обходят safety:
+`WorkflowRunner.run_task(..., allowed_modes={"apply"})` требует задачу из
+`TaskRegistry`, per-task lock, явный `plan_run_id`/`approved_path`/`source_run_id`
+и `confirmed_by_user=true`, а сама apply-функция продолжает делать preflight,
+drift-check, idempotency и verify по профильному runbook.
 
 ## Где находится
 
@@ -33,11 +38,11 @@ src/seller_agent/bot/commands.py
 ## Контур запуска
 
 ```text
-Telegram command
+Telegram command / JobService
   -> bot command layer
-  -> WorkflowRunner.run_read_only(task_name)
+  -> WorkflowRunner.run_read_only(task_name) или run_task(..., allowed_modes={"apply"})
   -> TaskRegistry lookup
-  -> read_only gate
+  -> mode gate
   -> per-task lock
   -> task handler
   -> RunManifest/artifacts
@@ -55,6 +60,12 @@ Telegram command
 - вернуть безопасную ошибку без секретов;
 - не создавать approved package;
 - не запускать apply/dry-run/write задачи.
+
+`WorkflowRunner.run_task(..., allowed_modes={"apply"})` разрешен только для
+задач, которые уже описаны в `TaskRegistry`, имеют профильный runbook и
+подключенный handler. Этот вызов не является самостоятельным approval: inputs
+должны содержать подтверждение владельца и ссылку на конкретный согласованный
+пакет.
 
 Текущие blocked reasons:
 
@@ -83,6 +94,14 @@ Runtime locks лежат вне git:
 Это заменяет старый точечный lock `/today` и позволяет использовать один
 механизм для следующих live read-only задач.
 
+Для apply-задач lock-файл имеет тот же slug задачи, например:
+
+```text
+.sessions/workflows/ozon-elastic-apply.lock
+.sessions/workflows/wb-actions-discount-apply.lock
+.sessions/workflows/wb-promotion-bids-parser-enriched-apply.lock
+```
+
 ## Handler Policy
 
 Handler добавляется только для задачи, которая уже описана в `TaskRegistry` и
@@ -100,6 +119,19 @@ Handler добавляется только для задачи, которая 
 Если задача требует credentials, runner загружает их внутри protected участка,
 чтобы ошибка подключения вернулась как безопасный `WorkflowRunResult`, а не
 падала до Telegram-слоя.
+
+Поддержанные apply handler-ы на 2026-07-05:
+
+- `approved-cards-batch-apply`;
+- `ozon-actions-optimizer-apply`;
+- `ozon-cpc-bids-apply`;
+- `ozon-elastic-apply`;
+- `ozon-inbox-apply`;
+- `reviews-questions-apply`;
+- `wb-actions-discount-apply`;
+- `wb-inbox-apply`;
+- `wb-promotion-bids-apply`;
+- `wb-promotion-bids-parser-enriched-apply`.
 
 ## Telegram MVP
 
@@ -137,5 +169,8 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/pytest -q
 2. Rename-only package `seller_agent` выполнен 2026-06-18 без новой логики.
 3. Следующие read-only задачи подключать через тот же runner, а не через
    прямые вызовы из bot layer.
-4. Write-операции проектировать отдельно через `SafetyGuard` и approval
+4. Telegram write-callback-и переключать на `JobService` по одному и после
+   каждого переключения делать smoke: dry-run -> approval callback -> job ->
+   apply -> verify -> cleanup.
+5. Write-операции проектировать отдельно через `SafetyGuard` и approval
    lifecycle; не расширять `run_read_only()` для apply.

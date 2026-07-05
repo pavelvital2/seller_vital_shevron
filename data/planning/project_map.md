@@ -48,10 +48,11 @@
   запись `manifest.json`, runtime-индекс `data/runs/index.jsonl`, lifecycle
   `pending_review/applied/verified/closed`, связи
   `pending_id/approved_id/applied_by_run_id`, команды `runs list/latest/show`.
-- `src/seller_agent/core/workflow_runner.py` - read-only `WorkflowRunner`:
-  запуск задач через `TaskRegistry`, блокировка не-read-only задач,
-  per-task locks под `.sessions/workflows/`, safe error и handler-и для
-  `daily-morning-report` и `status-preflight`.
+- `src/seller_agent/core/workflow_runner.py` - `WorkflowRunner`:
+  запуск задач через `TaskRegistry`, блокировка режимов, per-task locks под
+  `.sessions/workflows/`, safe error, read-only handler-и и подтверждаемые
+  apply handler-ы для Ozon/WB actions, promotion bids, reviews/questions,
+  inbox и approved card batch.
 - `src/seller_agent/core/job_models.py` - dataclass-модели runtime job
   контура: job status, approval status, job events, Telegram updates и
   resource leases.
@@ -60,8 +61,9 @@
   dedup Telegram `update_id`, resource leases с TTL и атомарный reserve
   approval `approved -> applying`.
 - `src/seller_agent/core/job_service.py` - первый JobService v1:
-  `submit(task_id, params, actor)`, `run(job_id)` для read-only задач через
-  текущий `WorkflowRunner`, безопасная блокировка apply-задач и cancel queued.
+  `submit(task_id, params, actor)`, `run(job_id)` через текущий
+  `WorkflowRunner`, перевод apply-задач без `confirmed_by_user=true` в
+  `waiting_confirmation` и cancel queued.
 - `src/seller_agent/core/job_runner.py` - минимальный runner queued job-ов:
   `run(job_id)` и `run_next()`.
 - `src/seller_agent/core/job_worker.py` - управляемый worker loop поверх
@@ -468,7 +470,8 @@ Ozon CDP port по умолчанию: `9544`.
   dispatcher job-ов. Этапы 1-2 начаты в `feature/runtime-job-store`:
   добавлены `JobStore`, `JobService`, `JobRunner`, CLI `jobs`, optional
   Telegram `--runtime-jobs` для `/status`/`/today`, `bot run-job-next`
-  notifier, `bot run-job-loop` и tests.
+  notifier, `bot run-job-loop`, apply handler-ы основных Ozon/WB контуров в
+  `WorkflowRunner` и tests.
 - `data/planning/daily_morning_report_runbook.md`
 - `data/planning/reviews_questions_runbook.md`
 - `data/planning/ozon_messenger_runbook.md` - Ozon Messenger/уведомления:
