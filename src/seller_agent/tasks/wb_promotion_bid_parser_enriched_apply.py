@@ -84,17 +84,19 @@ def _enriched_apply_identity(row: dict[str, Any]) -> tuple[str, str, str]:
     )
 
 
-def _apply_preview_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
-    return [row for row in rows if row.get("parser_enriched_action") == "apply_ready"]
+def _selected_enriched_rows(rows: list[dict[str, str]], allowed_actions: set[str]) -> list[dict[str, str]]:
+    return [row for row in rows if row.get("parser_enriched_action") in allowed_actions]
 
 
 def _partial_drift_rows(
     *,
     approved_rows: list[dict[str, str]],
     fresh_rows: list[dict[str, str]],
+    allowed_actions: set[str] | None = None,
 ) -> dict[str, Any]:
-    approved_apply = _apply_preview_rows(approved_rows)
-    fresh_apply = _apply_preview_rows(fresh_rows)
+    allowed_actions = allowed_actions or {"apply_ready"}
+    approved_apply = _selected_enriched_rows(approved_rows, allowed_actions)
+    fresh_apply = _selected_enriched_rows(fresh_rows, allowed_actions)
     fresh_by_signature = {_enriched_apply_signature(row): row for row in fresh_apply}
     approved_identities = {_enriched_apply_identity(row) for row in approved_apply}
 
@@ -130,7 +132,8 @@ def _partial_drift_rows(
 
 def _map_enriched_row_for_apply(row: dict[str, str]) -> dict[str, str]:
     output = dict(row)
-    output["recommended_action"] = row.get("parser_enriched_action", "")
+    output["source_parser_enriched_action"] = row.get("parser_enriched_action", "")
+    output["recommended_action"] = "apply_ready"
     output["target_bid"] = row.get("final_target_bid", "")
     output["bid_change_amount"] = row.get("final_bid_change_amount", "")
     return output
@@ -172,7 +175,7 @@ def _write_report(path: Path, result: dict[str, Any]) -> None:
     for key, value in result["summary"].items():
         lines.append(f"- `{key}`: {value}")
     lines.extend(["", "## Safety", ""])
-    lines.append("- Only owner-approved `apply_ready` rows are eligible for write.")
+    lines.append(f"- Owner-approved actions eligible for write: `{result['summary'].get('approved_actions')}`.")
     lines.append("- Rows changed in the fresh parser-enriched plan are skipped, not auto-applied.")
     lines.append("- Sales signals are collected from WB Statistics API; parser is visibility context only.")
     lines.extend(["", "## Verify", ""])
@@ -194,17 +197,29 @@ def run_wb_promotion_bid_parser_enriched_apply(
     run_id: str | None = None,
     confirmed_by_user: bool = False,
     wait_seconds: int = 45,
+    approved_actions: set[str] | None = None,
 ) -> dict[str, Any]:
     if not confirmed_by_user:
         raise RuntimeError("explicit owner confirmation is required")
     if not credentials.wb:
         raise RuntimeError("missing WB API token")
 
+    approved_actions = approved_actions or {"apply_ready"}
     approved_plan_dir = _enriched_plan_dir(data_dir, plan_run_id)
-    approved_id = approved_plan_dir.name
+    approved_actions_suffix = ",".join(sorted(approved_actions))
+    approved_id = (
+        approved_plan_dir.name
+        if approved_actions == {"apply_ready"}
+        else f"{approved_plan_dir.name}:actions={approved_actions_suffix}"
+    )
     assert_apply_not_repeated(data_dir=data_dir, approved_id=approved_id)
     approved_summary = json.loads((approved_plan_dir / "summary.json").read_text(encoding="utf-8"))
-    approved_rows = _read_csv(approved_plan_dir / "wb_promotion_bid_parser_enriched_apply_preview.csv")
+    approved_rows_path = (
+        approved_plan_dir / "wb_promotion_bid_parser_enriched_apply_preview.csv"
+        if approved_actions == {"apply_ready"}
+        else approved_plan_dir / "wb_promotion_bid_parser_enriched_candidates.csv"
+    )
+    approved_rows = _read_csv(approved_rows_path)
     min_stock, parser_test_increase_percent, min_bid = _enriched_thresholds(approved_summary)
     base_thresholds = _base_thresholds_from_enriched_summary(approved_summary)
 
@@ -247,8 +262,13 @@ def run_wb_promotion_bid_parser_enriched_apply(
         min_bid=min_bid,
     )
 
-    fresh_rows = _read_csv(Path(fresh_enriched_plan["artifacts"]["apply_preview_csv"]))
-    drift = _partial_drift_rows(approved_rows=approved_rows, fresh_rows=fresh_rows)
+    fresh_rows_path = (
+        Path(fresh_enriched_plan["artifacts"]["apply_preview_csv"])
+        if approved_actions == {"apply_ready"}
+        else Path(fresh_enriched_plan["artifacts"]["candidates_csv"])
+    )
+    fresh_rows = _read_csv(fresh_rows_path)
+    drift = _partial_drift_rows(approved_rows=approved_rows, fresh_rows=fresh_rows, allowed_actions=approved_actions)
     unchanged_rows = drift["unchanged_rows"]
     drift_rows = drift["drift_rows"]
     new_rows = drift["new_rows"]
@@ -286,8 +306,10 @@ def run_wb_promotion_bid_parser_enriched_apply(
     verify = _verify_applied_rows(campaigns=campaigns_after, apply_rows=apply_rows)
 
     summary = {
+        "approved_actions": approved_actions_suffix,
         "approved_rows": len(approved_rows),
-        "fresh_apply_ready_rows": len(fresh_rows),
+        "approved_selected_rows": drift["approved_apply_rows"],
+        "fresh_selected_rows": drift["fresh_apply_rows"],
         "unchanged_rows": len(unchanged_rows),
         "drift_rows": len(drift_rows),
         "new_rows_not_approved": len(new_rows),
@@ -378,6 +400,7 @@ def run_wb_promotion_bid_parser_enriched_apply(
             "plan_run_id": plan_run_id,
             "confirmed_by_user": confirmed_by_user,
             "wait_seconds": wait_seconds,
+            "approved_actions": sorted(approved_actions),
         },
     )
     mark_approved_applied(

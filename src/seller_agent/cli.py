@@ -1376,6 +1376,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=45,
         help="Seconds to wait before verify because WB bid changes are asynchronous.",
     )
+    apply_wb_promotion_parser_enriched.add_argument(
+        "--approved-actions",
+        default="apply_ready",
+        help=(
+            "Comma-separated parser_enriched_action values approved for this apply. "
+            "Defaults to apply_ready. Use review_only only after exact owner approval."
+        ),
+    )
 
     apply_wb_promotion_bids = subparsers.add_parser(
         "apply-wb-promotion-bids",
@@ -2778,6 +2786,7 @@ def main(argv: list[str] | None = None) -> int:
             run_id=args.run_id,
             confirmed_by_user=args.confirmed_by_user,
             wait_seconds=args.wait_seconds,
+            approved_actions={item.strip() for item in args.approved_actions.split(",") if item.strip()},
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["overall_status"] in {"ok", "warning"} else 2

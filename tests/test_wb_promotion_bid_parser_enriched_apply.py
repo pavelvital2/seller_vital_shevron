@@ -57,12 +57,42 @@ def test_partial_drift_keeps_unchanged_and_skips_changed_or_new_rows() -> None:
     assert drift["new_rows"][0]["skip_reason"] == "new_fresh_row_not_owner_approved"
 
 
+def test_partial_drift_can_use_review_only_owner_approved_rows() -> None:
+    approved_rows = [
+        _row(nm_id="1", current_bid="2.00", final_target_bid="2.20", action="review_only"),
+        _row(nm_id="2", current_bid="1.00", final_target_bid="1.10", action="apply_ready"),
+    ]
+    fresh_rows = [
+        _row(nm_id="1", current_bid="2.00", final_target_bid="2.20", action="review_only"),
+        _row(nm_id="2", current_bid="1.00", final_target_bid="1.10", action="apply_ready"),
+    ]
+
+    drift = _partial_drift_rows(
+        approved_rows=approved_rows,
+        fresh_rows=fresh_rows,
+        allowed_actions={"review_only"},
+    )
+
+    assert drift["approved_apply_rows"] == 1
+    assert drift["fresh_apply_rows"] == 1
+    assert [row["nm_id"] for row in drift["unchanged_rows"]] == ["1"]
+    assert drift["drift_rows"] == []
+    assert drift["new_rows"] == []
+
+
 def test_enriched_rows_map_to_existing_apply_splitter() -> None:
     mapped = _map_enriched_row_for_apply(
-        _row(nm_id="1", current_bid="2.00", final_target_bid="2.40", final_bid_change_amount="0.40")
+        _row(
+            nm_id="1",
+            current_bid="2.00",
+            final_target_bid="2.40",
+            final_bid_change_amount="0.40",
+            action="review_only",
+        )
     )
 
     assert mapped["recommended_action"] == "apply_ready"
+    assert mapped["source_parser_enriched_action"] == "review_only"
     assert mapped["target_bid"] == "2.40"
     assert mapped["bid_change_amount"] == "0.40"
 
@@ -93,11 +123,12 @@ def _row(
     current_bid: str,
     final_target_bid: str,
     final_bid_change_amount: str = "0.10",
+    action: str = "apply_ready",
 ) -> dict[str, str]:
     return {
         "advert_id": "101",
         "nm_id": nm_id,
-        "parser_enriched_action": "apply_ready",
+        "parser_enriched_action": action,
         "current_bid": current_bid,
         "final_target_bid": final_target_bid,
         "final_bid_change_amount": final_bid_change_amount,

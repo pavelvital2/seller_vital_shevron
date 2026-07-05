@@ -315,8 +315,19 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 Команда принимает только owner-approved строки из
 `wb_promotion_bid_parser_enriched_apply_preview.csv`. Если владелец явно
 согласовал все кандидаты, включая review-only/test строки, сначала нужно
-сформировать отдельный approved apply-preview с этими строками; без этого
-штатный контур применяет только `apply_ready`.
+использовать отдельный apply-запуск с явным списком разрешенных действий:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli apply-wb-promotion-bids-parser-enriched \
+  --plan-run-id <wb_promotion_bid_parser_enriched_plan_run_id> \
+  --approved-actions review_only \
+  --confirmed-by-user
+```
+
+Без `--approved-actions review_only` штатный контур применяет только
+`apply_ready`. Для `review_only` owner-approved package считается отдельным от
+`apply_ready` idempotency-пакетом: `plan_id:actions=review_only`.
 
 Apply выполняется только через fresh-проверку:
 
@@ -354,5 +365,25 @@ data/runs/2026-06-28/wb_promotion_bids_apply_all23_20260628T221859
 - apply: `apply-wb-promotion-bids-parser-enriched`;
 - task id: `wb-promotion-bids-parser-enriched-apply`;
 - обязательный owner approval: `--confirmed-by-user`;
+- отдельное применение `review_only`: только через `--approved-actions review_only`
+  после owner approval файла/отчета с этими строками;
 - idempotency: approved parser-enriched plan нельзя применить повторно;
 - verify: ставки перечитываются из настроек кампаний WB после ожидания.
+
+Подтвержденный apply `review_only` от 2026-07-05:
+
+```text
+data/runs/2026-07-05/wb_promotion_bid_parser_enriched_apply_20260705T170235
+```
+
+Результат:
+
+- approved selected rows: `122`;
+- unchanged rows: `122`;
+- drift rows: `0`;
+- applied rows: `107`;
+- skipped rows: `15`;
+- причина skip: `target_bid equals current_bid` у низкоостаточных строк;
+- сумма ставок примененных строк: `109.74 -> 120.72`;
+- прирост ставок: `+10.98`;
+- verify: `ok`, mismatches `0`.
