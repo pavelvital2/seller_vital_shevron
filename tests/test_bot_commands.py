@@ -29,6 +29,7 @@ def test_bot_help_lists_read_only_mvp_commands() -> None:
     assert "`/status`" in result.text
     assert "`/approvals`" in result.text
     assert "`/elastic`" in result.text
+    assert "`/ozon-actions`" in result.text
     assert "`/wb-actions`" in result.text
     assert "`/jobs`" in result.text
 
@@ -513,6 +514,137 @@ def test_bot_elastic_callback_applies_specific_plan(
 
 def test_bot_elastic_callback_rejects_invalid_plan_id(tmp_path: Path) -> None:
     result = dispatch_callback("oe_apply:../../bad", data_dir=tmp_path)
+
+    assert result.ok is False
+    assert result.blocked_reason == "invalid_plan_run_id"
+    assert "Изменений в Ozon/WB не выполнял" in result.text
+
+
+def test_bot_ozon_actions_builds_plan_and_apply_button(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from seller_agent.bot import commands
+
+    report = tmp_path / "runs" / "2026-07-05" / "ozon_actions_optimizer_plan_test" / "ozon_actions_optimizer_report.md"
+
+    def fake_plan(**kwargs: object) -> dict:
+        assert kwargs["data_dir"] == tmp_path
+        return {
+            "run_id": "ozon_actions_optimizer_plan_test",
+            "summary": {
+                "actions_total": 8,
+                "actions_with_rows": 8,
+                "products_with_action_offers": 545,
+                "offers_total": 3370,
+                "valid_offers": 1004,
+                "blocked_offers": 2366,
+                "lk_boost_actions_with_numeric_boost": 5,
+                "recommended_keep": 501,
+                "recommended_add": 1,
+                "recommended_update": 0,
+                "recommended_switch_review": 2,
+                "recommended_skip": 43,
+            },
+            "artifacts": {
+                "report": str(report),
+                "xlsx": str(report.with_suffix(".xlsx")),
+                "recommendations_csv": str(report.with_name("ozon_actions_optimizer_recommendations.csv")),
+            },
+        }
+
+    monkeypatch.setattr(commands, "run_ozon_actions_optimizer_plan", fake_plan)
+
+    result = dispatch_message("/ozon-actions", data_dir=tmp_path)
+
+    assert result.ok is True
+    assert result.mode == "dry_run"
+    assert "Ozon все акции" in result.text
+    assert "переключить на другую акцию: `2`" in result.text
+    assert result.reply_markup["inline_keyboard"][0][0]["callback_data"] == "oza_apply:ozon_actions_optimizer_plan_test"
+    assert result.artifacts["report"] == str(report)
+
+
+def test_bot_ozon_actions_plan_without_write_rows_has_no_apply_button(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from seller_agent.bot import commands
+
+    def fake_plan(**kwargs: object) -> dict:
+        return {
+            "run_id": "ozon_actions_optimizer_plan_no_changes",
+            "summary": {
+                "actions_total": 8,
+                "actions_with_rows": 8,
+                "products_with_action_offers": 545,
+                "offers_total": 3370,
+                "valid_offers": 1004,
+                "blocked_offers": 2366,
+                "lk_boost_actions_with_numeric_boost": 5,
+                "recommended_keep": 502,
+                "recommended_add": 0,
+                "recommended_update": 0,
+                "recommended_switch_review": 0,
+                "recommended_skip": 43,
+            },
+            "artifacts": {},
+        }
+
+    monkeypatch.setattr(commands, "run_ozon_actions_optimizer_plan", fake_plan)
+
+    result = dispatch_message("/ozon-actions", data_dir=tmp_path)
+
+    assert result.ok is True
+    assert "Изменений к применению нет" in result.text
+    assert result.reply_markup == {}
+
+
+def test_bot_ozon_actions_callback_applies_specific_plan(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from seller_agent.bot import commands
+
+    calls: list[dict] = []
+
+    def fake_apply(**kwargs: object) -> dict:
+        calls.append(kwargs)
+        return {
+            "run_id": "ozon_actions_optimizer_apply_test",
+            "overall_status": "warning",
+            "approved_plan_run_id": "ozon_actions_optimizer_plan_test",
+            "fresh_plan": {"run_id": "ozon_actions_optimizer_plan_fresh"},
+            "applied": {
+                "activate_rows_count": 3,
+                "switch_rows_count": 1,
+                "deactivate_rows_count": 1,
+                "rejected_count": 0,
+            },
+            "drift": {
+                "skipped_due_to_drift_count": 2,
+                "skipped_due_to_drift_product_count": 2,
+                "skipped_due_to_drift_product_ids": ["111", "222"],
+            },
+            "verify": {"status": "ok", "mismatches": []},
+            "artifacts": {"report": str(tmp_path / "runs" / "ozon_actions_apply.md")},
+        }
+
+    monkeypatch.setattr(commands, "run_ozon_actions_optimizer_apply", fake_apply)
+
+    result = dispatch_callback("oza_apply:ozon_actions_optimizer_plan_test", data_dir=tmp_path)
+
+    assert result.ok is True
+    assert result.mode == "apply"
+    assert "apply завершен" in result.text
+    assert "переключений: `1`" in result.text
+    assert calls[0]["data_dir"] == tmp_path
+    assert calls[0]["plan_run_id"] == "ozon_actions_optimizer_plan_test"
+    assert calls[0]["confirmed_by_user"] is True
+
+
+def test_bot_ozon_actions_callback_rejects_invalid_plan_id(tmp_path: Path) -> None:
+    result = dispatch_callback("oza_apply:../../bad", data_dir=tmp_path)
 
     assert result.ok is False
     assert result.blocked_reason == "invalid_plan_run_id"

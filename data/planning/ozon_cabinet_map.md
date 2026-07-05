@@ -271,6 +271,30 @@ https://seller.ozon.ru/app/highlights/list
 - участие в акции и акционная цена имеют прямой финансовый эффект;
 - нельзя применять изменения без fresh dry-run, review, approval и verify.
 
+Read-only источники:
+
+- Seller API: `GET /v1/actions`, `POST /v1/actions/products`,
+  `POST /v1/actions/candidates`;
+- LK/CDP `GET /api/site/seller-actions/v1/seller-actions/<action_id>` -
+  detail акции, включая `action.description`. Для части `STOCK_DISCOUNT`
+  акций в описании есть фиксированный акционный бустинг числом, например
+  `55%` или `50%`;
+- LK/CDP
+  `GET /api/site/global-seller-products/v1/action/<action_id>/products/active?offset=0&limit=20`
+  - активные товары акции; поля `actionPrice`, `maxDiscountPrice`,
+  `priceReferenceForBoosting`, `boostingInSearch`;
+- LK/CDP
+  `GET /api/site/global-seller-products/v1/action/<action_id>/products/candidate?offset=0&limit=20`
+  - кандидаты на добавление; для `STOCK_DISCOUNT` `boostingInSearch` может
+  приходить как `0`, поэтому action-level boost нужно брать из
+  `action.description`, если он указан числом;
+- LK/CDP `POST /api/site/action-explanation-api/v1/intersections-by-skus` -
+  пересечения акций и текущие labels по SKU; это вспомогательный источник
+  конфликтов, не основной источник бустинга.
+
+Probe Vital Shevron 2026-07-05:
+`data/runs/2026-07-05/ozon_actions_boost_probe_20260705T060551/`.
+
 ### Заявки на скидку
 
 ```text

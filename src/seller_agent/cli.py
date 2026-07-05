@@ -47,6 +47,8 @@ from seller_agent.tasks.daily_morning_report import run_daily_morning_report
 from seller_agent.tasks.ozon_cpc_bids_apply import run_ozon_cpc_bids_apply
 from seller_agent.tasks.ozon_card_create_apply import run_ozon_card_create_apply
 from seller_agent.tasks.ozon_card_create_plan import run_ozon_card_create_plan
+from seller_agent.tasks.ozon_actions_optimizer_apply import run_ozon_actions_optimizer_apply
+from seller_agent.tasks.ozon_actions_optimizer_plan import run_ozon_actions_optimizer_plan
 from seller_agent.tasks.ozon_elastic_apply import run_ozon_elastic_apply
 from seller_agent.tasks.ozon_cpc_optimization_plan import CpcOptimizationThresholds, run_ozon_cpc_optimization_plan
 from seller_agent.tasks.ozon_elastic_plan import run_ozon_elastic_plan
@@ -1027,6 +1029,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional stable run id.",
     )
 
+    ozon_actions_optimizer = subparsers.add_parser(
+        "plan-ozon-actions-optimizer",
+        help="Build dry-run recommendations across all available Ozon actions without uploading changes.",
+    )
+    ozon_actions_optimizer.add_argument(
+        "--data-dir",
+        default="data",
+        help="Project data directory.",
+    )
+    ozon_actions_optimizer.add_argument(
+        "--run-id",
+        default=None,
+        help="Optional stable run id.",
+    )
+    ozon_actions_optimizer.add_argument(
+        "--lk-boost-summary-json",
+        default=None,
+        help="Optional LK boost source summary JSON from ozon_actions_boost_probe.",
+    )
+
     apply_ozon_elastic = subparsers.add_parser(
         "apply-ozon-elastic",
         help="Apply approved Ozon Elastic Boosting dry-run after fresh preflight and drift-check.",
@@ -1047,6 +1069,31 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional stable run id.",
     )
     apply_ozon_elastic.add_argument(
+        "--confirmed-by-user",
+        action="store_true",
+        help="Required explicit confirmation for external Ozon write operations.",
+    )
+
+    apply_ozon_actions_optimizer = subparsers.add_parser(
+        "apply-ozon-actions-optimizer",
+        help="Apply approved Ozon all-actions optimizer dry-run after fresh preflight and drift-check.",
+    )
+    apply_ozon_actions_optimizer.add_argument(
+        "--data-dir",
+        default="data",
+        help="Project data directory.",
+    )
+    apply_ozon_actions_optimizer.add_argument(
+        "--plan-run-id",
+        default=None,
+        help="Approved Ozon all-actions optimizer plan run id. Defaults to the latest plan.",
+    )
+    apply_ozon_actions_optimizer.add_argument(
+        "--run-id",
+        default=None,
+        help="Optional stable run id.",
+    )
+    apply_ozon_actions_optimizer.add_argument(
         "--confirmed-by-user",
         action="store_true",
         help="Required explicit confirmation for external Ozon write operations.",
@@ -2491,8 +2538,29 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
 
+    if args.command == "plan-ozon-actions-optimizer":
+        result = run_ozon_actions_optimizer_plan(
+            credentials=load_credentials(),
+            data_dir=Path(args.data_dir),
+            run_id=args.run_id,
+            lk_boost_summary_json=Path(args.lk_boost_summary_json) if args.lk_boost_summary_json else None,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
+
     if args.command == "apply-ozon-elastic":
         result = run_ozon_elastic_apply(
+            credentials=load_credentials(),
+            data_dir=Path(args.data_dir),
+            plan_run_id=args.plan_run_id,
+            run_id=args.run_id,
+            confirmed_by_user=args.confirmed_by_user,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
+
+    if args.command == "apply-ozon-actions-optimizer":
+        result = run_ozon_actions_optimizer_apply(
             credentials=load_credentials(),
             data_dir=Path(args.data_dir),
             plan_run_id=args.plan_run_id,

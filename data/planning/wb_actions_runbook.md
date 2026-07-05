@@ -138,9 +138,12 @@ Apply из кнопки использует штатный контур CLI:
 - verify через WB history/buffer;
 - отчет и attachment в Telegram.
 
-Если WB вернул частичный успех или карантин цен, кнопку не повторять вслепую:
-использовать раздел `Карантин цен WB при резком снижении цены` ниже и
-готовить отдельный recovery/dry-run для отказанных строк.
+Если расчет содержит резкое снижение скидки/цены, штатный apply должен
+использовать встроенный staged-контур из раздела `Карантин цен WB при резком
+снижении цены`: рискованные строки не отправлять прямым `0% -> 55%`, а вести
+пошагово через `49% -> Apply New Price -> 55%`. Если staged-контур вернул
+`partial/blocked`, кнопку не повторять вслепую: сначала разобрать report,
+`staged_discount_result.json` и строки, которые не дошли до целевой скидки.
 
 ### Параллельный запуск `/wb-actions`
 
@@ -205,14 +208,27 @@ Apply выполняет:
 - partial drift-check payload строк `nmID + price + discount`;
 - upload только строк, где `nmID + price + discount` совпали между
   согласованным и свежим расчетом;
+- предварительное разделение eligible payload на обычные строки и staged
+  строки. Для резкого перехода, где новая цена со скидкой становится в `2+`
+  раза ниже текущей и целевая скидка выше `49%`, строка уходит не в прямой
+  upload, а в staged-контур:
+
+  ```text
+  upload 49% -> Apply New Price в WB Карантине -> verify 49% -> upload target -> verify target
+  ```
+
 - строки, где изменились цена, скидка или состав payload, не загружаются
   автоматически, сохраняются в `processed/skipped_drift_rows.json` и
   выводятся в итоговом отчете как требующие нового согласования;
 - upload в официальный WB endpoint
   `https://discounts-prices-api.wildberries.ru/api/v2/upload/task`;
 - проверку статуса upload через history/buffer endpoints;
+- для staged-строк - LK endpoint `Apply New Price` в карантине через
+  `scripts/actions/wb_quarantine_apply_new_price.js`; секретные токены берутся
+  только из браузерного профиля и не пишутся в отчеты;
 - сохранение `summary.json`, `wb_actions_discount_apply_result.md`,
-  `drift_check.json`, отправленного payload и WB upload response.
+  `drift_check.json`, отправленного payload, staged artifacts и WB upload
+  response.
 
 Если после fresh dry-run изменились только отдельные строки, нельзя
 останавливать весь пакет: неизменившиеся строки применяются, изменившиеся
@@ -450,25 +466,33 @@ idempotency marker сохранен в `data/approved/applied/`.
 https://seller.wildberries.ru/discount-and-prices/quarantine
 ```
 
-Правило восстановления:
+Правило штатного apply с 2026-07-05:
 
-1. Не повторять тот же payload `55%` для отказанных строк через обычный
-   `apply-wb-actions-discounts`.
-2. Считать пакет частично примененным: успешные строки закрыты, отказанные
-   вынести в отдельный backlog/новый dry-run.
-3. Проверить отказанные строки в ЛК WB `Карантин цен`: если строки находятся
-   в карантине, подготовить owner-review с вариантами `Apply New Price` или
-   `Keep Current Price`.
+1. Если fresh+approved eligible строка требует резкого перехода `0% -> 55%`
+   или другого перехода, где новая цена со скидкой становится в `2+` раза ниже
+   текущей, не отправлять ее прямым target upload.
+2. Разделить payload:
+   - обычные строки - прямой официальный WB upload;
+   - staged-строки - пошаговая скидка.
+3. Для staged-строк применять:
+
+   ```text
+   upload 49% -> Apply New Price в Карантине -> verify 49% -> upload target -> verify target
+   ```
+
 4. `Apply New Price` в карантине является write-операцией с финансовым
-   эффектом и требует отдельного approval владельца.
-5. Если строк в карантине нет или владелец не хочет подтверждать карантин,
-   строить отдельный постепенный план снижения цены/скидки с учетом ограничения
-   WB "не более чем в 2 раза ниже текущей цены".
-6. Новый план или действие в карантине применять только после отдельного review
-   и approval владельца.
-7. В итоговом отчете по apply обязательно показывать не только HTTP `200` и
-   upload ID, но и `successGoodsNumber / overAllGoodsNumber`, а также список
-   строк со статусом WB, отличным от успешного.
+   эффектом, но если владелец подтвердил WB actions apply по конкретному
+   dry-run, staged-действие разрешено только для точных строк этого approved
+   payload. Нельзя добавлять новые товары или менять target discount.
+5. `Keep Current Price` для цели "оставить утвержденную скидку" не использовать:
+   он отменяет quarantined-изменение.
+6. В итоговом отчете по apply обязательно показывать:
+   `regular rows`, `staged rows`, `successful rows / expected rows`, `failed
+   rows`, staged status, `confirmed49_rows`, `final_verified_rows` и пути к
+   staged artifacts.
+7. Если staged-контур вернул `partial` или `blocked`, не повторять кнопку
+   вслепую: смотреть `processed/staged_discount_result.json`, текущие скидки
+   WB и остаток строк в карантине.
 
 Подтвержденное восстановление Vital Shevron 2026-06-29:
 

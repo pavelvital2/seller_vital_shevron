@@ -118,6 +118,9 @@
 - `data/planning/chat_report_templates.md` - унифицированные шаблоны вывода
   отчетов в Telegram-чат и правило прикрепления полного файла отчета.
 - `data/planning/ozon_elastic_runbook.md` - Ozon Elastic Boosting.
+- `data/planning/ozon_actions_optimizer_runbook.md` - read-only/dry-run
+  оптимизатор всех доступных Ozon акций: выбор лучшей акции по товару с
+  учетом бустинга, `min_price` и FBO-остатка.
 - `data/planning/ozon_cpc_efficiency_runbook.md` - эффективность Ozon
   продвижения `Оплата за клик`.
 - `data/planning/wb_promotion_runbook.md` - эффективность WB продвижения.

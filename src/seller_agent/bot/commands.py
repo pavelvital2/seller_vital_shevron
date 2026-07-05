@@ -11,6 +11,8 @@ from seller_agent.core.job_service import JobService
 from seller_agent.core.job_store import DEFAULT_RUNTIME_DB, JobStore
 from seller_agent.core.run_manifest import latest_run
 from seller_agent.core.workflow_runner import WorkflowRunner
+from seller_agent.tasks.ozon_actions_optimizer_apply import run_ozon_actions_optimizer_apply
+from seller_agent.tasks.ozon_actions_optimizer_plan import run_ozon_actions_optimizer_plan
 from seller_agent.tasks.ozon_elastic_apply import run_ozon_elastic_apply
 from seller_agent.tasks.ozon_elastic_plan import run_ozon_elastic_plan
 from seller_agent.tasks.approvals import run_approvals_status
@@ -31,6 +33,7 @@ SUPPORTED_COMMANDS = {
     "/today",
     "/reviews",
     "/ozon-inbox",
+    "/ozon-actions",
     "/wb-inbox",
     "/approvals",
     "/catalog",
@@ -46,6 +49,7 @@ TELEGRAM_TITLES = {
     "/jobs": "Runtime jobs",
     "/reviews": "Отзывы и вопросы",
     "/ozon-inbox": "Ozon входящие",
+    "/ozon-actions": "Ozon все акции",
     "/wb-inbox": "WB входящие",
     "/runs": "Запуски",
     "/status": "Статус проекта",
@@ -82,6 +86,8 @@ def handle_telegram_command(
         return _help()
     if command in {"/elastic", "/ozon-elastic", "/ozon_elastic"}:
         return _ozon_elastic_plan(data_dir=data_dir, credentials=credentials)
+    if command in {"/ozon-actions", "/ozon_actions", "/ozon-all-actions"}:
+        return _ozon_actions_plan(data_dir=data_dir, credentials=credentials)
     if command in {"/wb-actions", "/wb_actions", "/wb-actions-70-55-55"}:
         return _wb_actions_plan(data_dir=data_dir, credentials=credentials)
     if command in {"/ozon-inbox", "/ozon_inbox"}:
@@ -163,6 +169,9 @@ def handle_telegram_callback(
     if data.startswith("oe_apply:"):
         plan_run_id = data.removeprefix("oe_apply:").strip()
         return _ozon_elastic_apply(plan_run_id=plan_run_id, data_dir=data_dir, credentials=credentials)
+    if data.startswith("oza_apply:"):
+        plan_run_id = data.removeprefix("oza_apply:").strip()
+        return _ozon_actions_apply(plan_run_id=plan_run_id, data_dir=data_dir, credentials=credentials)
     if data.startswith("wba_apply:"):
         plan_run_id = data.removeprefix("wba_apply:").strip()
         return _wb_actions_apply(plan_run_id=plan_run_id, data_dir=data_dir, credentials=credentials)
@@ -209,6 +218,8 @@ def _help() -> TelegramCommandResult:
             "- `/catalog <запрос>` ищет товар в unified catalog по internal_sku, Ozon/WB ID, barcode или названию.",
             "- `/elastic` строит свежий dry-run Ozon Elastic и показывает кнопку применения.",
             "- Кнопка применения Ozon Elastic запускает apply только по конкретному показанному `plan_run_id`.",
+            "- `/ozon-actions` строит свежий dry-run Ozon всех акций и показывает отдельную кнопку применения.",
+            "- Кнопка применения Ozon всех акций запускает отдельный apply-контур только по конкретному `plan_run_id`.",
             "- `/wb-actions` строит свежий dry-run WB акций по схеме 70-55-55 и показывает кнопку применения.",
             "- Кнопка применения WB акций запускает apply только по конкретному показанному `plan_run_id`.",
             "- `/ozon-inbox` собирает свежие Ozon отзывы/вопросы/чаты/уведомления и показывает кнопку применения согласованного пакета.",
@@ -614,6 +625,8 @@ def _wb_actions_apply(
     applied = result.get("applied") if isinstance(result.get("applied"), dict) else {}
     drift = result.get("drift") if isinstance(result.get("drift"), dict) else {}
     verify = result.get("verify") if isinstance(result.get("verify"), dict) else {}
+    staged = applied.get("staged") if isinstance(applied.get("staged"), dict) else {}
+    error_summary = verify.get("error_summary") if isinstance(verify.get("error_summary"), dict) else {}
     fresh_plan = result.get("fresh_plan") if isinstance(result.get("fresh_plan"), dict) else {}
     latest_history = _wb_latest_history_data(verify)
     lines = [
@@ -627,13 +640,29 @@ def _wb_actions_apply(
         "",
         "Применено:",
         f"- отправлено строк: `{_int(applied.get('payload_rows_count'))}`",
+        f"- напрямую: `{_int(applied.get('regular_payload_rows_count'))}`",
+        f"- пошагово через карантин: `{_int(applied.get('staged_payload_rows_count'))}`",
         f"- upload ID: `{applied.get('upload_id') or 'н/д'}`",
         f"- пропущено из-за drift: `{_int(drift.get('skipped_due_to_drift_count'))}` строк / `{_int(drift.get('skipped_due_to_drift_product_count'))}` товаров",
         "",
         "Проверка:",
         f"- verify status: `{verify.get('status') or 'н/д'}`",
-        f"- successful goods: `{_int(latest_history.get('successGoodsNumber'))}` / `{_int(latest_history.get('overAllGoodsNumber'))}`",
+        f"- regular successful goods: `{_int(latest_history.get('successGoodsNumber'))}` / `{_int(latest_history.get('overAllGoodsNumber'))}`",
+        f"- successful rows: `{_int(verify.get('success_rows') or latest_history.get('successGoodsNumber'))}` / `{_int(verify.get('expected_rows') or latest_history.get('overAllGoodsNumber'))}`",
+        f"- failed rows: `{_int(verify.get('failed_rows'))}`",
+        f"- карантинных отказов: `{_int(error_summary.get('price_quarantine_rows_count'))}`",
     ]
+    if staged:
+        lines.extend(
+            [
+                "",
+                "Пошаговая скидка:",
+                f"- статус: `{staged.get('status') or 'н/д'}`",
+                f"- шаг: `{staged.get('stage_discount') or 'н/д'}%`",
+                f"- подтверждено на шаге: `{_int(staged.get('confirmed49_rows'))}`",
+                f"- доведено до цели: `{_int(staged.get('final_verified_rows'))}` / `{_int(staged.get('target_rows'))}`",
+            ]
+        )
     if drift.get("skipped_due_to_drift_nm_ids"):
         nm_ids = ", ".join(str(item) for item in drift.get("skipped_due_to_drift_nm_ids", [])[:10])
         lines.extend(["", f"Drift товары на новый review: `{nm_ids}`"])
@@ -646,6 +675,8 @@ def _wb_actions_apply(
             lines.append(f"- drift-check: `{artifacts['drift_check']}`")
         if artifacts.get("skipped_drift_rows"):
             lines.append(f"- skipped drift: `{artifacts['skipped_drift_rows']}`")
+        if artifacts.get("staged_result"):
+            lines.append(f"- staged result: `{artifacts['staged_result']}`")
     return TelegramCommandResult(
         command="/wb_actions_apply",
         ok=str(result.get("overall_status") or "") in {"ok", "warning"},
@@ -828,6 +859,196 @@ def _ozon_elastic_apply(
             lines.append(f"- skipped drift: `{artifacts['skipped_drift_rows']}`")
     return TelegramCommandResult(
         command="/elastic_apply",
+        ok=str(result.get("overall_status") or "") in {"ok", "warning"},
+        mode="apply",
+        text="\n".join(lines),
+        artifacts=artifacts,
+    )
+
+
+def _ozon_actions_plan(
+    *,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+) -> TelegramCommandResult:
+    try:
+        result = run_ozon_actions_optimizer_plan(
+            credentials=credentials or load_credentials(),
+            data_dir=data_dir,
+        )
+    except Exception as exc:  # noqa: BLE001 - Telegram must return a safe failure.
+        return TelegramCommandResult(
+            command="/ozon-actions",
+            ok=False,
+            mode="dry_run",
+            blocked_reason="ozon_actions_plan_failed",
+            text=(
+                "Ozon все акции\n\n"
+                "Итог: свежий dry-run не удалось построить.\n\n"
+                f"Причина: `{_safe_error(exc)}`\n\n"
+                "Изменений в Ozon/WB не выполнял."
+            ),
+        )
+
+    summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+    run_id = str(result.get("run_id") or "")
+    apply_rows = (
+        int(summary.get("recommended_add") or 0)
+        + int(summary.get("recommended_update") or 0)
+        + int(summary.get("recommended_switch_review") or 0)
+    )
+    lines = [
+        "Ozon все акции",
+        "",
+        "Итог: свежий dry-run построен. Apply не выполнялся.",
+        f"Run ID: `{run_id or 'н/д'}`",
+        "",
+        "Сводка:",
+        f"- доступных акций: `{_int(summary.get('actions_total'))}`",
+        f"- акций с товарами: `{_int(summary.get('actions_with_rows'))}`",
+        f"- товаров в расчете: `{_int(summary.get('products_with_action_offers'))}`",
+        f"- предложений всего: `{_int(summary.get('offers_total'))}`",
+        f"- валидных предложений: `{_int(summary.get('valid_offers'))}`",
+        f"- заблокированных предложений: `{_int(summary.get('blocked_offers'))}`",
+        f"- LK-акций с числовым бустингом: `{_int(summary.get('lk_boost_actions_with_numeric_boost'))}`",
+        "",
+        "Рекомендации:",
+        f"- оставить текущую акцию: `{_int(summary.get('recommended_keep'))}`",
+        f"- добавить в лучшую акцию: `{_int(summary.get('recommended_add'))}`",
+        f"- обновить цену в текущей акции: `{_int(summary.get('recommended_update'))}`",
+        f"- переключить на другую акцию: `{_int(summary.get('recommended_switch_review'))}`",
+        f"- пропустить: `{_int(summary.get('recommended_skip'))}`",
+        "",
+        "Логика выбора:",
+        "- цена акции не ниже минимальной цены, есть FBO-остаток и подтвержденный бустинг;",
+        "- новая акция выбирается только если дает больший бустинг или сопоставимый бустинг при цене не хуже;",
+        "- спорные варианты с меньшей ценой остаются на review/test, не применяются молча.",
+        "",
+        "Что дальше:",
+    ]
+    if apply_rows:
+        lines.extend(
+            [
+                "Нажатие кнопки ниже является явным подтверждением владельца для этого dry-run.",
+                "Перед записью apply сам выполнит fresh preflight, fresh dry-run, partial drift-check и verify.",
+                "Если часть строк изменилась, будут применены только неизменившиеся строки; изменившиеся останутся на новый review.",
+            ]
+        )
+    else:
+        lines.append("Изменений к применению нет, кнопку apply не показываю.")
+
+    artifacts = _safe_artifacts(result)
+    if artifacts:
+        lines.extend(["", "Файлы:"])
+        if artifacts.get("report"):
+            lines.append(f"- отчет: `{artifacts['report']}`")
+        if artifacts.get("xlsx"):
+            lines.append(f"- Excel: `{artifacts['xlsx']}`")
+        if artifacts.get("recommendations_csv"):
+            lines.append(f"- рекомендации CSV: `{artifacts['recommendations_csv']}`")
+    lines.extend(["", "Изменений в Ozon/WB не выполнял."])
+
+    reply_markup: dict[str, Any] = {}
+    if apply_rows and run_id:
+        reply_markup = {
+            "inline_keyboard": [
+                [
+                    {
+                        "text": "✅ Применить Ozon все акции",
+                        "callback_data": f"oza_apply:{run_id}",
+                    }
+                ]
+            ]
+        }
+    return TelegramCommandResult(
+        command="/ozon-actions",
+        ok=True,
+        mode="dry_run",
+        text="\n".join(lines),
+        artifacts=artifacts,
+        reply_markup=reply_markup,
+    )
+
+
+def _ozon_actions_apply(
+    *,
+    plan_run_id: str,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+) -> TelegramCommandResult:
+    if not _valid_ozon_actions_plan_id(plan_run_id):
+        return TelegramCommandResult(
+            command="/ozon_actions_apply",
+            ok=False,
+            mode="apply",
+            blocked_reason="invalid_plan_run_id",
+            text=(
+                "Ozon все акции apply\n\n"
+                "Итог: apply заблокирован - некорректный `plan_run_id`.\n\n"
+                f"Получено: `{_truncate(plan_run_id, 100)}`\n\n"
+                "Изменений в Ozon/WB не выполнял."
+            ),
+        )
+
+    try:
+        result = run_ozon_actions_optimizer_apply(
+            credentials=credentials or load_credentials(),
+            data_dir=data_dir,
+            plan_run_id=plan_run_id,
+            confirmed_by_user=True,
+        )
+    except Exception as exc:  # noqa: BLE001 - Telegram must return a safe failure.
+        return TelegramCommandResult(
+            command="/ozon_actions_apply",
+            ok=False,
+            mode="apply",
+            blocked_reason="ozon_actions_apply_failed",
+            text=(
+                "Ozon все акции apply\n\n"
+                "Итог: apply не выполнен или остановлен safety-контуром.\n\n"
+                f"Plan ID: `{plan_run_id}`\n"
+                f"Причина: `{_safe_error(exc)}`\n\n"
+                "Если причина в drift или preflight, нужен новый dry-run и новое подтверждение."
+            ),
+        )
+
+    applied = result.get("applied") if isinstance(result.get("applied"), dict) else {}
+    drift = result.get("drift") if isinstance(result.get("drift"), dict) else {}
+    verify = result.get("verify") if isinstance(result.get("verify"), dict) else {}
+    fresh_plan = result.get("fresh_plan") if isinstance(result.get("fresh_plan"), dict) else {}
+    lines = [
+        "Ozon все акции apply",
+        "",
+        f"Итог: apply завершен со статусом `{result.get('overall_status') or 'н/д'}`.",
+        f"Approved plan: `{result.get('approved_plan_run_id') or plan_run_id}`",
+        f"Fresh plan: `{fresh_plan.get('run_id') or 'н/д'}`",
+        f"Apply run: `{result.get('run_id') or 'н/д'}`",
+        "",
+        "Применено:",
+        f"- добавить/обновить/целевая акция: `{_int(applied.get('activate_rows_count'))}`",
+        f"- переключений: `{_int(applied.get('switch_rows_count'))}`",
+        f"- снятий из исходной акции: `{_int(applied.get('deactivate_rows_count'))}`",
+        f"- отклонено Ozon: `{_int(applied.get('rejected_count'))}`",
+        f"- пропущено из-за drift: `{_int(drift.get('skipped_due_to_drift_count'))}` строк / `{_int(drift.get('skipped_due_to_drift_product_count'))}` товаров",
+        "",
+        "Проверка:",
+        f"- verify status: `{verify.get('status') or 'н/д'}`",
+        f"- расхождения: `{_int(len(verify.get('mismatches') or []))}`",
+    ]
+    if drift.get("skipped_due_to_drift_product_ids"):
+        product_ids = ", ".join(str(item) for item in drift.get("skipped_due_to_drift_product_ids", [])[:10])
+        lines.extend(["", f"Drift товары на новый review: `{product_ids}`"])
+    artifacts = _safe_artifacts(result)
+    if artifacts:
+        lines.extend(["", "Файлы:"])
+        if artifacts.get("report"):
+            lines.append(f"- отчет: `{artifacts['report']}`")
+        if artifacts.get("drift_check"):
+            lines.append(f"- drift-check: `{artifacts['drift_check']}`")
+        if artifacts.get("skipped_drift_rows"):
+            lines.append(f"- skipped drift: `{artifacts['skipped_drift_rows']}`")
+    return TelegramCommandResult(
+        command="/ozon_actions_apply",
         ok=str(result.get("overall_status") or "") in {"ok", "warning"},
         mode="apply",
         text="\n".join(lines),
@@ -1750,6 +1971,13 @@ def _check_issues(checks: dict[str, Any]) -> list[str]:
 def _valid_ozon_elastic_plan_id(value: str) -> bool:
     text = str(value or "")
     if not text.startswith("ozon_elastic_plan_"):
+        return False
+    return all(char.isalnum() or char in {"_", "-"} for char in text)
+
+
+def _valid_ozon_actions_plan_id(value: str) -> bool:
+    text = str(value or "")
+    if not text.startswith("ozon_actions_optimizer_plan_"):
         return False
     return all(char.isalnum() or char in {"_", "-"} for char in text)
 

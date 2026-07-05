@@ -1,6 +1,6 @@
 # Vital Shevron Project Map
 
-Дата: 2026-07-04
+Дата: 2026-07-05
 
 ```text
 /home/pavel/projects/seller_vital_shevron
@@ -83,8 +83,9 @@
   Telegram-label для бота. Начат v2 metadata слой с полями executor,
   parameter/result schema, timeout, lock keys, source plan task, verify task,
   cancel support и enabled; CLI `tasks policy` показывает пробелы apply-gate.
-  Telegram-enabled dry-run задачи: `/elastic` для Ozon Elastic и
-  `/wb-actions` для WB акций `70-55-55`.
+  Telegram-enabled dry-run задачи: `/elastic` для Ozon Elastic,
+  `/ozon-actions` для отдельного Ozon all-actions optimizer и `/wb-actions`
+  для WB акций `70-55-55`.
 - `tasks list|show` - CLI-команды просмотра `TaskRegistry`.
 - `src/seller_agent/tasks/catalog_unified.py` - read-only сборка внутреннего
   общего product-level каталога из confirmed Ozon/WB mapping, owner-approved
@@ -254,6 +255,16 @@
   lifecycle для будущего Telegram `/approvals`.
 - `src/seller_agent/tasks/ozon_elastic_apply.py` - применение согласованного
   Ozon Elastic dry-run с fresh preflight, drift-check и verify.
+- `src/seller_agent/tasks/ozon_actions_optimizer_plan.py` - read-only/dry-run
+  план выбора лучшей Ozon акции по каждому товару среди всех доступных акций
+  с учетом `min_price`, FBO-остатка и бустинга; умеет подмешивать последний
+  или явно указанный LK snapshot `boost_source_summary.json` для фиксированного
+  бустинга `STOCK_DISCOUNT`.
+- `src/seller_agent/tasks/ozon_actions_optimizer_apply.py` - отдельный apply
+  контур `Ozon все акции`: применяет owner-approved строки
+  `add/update/switch` из `ozon_actions_optimizer_plan_*` после preflight,
+  fresh dry-run, partial drift-check и verify через
+  `/v1/actions/products/activate|deactivate`.
 - `src/seller_agent/tasks/ozon_cpc_optimization_plan.py` - SKU-level dry-run
   план рекомендаций для Ozon CPC.
 - `src/seller_agent/tasks/ozon_cpc_bids_apply.py` - применение согласованных
@@ -304,10 +315,21 @@
 - `scripts/research/ozon_messenger_page_probe_cdp.js` - read-only probe
   страницы Ozon Messenger через CDP: сохраняет только redacted HTTP/websocket
   shape и UI summary без текстов сообщений, cookies и auth headers.
+- `scripts/research/ozon_actions_boost_probe_cdp.js` - read-only probe
+  Ozon `Цены и акции -> Акции`: через CDP guard `9544` открывает список и
+  detail-страницы акций, сохраняет redacted network JSON и ищет источники пары
+  `action price -> boost`. Подтвержденный run 2026-07-05 нашел
+  `action.description` как источник fixed boost для части `STOCK_DISCOUNT`.
 - `scripts/messenger/ozon_send_messages_cdp.js` - LK/CDP fallback для
   отправки уже согласованных Ozon Messenger ответов из approved package;
   использовать только после safety-цепочки и проверять результат через Seller
   API `/v3/chat/history`.
+- `scripts/actions/wb_quarantine_apply_new_price.js` - WB LK write-helper для
+  `Apply New Price` в `Цены и скидки -> Карантин`: принимает точные
+  `nmID/price/discount` targets из staged WB actions apply, находит внутренние
+  LK `id` строк карантина, вызывает `POST /quarantine/goods`, сохраняет
+  redacted результат без токенов. Использовать только внутри approved
+  write-контура скидок.
 - `scripts/search_queries/collect_seo_query_pack_sources.js` - read-only
   helper для свежего сбора top-query источников Ozon/WB под карточный
   `seo_query_pack`; Ozon использует CDP guard порта `9544`, WB использует
@@ -417,6 +439,9 @@ Ozon CDP port по умолчанию: `9544`.
   API-first `/v3/chat/*` плюс LK websocket fallback.
 - `data/planning/chat_report_templates.md`
 - `data/planning/ozon_elastic_runbook.md`
+- `data/planning/ozon_actions_optimizer_runbook.md` - read-only/dry-run
+  и apply-контур всех доступных Ozon акций, включая LK boost snapshot для
+  обычных акций `STOCK_DISCOUNT` и Telegram-команду `/ozon-actions`.
 - `data/planning/ozon_cpc_efficiency_runbook.md`
 - `data/planning/wb_promotion_runbook.md`
 - `data/planning/wb_actions_runbook.md`

@@ -561,6 +561,34 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         telegram_button_label="/elastic",
     ),
     RegisteredTask(
+        name="ozon-actions-optimizer-plan",
+        command="plan-ozon-actions-optimizer",
+        title="Plan Ozon actions optimizer",
+        description=(
+            "Build dry-run recommendations across all available Ozon actions by product, "
+            "min price, FBO stock and boost."
+        ),
+        mode="dry_run",
+        risk="normal",
+        marketplaces=("ozon",),
+        runbook_path="data/planning/ozon_actions_optimizer_runbook.md",
+        requires_credentials=True,
+        telegram_enabled=True,
+        telegram_button_label="/ozon-actions",
+    ),
+    RegisteredTask(
+        name="ozon-actions-optimizer-apply",
+        command="apply-ozon-actions-optimizer",
+        title="Apply Ozon actions optimizer",
+        description="Apply approved Ozon all-actions optimizer changes after fresh checks.",
+        mode="apply",
+        risk="high",
+        marketplaces=("ozon",),
+        runbook_path="data/planning/ozon_actions_optimizer_runbook.md",
+        requires_credentials=True,
+        requires_confirmation=True,
+    ),
+    RegisteredTask(
         name="ozon-elastic-apply",
         command="apply-ozon-elastic",
         title="Apply Ozon Elastic",
