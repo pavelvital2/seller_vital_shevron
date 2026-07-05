@@ -31,6 +31,10 @@ description: "Use for Ozon/Wildberries reviews and questions workflows: read-onl
 - WB: official Feedbacks/Questions API first.
 - Ozon: Seller Review/Question API first; if unavailable or 403, use the
   documented LK/CDP fallback from the runbook.
+- For Ozon LK/CDP question fallback, if `/api/v1/get-new-question-counter`
+  reports new questions but `/api/v1/question-list` returns
+  `invalid google.protobuf.Timestamp value ""`, verify the helper is not
+  sending empty `last_published_at`; only include that field when non-empty.
 - WB questions are part of the WB inbox route. WB platform news/notifications
   are read-only through LK `news-v2` via
   `scripts/notifications/wb_news_readonly.js`; report actual rows and important

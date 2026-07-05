@@ -196,8 +196,38 @@ def _collect_ozon_messenger_actions(
 
     adapter = OzonSellerAdapter(credentials.ozon_seller)
     try:
-        chat_list = adapter.post("/v3/chat/list", {"filter": {"chat_status": "All"}, "limit": min(max(limit, 1), 100)})
+        chat_pages: list[dict[str, Any]] = []
+        cursor = ""
+        total_unread_count: Any = None
+        max_chats = min(max(limit, 1), 500)
+        page_limit = min(max(max_chats, 1), 100)
+        seen_cursors: set[str] = set()
+        while len(chat_pages) * page_limit < max_chats:
+            payload: dict[str, Any] = {"filter": {"chat_status": "All"}, "limit": page_limit}
+            if cursor:
+                payload["cursor"] = cursor
+            page = adapter.post("/v3/chat/list", payload)
+            chat_pages.append(page)
+            if total_unread_count is None and isinstance(page, dict):
+                total_unread_count = page.get("total_unread_count")
+            next_cursor = str(page.get("cursor") or "") if isinstance(page, dict) else ""
+            if not isinstance(page, dict) or not page.get("has_next") or not next_cursor or next_cursor in seen_cursors:
+                break
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
+        chat_list = {
+            "chats": [
+                chat
+                for page in chat_pages
+                for chat in (page.get("chats") if isinstance(page, dict) and isinstance(page.get("chats"), list) else [])
+            ][:max_chats],
+            "has_next": bool(chat_pages[-1].get("has_next")) if chat_pages and isinstance(chat_pages[-1], dict) else False,
+            "cursor": chat_pages[-1].get("cursor") if chat_pages and isinstance(chat_pages[-1], dict) else "",
+            "total_unread_count": total_unread_count,
+            "pages_checked": len(chat_pages),
+        }
         write_json(raw_dir / "chat_list.json", chat_list)
+        write_json(raw_dir / "chat_list_pages.json", chat_pages)
     except Exception as exc:  # noqa: BLE001
         return {
             "status": "error",
@@ -212,7 +242,8 @@ def _collect_ozon_messenger_actions(
 
     actions: list[dict[str, Any]] = []
     histories_checked = 0
-    for chat in chats[: min(max(limit, 1), 100)]:
+    checked_chats = chats[: min(max(limit, 1), 500)]
+    for chat in checked_chats:
         if not isinstance(chat, dict):
             continue
         chat_id = _extract_chat_id(chat)
@@ -246,7 +277,8 @@ def _collect_ozon_messenger_actions(
         "status": "ok",
         "source": "Ozon Seller API /v3/chat/list /v3/chat/history",
         "total_unread_count": chat_list.get("total_unread_count") if isinstance(chat_list, dict) else None,
-        "chats_checked": len(chats[: min(max(limit, 1), 100)]),
+        "pages_checked": chat_list.get("pages_checked") if isinstance(chat_list, dict) else None,
+        "chats_checked": len(checked_chats),
         "histories_checked": histories_checked,
         "actions": actions,
     }
@@ -377,6 +409,17 @@ def _product_rating_rows(summary: dict[str, Any]) -> list[dict[str, Any]]:
     )
 
 
+def _question_action_rows(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = [action for action in _review_actions(summary) if action.get("source_type") == "question"]
+    return sorted(
+        rows,
+        key=lambda row: (
+            0 if row.get("action_type") == "question_answer" else 1,
+            str(row.get("offer_id") or row.get("sku") or ""),
+        ),
+    )
+
+
 def _low_rating_product_rows_count(rows: list[dict[str, Any]]) -> int:
     count = 0
     for row in rows:
@@ -413,6 +456,27 @@ def _format_product_rating_rows(rows: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
+def _format_question_action_rows(rows: list[dict[str, Any]]) -> list[str]:
+    if not rows:
+        return ["- вопросов покупателей нет"]
+    lines: list[str] = []
+    for index, row in enumerate(rows[:100], 1):
+        product_id = row.get("offer_id") or row.get("sku") or "без артикула"
+        question_text = str(row.get("source_text") or "").strip() or "текст не получен"
+        draft_text = str(row.get("draft_text") or "").strip()
+        lines.append(
+            f"{index}. `{product_id}` - {row.get('product_title') or 'без названия'}; "
+            f"действие: `{row.get('action_type') or 'н/д'}`; вопрос: {question_text}"
+        )
+        if draft_text:
+            lines.append(f"   Черновик ответа: {draft_text}")
+        else:
+            lines.append("   Черновик ответа: требуется ручная проверка.")
+    if len(rows) > 100:
+        lines.append(f"- ... еще `{len(rows) - 100}` строк")
+    return lines
+
+
 def _build_ozon_report(
     *,
     run_id: str,
@@ -422,6 +486,7 @@ def _build_ozon_report(
 ) -> str:
     review_counts = _reviews_counts(reviews_summary)
     product_rating_rows = _product_rating_rows(reviews_summary)
+    question_rows = _question_action_rows(reviews_summary)
     messenger_actions = messenger_summary.get("actions") if isinstance(messenger_summary.get("actions"), list) else []
     messenger_counts = Counter(str(action.get("action_type") or "") for action in messenger_actions if isinstance(action, dict))
     important = [
@@ -444,6 +509,9 @@ def _build_ozon_report(
         f"- отзывы/вопросы требуют действий: `{reviews_summary.get('actions_count') or 0}`",
         f"- публичные ответы на отзывы: `{review_counts.get('public_review_reply', 0)}`",
         f"- отметить отзывы просмотренными: `{review_counts.get('mark_review_viewed', 0)}`",
+        f"- вопросы покупателей: `{len(question_rows)}`",
+        f"- автоответы на вопросы: `{review_counts.get('question_answer', 0)}`",
+        f"- вопросы на ручную проверку: `{review_counts.get('manual_question_review', 0)}`",
         f"- оценок по конкретным товарам: `{sum(int(row.get('count') or 0) for row in product_rating_rows)}`",
         f"- низких оценок 1-3 по товарам: `{_low_rating_product_rows_count(product_rating_rows)}`",
         f"- Ozon Messenger действий: `{len(messenger_actions)}`",
@@ -466,6 +534,8 @@ def _build_ozon_report(
         )
     lines.extend(["", "## Оценки по конкретным товарам", ""])
     lines.extend(_format_product_rating_rows(product_rating_rows))
+    lines.extend(["", "## Вопросы покупателей", ""])
+    lines.extend(_format_question_action_rows(question_rows))
     lines.extend(["", "## Важные уведомления Ozon", ""])
     if not important:
         lines.append("- важных уведомлений не найдено")
@@ -544,7 +614,7 @@ def run_ozon_inbox_triage(
     credentials: AppCredentials,
     data_dir: Path = Path("data"),
     run_id: str | None = None,
-    limit: int = 100,
+    limit: int = 300,
 ) -> dict[str, Any]:
     started_at = _now()
     run_id = run_id or f"ozon_inbox_{started_at.strftime('%Y%m%dT%H%M%S')}"

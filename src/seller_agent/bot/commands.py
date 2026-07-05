@@ -355,6 +355,7 @@ def _ozon_inbox_plan(
 
     reviews = result.get("reviews") if isinstance(result.get("reviews"), dict) else {}
     messenger = result.get("messenger") if isinstance(result.get("messenger"), dict) else {}
+    review_counts = _review_action_counts_from_summary(reviews)
     messenger_counts = _messenger_counts_from_pending(data_dir=data_dir, run_id=str(result.get("run_id") or ""))
     actions_count = int(result.get("actions_count") or 0)
     run_id = str(result.get("run_id") or "")
@@ -366,12 +367,15 @@ def _ozon_inbox_plan(
         "",
         "Сводка:",
         f"- отзывы/вопросы к действию: `{_int(reviews.get('actions_count'))}`",
+        f"- вопросы покупателей: `{_int((review_counts.get('question_answer') or 0) + (review_counts.get('manual_question_review') or 0))}`",
+        f"- автоответы на вопросы: `{_int(review_counts.get('question_answer'))}`",
+        f"- вопросы на ручную проверку: `{_int(review_counts.get('manual_question_review'))}`",
         f"- оценок по конкретным товарам: `{_int(result.get('product_rating_rows_count'))}`",
         f"- низких оценок 1-3 по товарам: `{_int(result.get('low_rating_product_rows_count'))}`",
         f"- Messenger/уведомления к действию: `{sum(messenger_counts.values())}`",
-        f"- ответы покупателям в чатах: `{_int(messenger_counts.get('send_chat_message'))}`",
-        f"- уведомления отметить прочитанными: `{_int(messenger_counts.get('mark_chat_read'))}`",
-        f"- ручная проверка чатов: `{_int(messenger_counts.get('manual_chat_review'))}`",
+        f"- ответы покупателям в чатах: `{_int(messenger_counts.get('send_chat_message', 0))}`",
+        f"- уведомления отметить прочитанными: `{_int(messenger_counts.get('mark_chat_read', 0))}`",
+        f"- ручная проверка чатов: `{_int(messenger_counts.get('manual_chat_review', 0))}`",
         f"- total_unread_count API: `{_int(messenger.get('total_unread_count'))}`",
         "",
         "Что дальше:",
@@ -1908,6 +1912,29 @@ def _messenger_counts_from_pending(*, data_dir: Path, run_id: str) -> dict[str, 
     except (OSError, json.JSONDecodeError):
         return {}
     actions = data.get("messenger_actions") if isinstance(data, dict) else []
+    if not isinstance(actions, list):
+        return {}
+    counts: dict[str, int] = {}
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+        action_type = str(action.get("action_type") or "")
+        if not action_type:
+            continue
+        counts[action_type] = counts.get(action_type, 0) + 1
+    return counts
+
+
+def _review_action_counts_from_summary(summary: dict[str, Any]) -> dict[str, int]:
+    artifacts = summary.get("artifacts") if isinstance(summary.get("artifacts"), dict) else {}
+    actions_path = artifacts.get("actions")
+    if not actions_path:
+        return {}
+    try:
+        data = json.loads(Path(str(actions_path)).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    actions = data.get("actions") if isinstance(data, dict) else []
     if not isinstance(actions, list):
         return {}
     counts: dict[str, int] = {}

@@ -1878,7 +1878,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ozon_inbox.add_argument("--data-dir", default="data", help="Project data directory.")
     ozon_inbox.add_argument("--run-id", default=None, help="Optional stable run id.")
-    ozon_inbox.add_argument("--limit", type=int, default=100, help="Maximum rows/chats to inspect.")
+    ozon_inbox.add_argument("--limit", type=int, default=300, help="Maximum rows/chats to inspect.")
 
     apply_ozon_inbox = subparsers.add_parser(
         "apply-ozon-inbox",

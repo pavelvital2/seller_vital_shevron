@@ -42,6 +42,10 @@ description: "Use for Ozon Messenger and notification workflows: buyer chats, un
   Messenger websocket health.
 - Marketplace notifications can be marked read through `/v2/chat/read` when the
   runbook confirms `chat_id` and `from_message_id`.
+- `/ozon-inbox` must paginate `/v3/chat/list` by `cursor` up to the working
+  daily limit, not inspect only the first page. Treat `total_unread_count`
+  as a weak signal: report it, but rely on row `unread_count` plus
+  `/v3/chat/history` unread messages for actions.
 - If an approved `/ozon-inbox` package contains only `mark_chat_read` actions
   and no `send_chat_message` actions, do not run the LK/CDP send helper.
   Treat send as `skipped` and decide success from `/v2/chat/read` results plus

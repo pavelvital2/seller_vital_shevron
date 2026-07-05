@@ -873,6 +873,21 @@ def test_bot_ozon_inbox_builds_fresh_package_and_apply_button(
         encoding="utf-8",
     )
     report = tmp_path / "runs" / "2026-07-04" / "ozon_inbox_test" / "ozon_inbox_approval.md"
+    actions_path = tmp_path / "runs" / "2026-07-04" / "ozon_inbox_test" / "actions.json"
+    actions_path.parent.mkdir(parents=True, exist_ok=True)
+    actions_path.write_text(
+        json.dumps(
+            {
+                "actions": [
+                    {"source_type": "question", "action_type": "question_answer"},
+                    {"source_type": "question", "action_type": "manual_question_review"},
+                    {"source_type": "question", "action_type": "manual_question_review"},
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
 
     def fake_triage(**kwargs: object) -> dict:
         assert kwargs["data_dir"] == tmp_path
@@ -880,7 +895,7 @@ def test_bot_ozon_inbox_builds_fresh_package_and_apply_button(
             "run_id": "ozon_inbox_test",
             "overall_status": "ok",
             "actions_count": 3,
-            "reviews": {"actions_count": 1},
+            "reviews": {"actions_count": 1, "artifacts": {"actions": str(actions_path)}},
             "messenger": {"total_unread_count": 2},
             "artifacts": {"report": str(report)},
         }
@@ -892,6 +907,9 @@ def test_bot_ozon_inbox_builds_fresh_package_and_apply_button(
     assert result.ok is True
     assert result.mode == "dry_run"
     assert "Ozon входящие" in result.text
+    assert "вопросы покупателей: `3`" in result.text
+    assert "автоответы на вопросы: `1`" in result.text
+    assert "вопросы на ручную проверку: `2`" in result.text
     assert "ответы покупателям в чатах: `1`" in result.text
     assert result.reply_markup["inline_keyboard"][0][0]["callback_data"] == "ozin_apply:ozon_inbox_test"
     assert result.artifacts["report"] == str(report)

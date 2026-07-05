@@ -291,8 +291,8 @@ async function fetchQuestions(page, companyId, limit) {
       company_type: companyType,
       filter: { status: 'NEW' },
       pagination_last_id: paginationLastId,
-      last_published_at: lastPublishedAt,
     };
+    if (lastPublishedAt) body.last_published_at = lastPublishedAt;
     const result = await post(page, '/api/v1/question-list', body, 'questions', companyId);
     pages.push(compactResponse(result));
     const items = Array.isArray(result.json?.result) ? result.json.result : [];

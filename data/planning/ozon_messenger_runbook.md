@@ -531,7 +531,7 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 
 Текущий Ozon inbox route:
 
-- читает `/v3/chat/list` и `/v3/chat/history`;
+- читает `/v3/chat/list` по `cursor` до рабочего лимита и `/v3/chat/history`;
 - разделяет `Customer`, `NotificationUser`, `ChatBot`/прочих отправителей;
 - для простых покупательских чатов готовит черновик ответа;
 - для площадочных уведомлений готовит `mark_chat_read` после согласования;
@@ -545,6 +545,14 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 ни одного `send_chat_message`, CDP-helper отправки сообщений запускать не
 нужно. Такой apply должен пропустить send-этап со статусом `skipped` и считать
 результат по `/v2/chat/read` + контрольному read-only.
+
+Для ежедневного `/ozon-inbox` рабочий read-only лимит чатов - `300`.
+Проверять только первую страницу `/v3/chat/list` недостаточно: уведомления или
+покупательские чаты могут оказаться на следующих страницах, а общий
+`total_unread_count` у Ozon бывает нестрогим. В отчете нужно показывать
+`pages_checked`, `chats_checked`, фактические actions и не считать один только
+`total_unread_count=1` доказательством непрочитанного сообщения, если строки
+списка и истории чистые.
 
 Подтвержденная внештатная ситуация 2026-07-05:
 

@@ -308,6 +308,23 @@ NODE_PATH=/home/Codex/agent-tools/node/node_modules \
 
 ## Проверенные операции
 
+### Внештатная ситуация 2026-07-05: Ozon-вопросы не попали в `/ozon-inbox`
+
+- Симптом: Telegram-отчет `/ozon-inbox`
+  `ozon_inbox_20260705T131242` показал только `1` действие по отзыву, хотя в
+  ЛК Ozon было `3` новых вопроса покупателей.
+- Подтверждение источника: LK/CDP helper успешно получил счетчик
+  `/api/v1/get-new-question-counter` с `count=3`, но список
+  `/api/v1/question-list` вернул `HTTP 400`:
+  `invalid google.protobuf.Timestamp value ""`.
+- Причина: helper отправлял пустой `last_published_at: ""` в первый запрос
+  списка вопросов.
+- Recovery: в `scripts/reviews/ozon_reviews_questions_readonly_cdp.js`
+  `last_published_at` добавляется в payload только если значение непустое.
+- Проверка: fresh dry-run `ozon_inbox_20260705T132045` показал
+  `reviews_count=2`, `questions_count=3`, `actions_count=5`; owner-facing
+  отчет содержит отдельный блок `Вопросы покупателей`.
+
 ### Штатный apply 2026-07-01
 
 - Pending-пакет:
