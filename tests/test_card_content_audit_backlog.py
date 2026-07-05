@@ -217,6 +217,66 @@ def test_card_content_audit_backlog_cli_writes_artifacts(tmp_path: Path, capsys)
     assert Path(result["artifacts"]["report"]).exists()
 
 
+def test_card_content_audit_backlog_uses_default_saved_signals(tmp_path: Path, capsys) -> None:
+    data_dir = tmp_path / "data"
+    content_master_path = data_dir / "catalog" / "content" / "content_master.csv"
+    _write_csv(
+        content_master_path,
+        [
+            {
+                "internal_product_id": "chev-wb",
+                "product_name": "Шеврон WB",
+                "mapping_status": "confirmed",
+                "marketplace_presence": "ozon_wb",
+                "title_alignment_status": "match",
+                "full_snapshot_status": "both_found",
+                "wb_vendor_code": "wb-code",
+                "wb_nm_id": "123",
+                "ozon_photo_count": "5",
+                "wb_photo_count": "5",
+                "ozon_description_present": "true",
+                "wb_description_present": "true",
+                "ozon_attribute_count": "10",
+                "wb_attribute_count": "8",
+                "cost_total": "85",
+            }
+        ],
+    )
+    signals_dir = data_dir / "catalog" / "content" / "signals"
+    _write_csv(
+        signals_dir / "parser_signals.csv",
+        [
+            {
+                "marketplace": "wb",
+                "wb_nm_id": "123",
+                "parser_best_position": "88",
+                "parser_visible_queries": "4",
+                "parser_top30_queries": "0",
+                "stock_total": "16",
+                "wb_stock_total": "16",
+            }
+        ],
+    )
+
+    assert main(
+        [
+            "card-content-audit-backlog",
+            "--data-dir",
+            str(data_dir),
+            "--run-id",
+            "card_backlog_default_signals_test",
+        ]
+    ) == 0
+    result = json.loads(capsys.readouterr().out)
+
+    assert result["summary"]["parser_input_rows"] == 1
+    assert result["summary"]["stock_underperforming_bad_card_rows"] == 1
+    row = result["backlog_sample"][0]
+    assert row["parser_best_position"] == "88"
+    assert row["wb_stock_total"] == "16"
+    assert row["business_priority"] == "now"
+
+
 def test_task_registry_contains_card_content_audit_backlog() -> None:
     task = get_task_definition("card-content-audit-backlog")
 

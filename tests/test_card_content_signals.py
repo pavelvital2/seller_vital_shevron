@@ -100,7 +100,7 @@ def test_normalize_parser_signal_rows_supports_ozon_and_wb_keys(tmp_path: Path) 
     rows = normalize_parser_signal_rows(
         [
             {"offer_id": "oz-1", "best_position": "12", "queries_found_count": "4", "top30_count": "1"},
-            {"vendor_code": "wb-1", "best_position": "55", "queries_count": "2", "top30": "0"},
+            {"vendor_code": "wb-1", "best_position": "55", "queries_count": "2", "top30": "0", "wb_stock_total": "16"},
         ],
         content_rows,
         source_path=source_path,
@@ -111,6 +111,7 @@ def test_normalize_parser_signal_rows_supports_ozon_and_wb_keys(tmp_path: Path) 
     assert by_id["ozon-product"]["parser_visible_queries"] == "4"
     assert by_id["wb-product"]["parser_best_position"] == "55"
     assert by_id["wb-product"]["parser_visible_queries"] == "2"
+    assert by_id["wb-product"]["wb_stock_total"] == "16"
 
 
 def test_collect_card_signals_cli_writes_parser_only_artifacts(tmp_path: Path, capsys) -> None:
@@ -152,6 +153,52 @@ def test_collect_card_signals_cli_writes_parser_only_artifacts(tmp_path: Path, c
     assert Path(result["artifacts"]["sales_signals_csv"]).exists()
 
 
+def test_collect_card_signals_latest_parser_source_respects_marketplace(tmp_path: Path, capsys) -> None:
+    data_dir = tmp_path / "data"
+    content_master_path = data_dir / "catalog" / "content" / "content_master.csv"
+    ozon_parser_path = data_dir / "runs" / "2026-07-05" / "ozon_parser_price_seo_test" / "our_products_visibility_price.csv"
+    wb_parser_path = data_dir / "runs" / "2026-07-05" / "wb_parser_warehouse_analytics_test" / "wb_parser_signals.csv"
+    _write_csv(
+        content_master_path,
+        [
+            {
+                "internal_product_id": "ozon-product",
+                "ozon_offer_id": "oz-1",
+                "ozon_product_id": "101",
+                "ozon_sku": "501",
+            },
+            {
+                "internal_product_id": "wb-product",
+                "wb_vendor_code": "wb-1",
+                "wb_nm_id": "701",
+            },
+        ],
+    )
+    _write_csv(ozon_parser_path, [{"offer_id": "oz-1", "best_position": "10", "queries_found_count": "3"}])
+    _write_csv(wb_parser_path, [{"wb_nm_id": "701", "parser_best_position": "55", "parser_visible_queries": "2"}])
+
+    assert main(
+        [
+            "collect-card-signals",
+            "--data-dir",
+            str(data_dir),
+            "--run-id",
+            "signals_wb_only_test",
+            "--marketplace",
+            "wb",
+            "--skip-api",
+            "--parser-source",
+            "latest",
+        ]
+    ) == 0
+    result = json.loads(capsys.readouterr().out)
+
+    assert result["summary"]["parser_signal_rows"] == 1
+    assert result["summary"]["marketplace_counts"] == {"wb": 1}
+    assert "parser:wb_parser_signals.csv" in result["sources"]
+    assert "parser:our_products_visibility_price.csv" not in result["sources"]
+
+
 def test_task_registry_contains_card_content_signals() -> None:
     task = get_task_definition("card-content-signals")
 
@@ -162,9 +209,12 @@ def test_task_registry_contains_card_content_signals() -> None:
 
 def _write_csv(path: Path, rows: list[dict[str, str]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = list(rows[0])
+    fieldnames: list[str] = []
+    for row in rows:
+        for key in row:
+            if key not in fieldnames:
+                fieldnames.append(key)
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
-

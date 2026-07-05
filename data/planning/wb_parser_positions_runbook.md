@@ -98,6 +98,56 @@ python -m seller_agent.cli wb-parser-warehouse-analytics \
   `wb-parser-warehouse-analytics`;
 - доступна в Telegram через `/wb-analytics` и кнопку `WB аналитика`.
 
+## Интеграция в карточный SEO/backlog
+
+С 2026-07-05 команда `wb-parser-warehouse-analytics` дополнительно сохраняет
+нормализованный компактный файл:
+
+```text
+data/runs/<date>/wb_parser_warehouse_analytics_<timestamp>/wb_parser_signals.csv
+```
+
+Файл предназначен не для полного SEO-аудита, а для приоритизации карточек:
+
+- `marketplace=wb`;
+- `wb_nm_id` / `nmID`;
+- `parser_best_position`;
+- `parser_visible_queries`;
+- `parser_top30_queries`;
+- `stock_total` / `wb_stock_total` из parser warehouse quantity;
+- `query_samples` как короткая подсказка, не замена полноценного query pack.
+
+Стандартный маршрут подключения к карточной очереди:
+
+```bash
+python -m seller_agent.cli collect-card-signals \
+  --marketplace wb \
+  --skip-api \
+  --parser-source latest
+
+python -m seller_agent.cli card-content-audit-backlog
+```
+
+`collect-card-signals --marketplace wb --parser-source latest` должен брать
+только WB parser sources и не подмешивать старые Ozon parser CSV. Результат
+сохраняется в:
+
+```text
+data/catalog/content/signals/parser_signals.csv
+data/catalog/content/signals/all_signals.csv
+```
+
+`card-content-audit-backlog` по умолчанию читает сохраненные сигналы из
+`data/catalog/content/signals/`, если отдельные `--sales/--stock/--parser`
+CSV не указаны. Это позволяет после свежего parser-среза перестраивать очередь
+карточек без ручного указания путей.
+
+Если количество строк входного `parser_signals.csv` и количество карточек в
+backlog отличаются, сначала проверить дубли/связи в `content_master` по
+`wb_nm_id` и `internal_sku`. Это не всегда ошибка parser-а: один signal может
+подхватиться несколькими строками master-слоя при незавершенной синхронизации
+каталога.
+
 ## Минимальный состав отчета
 
 - источник и timestamp parser-среза;

@@ -400,23 +400,36 @@ def _latest_matching_file(data_dir: Path, patterns: list[str]) -> Path | None:
     return max(existing, key=lambda path: path.stat().st_mtime)
 
 
-def _parser_paths(data_dir: Path, explicit_paths: list[Path] | None, parser_source: str) -> list[Path]:
+def _parser_paths(
+    data_dir: Path,
+    explicit_paths: list[Path] | None,
+    parser_source: str,
+    *,
+    marketplace: str,
+) -> list[Path]:
     if explicit_paths:
         return explicit_paths
     if parser_source == "none":
         return []
     paths: list[Path] = []
-    for patterns in (
-        [
-            "*/ozon_parser_price_seo_*/our_products_visibility_price.csv",
-            "*/ozon_parser_analytics_*/our_products_visibility.csv",
-        ],
-        [
-            "*/wb_full_seo_audit_*/processed/wb_full_seo_card_audit.csv",
-            "*/wb_parser_positions_*/our_products_visibility.csv",
-            "*/ozon_wb_seo_audit_*/wb_parser_our_products_visibility.csv",
-        ],
-    ):
+    pattern_groups: list[list[str]] = []
+    if marketplace in {"all", "ozon"}:
+        pattern_groups.append(
+            [
+                "*/ozon_parser_price_seo_*/our_products_visibility_price.csv",
+                "*/ozon_parser_analytics_*/our_products_visibility.csv",
+            ]
+        )
+    if marketplace in {"all", "wb"}:
+        pattern_groups.append(
+            [
+                "*/wb_parser_warehouse_analytics_*/wb_parser_signals.csv",
+                "*/wb_full_seo_audit_*/processed/wb_full_seo_card_audit.csv",
+                "*/wb_parser_positions_*/our_products_visibility.csv",
+                "*/ozon_wb_seo_audit_*/wb_parser_our_products_visibility.csv",
+            ]
+        )
+    for patterns in pattern_groups:
         path = _latest_matching_file(data_dir, patterns)
         if path:
             paths.append(path)
@@ -461,6 +474,14 @@ def normalize_parser_signal_rows(
         visible_queries = _first_number(parser_row, ("parser_visible_queries", "queries_found_count", "queries_count", "visible_queries"))
         top30 = _first_number(parser_row, ("parser_top30_queries", "top30_count", "top30"))
         popularity = _first_number(parser_row, ("parser_max_query_popularity_7d", "max_query_popularity_7d"))
+        stock_total = _first_number(
+            parser_row,
+            ("stock_total", "total_quantity", "current_total_quantity", "quantity", "stock"),
+        )
+        wb_stock_total = _first_number(
+            parser_row,
+            ("wb_stock_total", "total_quantity", "current_total_quantity", "quantity", "stock"),
+        )
         signal.update(
             {
                 "offer_id": signal.get("offer_id") or offer_id,
@@ -476,6 +497,8 @@ def normalize_parser_signal_rows(
                 "parser_visible_queries": _format_number(visible_queries) if visible_queries else "",
                 "parser_top30_queries": _format_number(top30) if top30 else "",
                 "parser_max_query_popularity_7d": _format_number(popularity) if popularity else "",
+                "stock_total": _format_number(stock_total) if stock_total else "",
+                "wb_stock_total": _format_number(wb_stock_total) if wb_stock_total else "",
                 "notes": "Derived parser visibility signal; check parser freshness before final SEO decisions.",
             }
         )
@@ -607,7 +630,7 @@ def run_collect_card_signals(
             errors["wb_api"] = "missing credentials"
 
     if not errors.get("content_master"):
-        for parser_path in _parser_paths(data_dir, parser_paths, parser_source):
+        for parser_path in _parser_paths(data_dir, parser_paths, parser_source, marketplace=marketplace):
             try:
                 rows = _read_csv(parser_path)
                 parser_signal_rows.extend(normalize_parser_signal_rows(rows, content_rows, source_path=parser_path))
@@ -685,4 +708,3 @@ def run_collect_card_signals(
         inputs=result["inputs"],
     )
     return result
-

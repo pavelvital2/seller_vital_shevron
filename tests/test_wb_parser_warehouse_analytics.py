@@ -105,8 +105,12 @@ def test_wb_parser_warehouse_analytics_filters_supplier_and_writes_artifacts(tmp
     assert result["metrics"]["best_position"] == 20
     assert result["metrics"]["stock_visible_rows"] == 1
     assert result["metrics"]["weak_visible_candidates"] == 1
+    assert result["metrics"]["parser_signal_products"] == 2
     assert result["metrics"]["missing_rows"] == 1
     query_positions = result["artifacts"]["query_positions_csv"]
     assert "Чужой товар" not in query_positions and "wb_query_positions.csv" in query_positions
     assert "Чужой товар" not in Path(query_positions).read_text(encoding="utf-8")
+    parser_signals = Path(result["artifacts"]["parser_signals_csv"]).read_text(encoding="utf-8")
+    assert "593342198" in parser_signals
+    assert "parser_visible_queries" in parser_signals
     assert Path(result["artifacts"]["summary"]).with_name("manifest.json").exists()

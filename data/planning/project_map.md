@@ -198,8 +198,13 @@
   аналитика WB warehouse через Parser Data API: `summary`, `run-quality`,
   `query-positions`, `daily-changes`, `top-movers`, `seller-changes`;
   фильтрует Vital Shevron по `supplier_id=4516781`, сохраняет производные
-  CSV/Markdown/summary/RunManifest и доступна командой
-  `wb-parser-warehouse-analytics`.
+  CSV/Markdown/summary/RunManifest, включая `wb_parser_signals.csv` для
+  карточных SEO-сигналов, и доступна командой `wb-parser-warehouse-analytics`.
+- `src/seller_agent/tasks/card_content_signals.py` - read-only сбор
+  карточных signals; `collect-card-signals --marketplace wb --parser-source
+  latest` использует latest `wb_parser_signals.csv` без подмешивания Ozon
+  parser CSV и сохраняет нормализованные signals в
+  `data/catalog/content/signals/`.
 - `src/seller_agent/bot/dispatcher.py` - thin layer над `TaskRegistry` для
   будущего Telegram-бота.
 - `src/seller_agent/bot/commands.py` - Telegram MVP command layer:

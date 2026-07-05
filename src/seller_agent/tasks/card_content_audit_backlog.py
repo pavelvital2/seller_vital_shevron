@@ -13,6 +13,7 @@ from seller_agent.reports.writer import ensure_dir, write_json
 
 DEFAULT_CONTENT_MASTER_PATH = Path("catalog/content/content_master.csv")
 DEFAULT_OUTPUT_DIR = Path("catalog/content")
+DEFAULT_SIGNALS_DIR = Path("catalog/content/signals")
 
 
 @dataclass
@@ -630,6 +631,11 @@ def _read_optional_signal_csvs(paths: list[Path] | None, errors: dict[str, str],
     return rows
 
 
+def _default_signal_paths(data_dir: Path, filename: str) -> list[Path]:
+    path = data_dir / DEFAULT_SIGNALS_DIR / filename
+    return [path] if path.exists() else []
+
+
 def run_card_content_audit_backlog(
     *,
     data_dir: Path = Path("data"),
@@ -653,6 +659,10 @@ def run_card_content_audit_backlog(
         content_rows = _read_csv(content_master_path)
     except Exception as exc:  # noqa: BLE001 - task report must capture local input errors
         errors["content_master"] = str(exc)
+
+    sales_signals_paths = sales_signals_paths or _default_signal_paths(data_dir, "sales_signals.csv")
+    stock_signals_paths = stock_signals_paths or _default_signal_paths(data_dir, "stock_signals.csv")
+    parser_signals_paths = parser_signals_paths or _default_signal_paths(data_dir, "parser_signals.csv")
 
     sales_signal_rows = _read_optional_signal_csvs(sales_signals_paths, errors, "sales_signals")
     stock_signal_rows = _read_optional_signal_csvs(stock_signals_paths, errors, "stock_signals")

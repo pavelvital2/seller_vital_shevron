@@ -85,6 +85,11 @@ WB-аудит делать после свежего прохода WB parser п
 
 - WB top queries из `search_queries_shevron_*`;
 - WB parser positions через Parser Data API dataset `wb`;
+- производный WB parser signal:
+  `data/runs/<date>/wb_parser_warehouse_analytics_*/wb_parser_signals.csv`,
+  который строится командой `wb-parser-warehouse-analytics` и используется
+  `collect-card-signals --marketplace wb --parser-source latest` для
+  приоритизации карточек по видимости, top-30 и остаткам;
 - `data/catalog/wb/processed/wb_catalog.csv`;
 - WB Content API `POST /content/v2/get/cards/list` - read-only карточки:
   название, описание, фото, характеристики, размеры, даты обновления;
@@ -158,6 +163,19 @@ WB-аудит делать после свежего прохода WB parser п
    - `competitor_top30_by_query` - top-30 выдачи с ценами и продавцами;
    - `our_price_gaps_visible_vs_api` - разница API price и parser price;
    - `card_priority_price_seo` - приоритеты карточек с учетом цены покупателя.
+
+Для быстрой перестройки карточной очереди после свежего WB parser-среза
+использовать штатную цепочку:
+
+```bash
+python -m seller_agent.cli wb-parser-warehouse-analytics --limit 500 --report-limit 50
+python -m seller_agent.cli collect-card-signals --marketplace wb --skip-api --parser-source latest
+python -m seller_agent.cli card-content-audit-backlog
+```
+
+Этот маршрут read-only. Он не заменяет детальный покарточный аудит и не
+формирует write-пакеты, но дает актуальный список карточек с остатком,
+видимостью и SEO/content-проблемами.
 
 ## Приоритеты
 

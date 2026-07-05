@@ -143,6 +143,53 @@ def _weak_visible_candidates(rows: list[dict[str, Any]], *, limit: int) -> list[
     ]
 
 
+def build_wb_parser_signal_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    aggregate: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        product_id = _safe_text(row.get("product_id"))
+        if not product_id:
+            continue
+        item = aggregate.setdefault(
+            product_id,
+            {
+                "marketplace": "wb",
+                "source": "parser_data_api:/warehouse/wb/query-positions",
+                "nmID": product_id,
+                "wb_nm_id": product_id,
+                "product_name": _safe_text(row.get("product_name")),
+                "parser_best_position": 0,
+                "parser_visible_queries": 0,
+                "parser_top30_queries": 0,
+                "stock_total": 0,
+                "wb_stock_total": 0,
+                "query_samples": [],
+                "notes": "WB warehouse parser visibility signal; use with sales/stocks before business decisions.",
+            },
+        )
+        position = _position(row)
+        if position:
+            current_best = _int_value(item.get("parser_best_position"))
+            item["parser_best_position"] = position if current_best == 0 else min(current_best, position)
+            item["parser_visible_queries"] = _int_value(item.get("parser_visible_queries")) + 1
+            if position <= 30:
+                item["parser_top30_queries"] = _int_value(item.get("parser_top30_queries")) + 1
+        quantity = _quantity(row)
+        if quantity:
+            item["stock_total"] = max(_int_value(item.get("stock_total")), quantity)
+            item["wb_stock_total"] = max(_int_value(item.get("wb_stock_total")), quantity)
+        query = _safe_text(row.get("query"))
+        samples = item["query_samples"]
+        if query and query not in samples and len(samples) < 5:
+            samples.append(query)
+
+    result: list[dict[str, Any]] = []
+    for item in aggregate.values():
+        item = dict(item)
+        item["query_samples"] = "; ".join(item.pop("query_samples", []))
+        result.append(item)
+    return sorted(result, key=lambda item: (_int_value(item.get("parser_best_position")) or 999999, _safe_text(item.get("wb_nm_id"))))
+
+
 def _strong_declines(rows: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
     filtered: list[dict[str, Any]] = []
     for row in rows:
@@ -281,6 +328,7 @@ def run_wb_parser_warehouse_analytics(
     top_rows = _supplier_rows(_rows(top_payload), supplier_id)
     seller_rows = _supplier_rows(_rows(seller_payload), supplier_id)
     weak_candidates = _weak_visible_candidates(query_rows, limit=report_limit)
+    parser_signal_rows = build_wb_parser_signal_rows(query_rows)
     declines = _strong_declines(daily_rows, limit=report_limit)
 
     raw_dir = ensure_dir(run_dir / "raw")
@@ -292,6 +340,7 @@ def run_wb_parser_warehouse_analytics(
         "top_movers_csv": str(run_dir / "wb_top_movers.csv"),
         "seller_changes_csv": str(run_dir / "wb_seller_changes.csv"),
         "weak_candidates_csv": str(run_dir / "wb_weak_visible_candidates.csv"),
+        "parser_signals_csv": str(run_dir / "wb_parser_signals.csv"),
         "raw_summary_json": str(raw_dir / "summary.json"),
         "raw_run_quality_json": str(raw_dir / "run_quality.json"),
     }
@@ -301,6 +350,7 @@ def run_wb_parser_warehouse_analytics(
     _write_csv(run_dir / "wb_top_movers.csv", top_rows)
     _write_csv(run_dir / "wb_seller_changes.csv", seller_rows)
     _write_csv(run_dir / "wb_weak_visible_candidates.csv", weak_candidates)
+    _write_csv(run_dir / "wb_parser_signals.csv", parser_signal_rows)
     write_json(raw_dir / "summary.json", summary_payload)
     write_json(raw_dir / "run_quality.json", quality_payload)
     write_json(raw_dir / "query_positions_sample.json", {"rows": _top_rows(query_rows, limit=report_limit)})
@@ -327,6 +377,7 @@ def run_wb_parser_warehouse_analytics(
             "top_movers_rows": len(top_rows),
             "seller_changes_rows": len(seller_rows),
             "weak_visible_candidates": len(weak_candidates),
+            "parser_signal_products": len(parser_signal_rows),
         }
     )
     quality_rows = _rows(quality_payload)
