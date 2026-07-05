@@ -356,8 +356,9 @@ approved card batch. `tasks policy` должен показывать пробе
 
 ## Следующий шаг
 
-1. Переключать Telegram callback-и write-операций на `JobService` по одному:
-   сначала Ozon Elastic и WB actions, затем Ozon optimizer/WB promotion.
+1. Ozon Elastic и WB actions callbacks уже переключены на `JobService`.
+   Следующие write-callback-и переключать позже по одному: Ozon optimizer,
+   WB promotion и карточный batch apply.
 2. Подключить генерацию CLI/help или документации из registry без изменения
    внешнего поведения команд.
 3. Расширять `WorkflowRunner` только через задачи, уже описанные в registry и

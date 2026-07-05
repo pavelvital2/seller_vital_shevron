@@ -1,6 +1,6 @@
 # Telegram Bot MVP Runbook
 
-Дата актуализации: 2026-06-18
+Дата актуализации: 2026-07-05
 
 ## Итог
 
@@ -28,6 +28,15 @@ command layer. Adapter умеет отправить preview-ответ, оди�
 выполняется существующими контурами `apply-ozon-elastic`,
 `apply-ozon-actions-optimizer` и `apply-wb-actions-discounts` с fresh-check,
 partial drift-check, verify и idempotency guard.
+
+С 2026-07-05 callback-и `oe_apply:<plan_run_id>` и
+`wba_apply:<plan_run_id>` больше не вызывают marketplace apply-функции
+напрямую из bot command layer. Они создают и сразу запускают runtime job через
+`JobService`; `WorkflowRunner` затем вызывает профильный apply handler. Это
+дает единый `job_id`, общий status/result слой и сохраняет существующую
+safety-цепочку. Callback пока выполняется синхронно внутри polling-процесса;
+полный callback dedup по `telegram_updates.update_id` остается следующим
+runtime-слоем.
 
 С 2026-07-05 добавлен минимальный первый экран Telegram-бота через persistent
 reply-клавиатуру. `/start` и `/menu` показывают кнопки `Статус`, `Помощь`,
@@ -370,12 +379,12 @@ wbin_apply:<wb_inbox_run_id>
   `ozon_inbox_`;
 - WB inbox callback принимает только `run_id`, начинающийся с `wb_inbox_`;
 - нажатие кнопки = explicit owner approval для этого dry-run;
-- Ozon Elastic apply запускается через
-  `run_ozon_elastic_apply(..., confirmed_by_user=True)`;
+- Ozon Elastic apply создает runtime job `ozon-elastic-apply` через
+  `JobService` с `plan_run_id` и `confirmed_by_user=true`;
 - Ozon actions optimizer apply запускается через
   `run_ozon_actions_optimizer_apply(..., confirmed_by_user=True)`;
-- WB actions apply запускается через
-  `run_wb_actions_discount_apply(..., confirmed_by_user=True)`;
+- WB actions apply создает runtime job `wb-actions-discount-apply` через
+  `JobService` с `plan_run_id` и `confirmed_by_user=true`;
 - Ozon inbox apply создает runtime job `ozon-inbox-apply` через `JobService`
   с `confirmed_by_user=true`; `WorkflowRunner` применяет только пакет,
   сохраненный в `data/pending/<ozon_inbox_run_id>_pending/`;
@@ -425,14 +434,14 @@ cookies, storage state и файлы вне разрешенных директ�
 - MVP не отправляет ответы покупателям без inline callback/approval.
 - MVP не меняет цены, акции, ставки, карточки, фото, остатки или поставки.
 - Исключение: `/elastic` + inline-кнопка Ozon Elastic применяет только
-  конкретный показанный Ozon Elastic dry-run через `apply-ozon-elastic` и
-  штатный safety-контур.
+  конкретный показанный Ozon Elastic dry-run через runtime job
+  `ozon-elastic-apply` и штатный safety-контур.
 - Исключение: `/ozon-actions` + inline-кнопка Ozon actions применяет только
   конкретный показанный dry-run второго Ozon-контура через
   `apply-ozon-actions-optimizer` и штатный safety-контур.
 - Исключение: `/wb-actions` + inline-кнопка WB actions применяет только
-  конкретный показанный WB `70-55-55` dry-run через
-  `apply-wb-actions-discounts` и штатный safety-контур.
+  конкретный показанный WB `70-55-55` dry-run через runtime job
+  `wb-actions-discount-apply` и штатный safety-контур.
 - Исключение: `/ozon-inbox` + inline-кнопка Ozon inbox применяет только
   конкретный показанный пакет Ozon отзывов/вопросов/Messenger/уведомлений:
   публичные ответы, отметку просмотренных отзывов, ответы в Ozon Messenger и

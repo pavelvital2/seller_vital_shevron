@@ -307,13 +307,20 @@ worker/job runner -> result -> send final report
   `status-preflight`;
 - `/today` + `--live-today --runtime-jobs` создает job
   `daily-morning-report`;
+- callback `oe_apply:<plan_run_id>` создает и сразу запускает runtime job
+  `ozon-elastic-apply` через `JobService`;
+- callback `wba_apply:<plan_run_id>` создает и сразу запускает runtime job
+  `wb-actions-discount-apply` через `JobService`;
 - повторный Telegram `update_id` не создает второй job.
 
 Ограничение: systemd-шаблоны worker/timer подготовлены, но не включены и не
 запущены. До включения после постановки в очередь job нужно выполнить вручную
 через `bot run-job-next` или `bot run-job-loop --max-iterations N`. Основные
-apply handler-ы уже есть в `WorkflowRunner`, но Telegram callbacks нужно
-переключать на `JobService` по одному и проверять на smoke/dry-run.
+apply handler-ы уже есть в `WorkflowRunner`; Ozon Elastic и WB actions callbacks
+переключены на `JobService`. Следующие callbacks (`Ozon все акции`,
+promotion bids, карточные batch apply) переключать позже по одному. Callback-и
+Ozon Elastic/WB actions пока выполняются синхронно внутри polling; полный
+callback dedup через `telegram_updates` остается отдельным следующим слоем.
 
 ### Этап 6. Атомарные approvals и resource leases
 

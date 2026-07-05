@@ -11,17 +11,15 @@ from seller_agent.core.job_service import JobService
 from seller_agent.core.job_store import DEFAULT_RUNTIME_DB, JobStore
 from seller_agent.core.run_manifest import latest_run
 from seller_agent.core.workflow_runner import WorkflowRunner
+from seller_agent.tasks.approvals import run_approvals_status
 from seller_agent.tasks.ozon_actions_optimizer_apply import run_ozon_actions_optimizer_apply
 from seller_agent.tasks.ozon_actions_optimizer_plan import run_ozon_actions_optimizer_plan
-from seller_agent.tasks.ozon_elastic_apply import run_ozon_elastic_apply
 from seller_agent.tasks.ozon_elastic_plan import run_ozon_elastic_plan
-from seller_agent.tasks.approvals import run_approvals_status
 from seller_agent.tasks.inbox_workflow import (
     run_ozon_inbox_triage,
     run_wb_inbox_triage,
 )
 from seller_agent.tasks.registry import default_task_registry
-from seller_agent.tasks.wb_actions_discount_apply import run_wb_actions_discount_apply
 from seller_agent.tasks.wb_actions_discount_plan import run_wb_actions_discount_plan
 
 
@@ -751,11 +749,11 @@ def _wb_actions_apply(
         )
 
     try:
-        result = run_wb_actions_discount_apply(
-            credentials=credentials or load_credentials(),
-            data_dir=data_dir,
+        result = _run_plan_apply_job(
+            task_id="wb-actions-discount-apply",
             plan_run_id=plan_run_id,
-            confirmed_by_user=True,
+            data_dir=data_dir,
+            credentials=credentials,
         )
     except Exception as exc:  # noqa: BLE001 - Telegram must return a safe failure.
         return TelegramCommandResult(
@@ -783,6 +781,7 @@ def _wb_actions_apply(
         "WB акции apply",
         "",
         f"Итог: apply завершен со статусом `{result.get('overall_status') or 'н/д'}`.",
+        f"Job ID: `{result.get('job_id') or 'н/д'}`",
         f"Approved plan: `{result.get('approved_plan_run_id') or plan_run_id}`",
         f"Fresh plan: `{fresh_plan.get('run_id') or 'н/д'}`",
         f"Apply run: `{result.get('run_id') or 'н/д'}`",
@@ -952,11 +951,11 @@ def _ozon_elastic_apply(
         )
 
     try:
-        result = run_ozon_elastic_apply(
-            credentials=credentials or load_credentials(),
-            data_dir=data_dir,
+        result = _run_plan_apply_job(
+            task_id="ozon-elastic-apply",
             plan_run_id=plan_run_id,
-            confirmed_by_user=True,
+            data_dir=data_dir,
+            credentials=credentials,
         )
     except Exception as exc:  # noqa: BLE001 - Telegram must return a safe failure.
         return TelegramCommandResult(
@@ -981,6 +980,7 @@ def _ozon_elastic_apply(
         "Ozon Elastic apply",
         "",
         f"Итог: apply завершен со статусом `{result.get('overall_status') or 'н/д'}`.",
+        f"Job ID: `{result.get('job_id') or 'н/д'}`",
         f"Approved plan: `{result.get('approved_plan_run_id') or plan_run_id}`",
         f"Fresh plan: `{fresh_plan.get('run_id') or 'н/д'}`",
         f"Apply run: `{result.get('run_id') or 'н/д'}`",
@@ -2065,6 +2065,32 @@ def _run_inbox_apply_job(
     job = service.submit(
         task_id=task_id,
         params={"source_run_id": source_run_id, "confirmed_by_user": True},
+        actor="telegram_owner",
+        source="telegram_callback",
+    )
+    job_result = service.run(job.job_id)
+    workflow_result = job_result.job.result if isinstance(job_result.job.result, dict) else {}
+    summary = workflow_result.get("summary") if isinstance(workflow_result.get("summary"), dict) else {}
+    if job_result.ok and summary:
+        return {**summary, "job_id": job.job_id, "job_status": job_result.job.status}
+    error = job_result.message or job_result.job.error or workflow_result.get("error") or workflow_result.get("blocked_reason")
+    raise RuntimeError(f"job `{job.job_id}` failed: {error or job_result.status}")
+
+
+def _run_plan_apply_job(
+    *,
+    task_id: str,
+    plan_run_id: str,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+) -> dict[str, Any]:
+    service = JobService(
+        data_dir=data_dir,
+        workflow_runner=WorkflowRunner(data_dir=data_dir, credentials=credentials),
+    )
+    job = service.submit(
+        task_id=task_id,
+        params={"plan_run_id": plan_run_id, "confirmed_by_user": True},
         actor="telegram_owner",
         source="telegram_callback",
     )

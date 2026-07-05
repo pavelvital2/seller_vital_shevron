@@ -232,13 +232,18 @@
   marketplace write допускается только через узкие approval/callback flows.
 - `/elastic` - Telegram-команда Ozon Elastic: свежий dry-run, report и
   inline-кнопка apply. Callback `oe_apply:<plan_run_id>` запускает
-  `apply-ozon-elastic` только для показанного plan run через штатный
-  fresh preflight/drift-check/verify.
+  runtime job `ozon-elastic-apply` только для показанного plan run через
+  `JobService`, `WorkflowRunner` и штатный fresh preflight/drift-check/verify.
 - `/ozon-actions` - Telegram-команда второго Ozon-контура `Ozon все акции`:
   свежий dry-run сравнения Elastic и всех доступных Ozon акций, report и
   inline-кнопка apply. Callback `oza_apply:<plan_run_id>` запускает
   `apply-ozon-actions-optimizer` только для показанного plan run через
   штатный fresh preflight/drift-check/verify.
+- `/wb-actions` - Telegram-команда WB акций `70-55-55`: свежий dry-run,
+  report и inline-кнопка apply. Callback `wba_apply:<plan_run_id>` запускает
+  runtime job `wb-actions-discount-apply` только для показанного plan run через
+  `JobService`, `WorkflowRunner`, staged quarantine workaround, fresh
+  preflight/drift-check/verify.
 - `src/seller_agent/tasks/inbox_workflow.py` - раздельные Telegram/CLI
   inbox-workflows для входящих Ozon/WB: `ozon-inbox`, `apply-ozon-inbox`,
   `wb-inbox`, `apply-wb-inbox`. Ozon route объединяет отзывы/вопросы,

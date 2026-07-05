@@ -604,6 +604,7 @@ def test_bot_elastic_callback_applies_specific_plan(
     def fake_apply(**kwargs: object) -> dict:
         calls.append(kwargs)
         return {
+            "job_id": "job_ozon_elastic_apply_test",
             "run_id": "ozon_elastic_apply_test",
             "overall_status": "warning",
             "approved_plan_run_id": "ozon_elastic_plan_test",
@@ -622,17 +623,18 @@ def test_bot_elastic_callback_applies_specific_plan(
             "artifacts": {"report": str(tmp_path / "runs" / "apply.md")},
         }
 
-    monkeypatch.setattr(commands, "run_ozon_elastic_apply", fake_apply)
+    monkeypatch.setattr(commands, "_run_plan_apply_job", fake_apply)
 
     result = dispatch_callback("oe_apply:ozon_elastic_plan_test", data_dir=tmp_path)
 
     assert result.ok is True
     assert result.mode == "apply"
     assert "apply завершен" in result.text
+    assert "Job ID: `job_ozon_elastic_apply_test`" in result.text
     assert "добавить/обновить: `4`" in result.text
+    assert calls[0]["task_id"] == "ozon-elastic-apply"
     assert calls[0]["data_dir"] == tmp_path
     assert calls[0]["plan_run_id"] == "ozon_elastic_plan_test"
-    assert calls[0]["confirmed_by_user"] is True
 
 
 def test_bot_elastic_callback_rejects_invalid_plan_id(tmp_path: Path) -> None:
@@ -876,6 +878,7 @@ def test_bot_wb_actions_callback_applies_specific_plan(
     def fake_apply(**kwargs: object) -> dict:
         calls.append(kwargs)
         return {
+            "job_id": "job_wb_actions_apply_test",
             "run_id": "wb_actions_discount_apply_test",
             "overall_status": "warning",
             "approved_plan_run_id": "wb_actions_discount_plan_70-55-55_test",
@@ -902,18 +905,19 @@ def test_bot_wb_actions_callback_applies_specific_plan(
             "artifacts": {"report": str(tmp_path / "runs" / "wb_apply.md")},
         }
 
-    monkeypatch.setattr(commands, "run_wb_actions_discount_apply", fake_apply)
+    monkeypatch.setattr(commands, "_run_plan_apply_job", fake_apply)
 
     result = dispatch_callback("wba_apply:wb_actions_discount_plan_70-55-55_test", data_dir=tmp_path)
 
     assert result.ok is True
     assert result.mode == "apply"
     assert "apply завершен" in result.text
+    assert "Job ID: `job_wb_actions_apply_test`" in result.text
     assert "отправлено строк: `4`" in result.text
     assert "successful goods: `4` / `4`" in result.text
+    assert calls[0]["task_id"] == "wb-actions-discount-apply"
     assert calls[0]["data_dir"] == tmp_path
     assert calls[0]["plan_run_id"] == "wb_actions_discount_plan_70-55-55_test"
-    assert calls[0]["confirmed_by_user"] is True
 
 
 def test_bot_wb_actions_callback_rejects_invalid_plan_id(tmp_path: Path) -> None:

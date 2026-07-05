@@ -169,7 +169,8 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/pytest -q
 2. Rename-only package `seller_agent` выполнен 2026-06-18 без новой логики.
 3. Следующие read-only задачи подключать через тот же runner, а не через
    прямые вызовы из bot layer.
-4. Telegram write-callback-и переключать на `JobService` по одному и после
+4. Ozon Elastic и WB actions Telegram write-callback-и уже переключены на
+   `JobService`. Следующие callback-и переводить позже по одному и после
    каждого переключения делать smoke: dry-run -> approval callback -> job ->
    apply -> verify -> cleanup.
 5. Write-операции проектировать отдельно через `SafetyGuard` и approval
