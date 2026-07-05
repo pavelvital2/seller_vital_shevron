@@ -12,6 +12,7 @@ from seller_agent.tasks.inbox_workflow import run_ozon_inbox_apply, run_wb_inbox
 from seller_agent.tasks.pricing_status import run_pricing_status
 from seller_agent.tasks.registry import RegisteredTask, TaskRegistry, default_task_registry
 from seller_agent.tasks.status_preflight import run_status_preflight
+from seller_agent.tasks.wb_parser_warehouse_analytics import run_wb_parser_warehouse_analytics
 
 
 DEFAULT_WORKFLOW_LOCK_DIR = Path(".sessions/workflows")
@@ -190,6 +191,7 @@ def default_workflow_handlers() -> dict[str, WorkflowHandler]:
         "daily-morning-report": _daily_morning_report_handler,
         "pricing-status": _pricing_status_handler,
         "status-preflight": _status_preflight_handler,
+        "wb-parser-warehouse-analytics": _wb_parser_warehouse_analytics_handler,
         "approved-cards-batch-apply": _approved_cards_batch_apply_handler,
         "ozon-inbox-apply": _ozon_inbox_apply_handler,
         "wb-inbox-apply": _wb_inbox_apply_handler,
@@ -248,6 +250,21 @@ def _pricing_status_handler(
         run_id=_optional_str(inputs.get("run_id")),
         refresh_api=_bool_input(inputs, "refresh_api", False),
         refresh_marketplace=_optional_str(inputs.get("refresh_marketplace")) or "all",
+    )
+
+
+def _wb_parser_warehouse_analytics_handler(
+    task: RegisteredTask,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    return run_wb_parser_warehouse_analytics(
+        data_dir=data_dir,
+        run_id=_optional_str(inputs.get("run_id")),
+        supplier_id=_optional_str(inputs.get("supplier_id")) or "4516781",
+        limit=_int_input(inputs, "limit", 500),
+        report_limit=_int_input(inputs, "report_limit", 50),
     )
 
 
@@ -363,3 +380,11 @@ def _bool_input(inputs: dict[str, Any], key: str, default: bool) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "y", "on"}
     return bool(value)
+
+
+def _int_input(inputs: dict[str, Any], key: str, default: int) -> int:
+    value = inputs.get(key, default)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default

@@ -11,9 +11,17 @@ WB через Parser Data API.
 
 - Parser Data API: `http://127.0.0.1:8787`, dataset `wb`.
 - Env с token/base URL: `/home/pavel/.parser-data-api.env`.
-- SERP: `marts/serp/latest/products_daily.csv`.
-- Seller bridge: `marts/sellers/latest/seller_query_product_bridge.csv`.
-- Sellers: `marts/sellers/latest/sellers_daily.csv`.
+- Основной маршрут после 2026-07-05 - WB warehouse endpoints Parser Data API:
+  - `/warehouse/wb/summary`;
+  - `/warehouse/wb/query-positions`;
+  - `/warehouse/wb/daily-changes`;
+  - `/warehouse/wb/top-movers`;
+  - `/warehouse/wb/seller-changes`;
+  - `/warehouse/wb/run-quality`.
+- Legacy raw/marts sources оставлены только как справочный слой Parser VPS:
+  `marts/serp/latest/products_daily.csv`,
+  `marts/sellers/latest/seller_query_product_bridge.csv`,
+  `marts/sellers/latest/sellers_daily.csv`.
 - Локальный WB-каталог проекта:
   `data/catalog/wb/processed/wb_catalog.csv`.
 
@@ -21,12 +29,13 @@ Parser Data API используется только read-only. Полные д
 копировать в проект.
 
 Перед анализом свежего top-query прохода обязательно подтвердить актуальность
-среза Parser Data API:
+среза Parser Data API через `/warehouse/wb/summary` и `/warehouse/wb/run-quality`:
 
-- `mtime` файла `marts/serp/latest/products_daily.csv`;
-- parser `run_id`;
+- `built_at_utc`;
+- `min_run_date` / `max_run_date`;
+- количество `query_position_rows`;
 - количество уникальных запросов;
-- диапазон `collected_at_utc`.
+- статус последних `serp` и `sellers` прогонов.
 
 Нельзя переиспользовать старый отчет из `data/runs/`, если владелец сообщил,
 что parser только что закончил новый проход. Сначала нужно проверить latest
@@ -61,7 +70,33 @@ tmp/wb_parser_positions_analysis/
 
 Папка находится внутри проекта, исключена из git через `tmp/` и должна быть
 очищена после завершения анализа. Финальные производные отчеты сохранять в
-`data/runs/<date>/...`; raw-данные парсера туда не сохранять.
+  `data/runs/<date>/...`; raw-данные парсера туда не сохранять.
+
+## Штатная команда
+
+После согласования владельцем 2026-07-05 используется команда:
+
+```bash
+python -m seller_agent.cli wb-parser-warehouse-analytics \
+  --supplier-id 4516781 \
+  --limit 500 \
+  --report-limit 50
+```
+
+Команда:
+
+- читает Parser Data API только read-only;
+- учитывает текущее ограничение Parser Data API `limit <= 500`;
+- не копирует полные parser datasets в seller project;
+- дополнительно фильтрует все строки по `supplier_id=4516781`, даже если
+  отдельный endpoint вернул общий рыночный набор;
+- сохраняет производные файлы в
+  `data/runs/<date>/wb_parser_warehouse_analytics_<timestamp>/`;
+- пишет `summary.json`, Markdown report, CSV по query positions, daily
+  changes, top movers, seller changes и слабым видимым кандидатам;
+- регистрирует запуск в `RunManifest` как task
+  `wb-parser-warehouse-analytics`;
+- доступна в Telegram через `/wb-analytics` и кнопку `WB аналитика`.
 
 ## Минимальный состав отчета
 
@@ -75,6 +110,7 @@ tmp/wb_parser_positions_analysis/
 - конкурентный срез по `supplier_id`, а не только по имени продавца;
 - отдельная проверка строк `brand=VitalEmb`, которые не относятся к нашему
   `supplier_id`.
+- кандидаты с остатком вне top-30 для очереди SEO/карточек.
 
 ## Ограничения
 

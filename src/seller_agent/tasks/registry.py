@@ -432,6 +432,21 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         telegram_button_label="/today",
     ),
     RegisteredTask(
+        name="wb-parser-warehouse-analytics",
+        command="wb-parser-warehouse-analytics",
+        title="WB parser warehouse analytics",
+        description=(
+            "Build read-only Wildberries visibility analytics from Parser Data API "
+            "warehouse endpoints without copying full parser datasets."
+        ),
+        mode="read_only",
+        risk="low",
+        marketplaces=("wb",),
+        runbook_path="data/planning/wb_parser_positions_runbook.md",
+        telegram_enabled=True,
+        telegram_button_label="/wb-analytics",
+    ),
+    RegisteredTask(
         name="supply-workbooks-plan",
         command="plan-supply-workbooks",
         title="Supply workbook automation plan",

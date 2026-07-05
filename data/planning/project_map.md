@@ -190,13 +190,23 @@
   в `data/runs/<date>/<run_id>/raw/`.
 - `src/seller_agent/marketplaces/wb/prices_adapter.py` - read-only adapter
   WB Discounts/Prices API для `GET /api/v2/list/goods/filter`.
+- `src/seller_agent/marketplaces/parser_data_api.py` - read-only клиент
+  Parser Data API: читает base URL/token из `/home/pavel/.parser-data-api.env`
+  и используется для WB warehouse analytics без копирования полных parser
+  datasets в проект.
+- `src/seller_agent/tasks/wb_parser_warehouse_analytics.py` - read-only
+  аналитика WB warehouse через Parser Data API: `summary`, `run-quality`,
+  `query-positions`, `daily-changes`, `top-movers`, `seller-changes`;
+  фильтрует Vital Shevron по `supplier_id=4516781`, сохраняет производные
+  CSV/Markdown/summary/RunManifest и доступна командой
+  `wb-parser-warehouse-analytics`.
 - `src/seller_agent/bot/dispatcher.py` - thin layer над `TaskRegistry` для
   будущего Telegram-бота.
 - `src/seller_agent/bot/commands.py` - Telegram MVP command layer:
   `/start`, `/menu`, `/help`, `/status`, `/today`, `/reviews`,
   `/approvals`, `/catalog`, `/runs`, `/elastic`, `/ozon-actions`,
-  `/wb-actions`, `/ozon-inbox`, `/wb-inbox`; `/start` и `/menu` показывают
-  первый экран reply-клавиатуры: `Статус`, `Помощь`,
+  `/wb-actions`, `/wb-analytics`, `/ozon-inbox`, `/wb-inbox`; `/start` и
+  `/menu` показывают первый экран reply-клавиатуры: `Статус`, `Помощь`,
   `Общий вчерашний отчет`, `Озон`, `Вайлдберриз`;
   `/catalog` показывает последний
   `catalog-build-unified`, `/catalog <запрос>` ищет карточку товара в unified
@@ -230,6 +240,10 @@
   отзывы и вопросы через Feedbacks API, а WB новости/уведомления читает
   read-only из ЛК `news-v2` через `scripts/notifications/wb_news_readonly.js`;
   mark-read для WB уведомлений пока не выполняется.
+- `/wb-analytics` - Telegram-команда WB parser warehouse analytics: строит
+  свежий read-only отчет по видимости, позициям, daily changes, seller changes
+  и слабым кандидатам с остатком через Parser Data API. Изменений в WB не
+  выполняет.
 - `src/seller_agent/tasks/telegram_report_sender.py` - maintenance helper
   `send-telegram-report`: отправляет owner-facing summary и безопасно
   прикрепляет сохраненный report-файл из `data/runs`/`data/reports`; блокирует

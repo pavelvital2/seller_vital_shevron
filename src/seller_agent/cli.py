@@ -81,6 +81,7 @@ from seller_agent.tasks.wb_actions_discount_apply import run_wb_actions_discount
 from seller_agent.tasks.wb_actions_discount_plan import run_wb_actions_discount_plan
 from seller_agent.tasks.wb_card_create_apply import run_wb_card_create_apply
 from seller_agent.tasks.wb_card_create_plan import run_wb_card_create_plan
+from seller_agent.tasks.wb_parser_warehouse_analytics import run_wb_parser_warehouse_analytics
 from seller_agent.tasks.wb_promotion_bid_plan import WbPromotionBidThresholds, run_wb_promotion_bid_plan
 from seller_agent.tasks.wb_promotion_bids_apply import run_wb_promotion_bids_apply
 from seller_agent.tasks.wb_promotion_report import run_wb_promotion_report
@@ -1253,6 +1254,30 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("cpc", "cpm"),
         default=None,
         help="Optional campaign payment type filter.",
+    )
+
+    wb_parser_warehouse = subparsers.add_parser(
+        "wb-parser-warehouse-analytics",
+        help="Build read-only WB parser warehouse visibility analytics from Parser Data API.",
+    )
+    wb_parser_warehouse.add_argument("--data-dir", default="data", help="Project data directory.")
+    wb_parser_warehouse.add_argument("--run-id", default=None, help="Optional stable run id.")
+    wb_parser_warehouse.add_argument(
+        "--supplier-id",
+        default="4516781",
+        help="WB supplier_id to treat as Vital Shevron. Defaults to 4516781.",
+    )
+    wb_parser_warehouse.add_argument(
+        "--limit",
+        type=int,
+        default=500,
+        help="Maximum rows to request from each Parser Data API endpoint. Parser API currently allows up to 500.",
+    )
+    wb_parser_warehouse.add_argument(
+        "--report-limit",
+        type=int,
+        default=50,
+        help="Maximum derived candidate rows shown in report sections.",
     )
 
     wb_promotion_bid_plan = subparsers.add_parser(
@@ -2639,6 +2664,17 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
+
+    if args.command == "wb-parser-warehouse-analytics":
+        result = run_wb_parser_warehouse_analytics(
+            data_dir=Path(args.data_dir),
+            run_id=args.run_id,
+            supplier_id=args.supplier_id,
+            limit=args.limit,
+            report_limit=args.report_limit,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
 
     if args.command == "plan-wb-promotion-bids":
         result = run_wb_promotion_bid_plan(

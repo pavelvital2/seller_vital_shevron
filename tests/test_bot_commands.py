@@ -83,6 +83,78 @@ def test_bot_marketplace_buttons_show_submenus() -> None:
     assert wb.ok is True
     assert wb.command == "/wb"
     assert wb.reply_markup["keyboard"][0][0]["text"] == "WB акции"
+    assert wb.reply_markup["keyboard"][1][0]["text"] == "WB аналитика"
+
+
+def test_bot_wb_analytics_builds_fresh_report(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from seller_agent.bot import commands
+    from seller_agent.core.workflow_runner import WorkflowRunResult
+
+    calls: list[dict] = []
+    summary = {
+        "run_id": "wb_parser_warehouse_analytics_test",
+        "overall_status": "ok",
+        "source": {
+            "min_run_date": "2026-06-12",
+            "max_run_date": "2026-07-04",
+            "built_at_utc": "2026-07-05T06:07:13+00:00",
+        },
+        "metrics": {
+            "visible_rows": 100,
+            "unique_products": 50,
+            "unique_queries": 20,
+            "best_position": 12,
+            "top10_rows": 2,
+            "top30_rows": 8,
+            "top100_rows": 30,
+            "stock_visible_rows": 90,
+            "zero_stock_visible_rows": 10,
+            "daily_change_rows": 40,
+            "improved_rows": 5,
+            "declined_rows": 7,
+            "missing_rows": 3,
+            "weak_visible_candidates": 11,
+        },
+        "run_quality": {"latest_status": "success"},
+        "artifacts": {
+            "report": str(tmp_path / "report.md"),
+            "weak_candidates_csv": str(tmp_path / "weak.csv"),
+            "summary": str(tmp_path / "summary.json"),
+        },
+    }
+
+    class FakeWorkflowRunner:
+        def __init__(self, **kwargs: object) -> None:
+            calls.append({"init": kwargs})
+
+        def run_read_only(self, task_name: str, *, inputs: dict | None = None) -> WorkflowRunResult:
+            calls.append({"task_name": task_name, "inputs": inputs})
+            return WorkflowRunResult(
+                task="wb-parser-warehouse-analytics",
+                command="wb-parser-warehouse-analytics",
+                title="WB parser warehouse analytics",
+                ok=True,
+                status="ok",
+                mode="read_only",
+                risk="low",
+                summary=summary,
+                artifacts=summary["artifacts"],
+            )
+
+    monkeypatch.setattr(commands, "WorkflowRunner", FakeWorkflowRunner)
+
+    result = dispatch_message("WB аналитика", data_dir=tmp_path)
+
+    assert result.ok is True
+    assert result.command == "/wb-analytics"
+    assert "свежая read-only аналитика построена" in result.text
+    assert "товаров в выдаче: `50`" in result.text
+    assert "кандидатов с остатком вне top-30: `11`" in result.text
+    assert result.artifacts["report"].endswith("report.md")
+    assert calls[1]["task_name"] == "wb-parser-warehouse-analytics"
 
 
 def test_bot_status_uses_latest_run_manifest(tmp_path: Path) -> None:

@@ -38,6 +38,7 @@ SUPPORTED_COMMANDS = {
     "/ozon-actions",
     "/ozon",
     "/wb",
+    "/wb-analytics",
     "/wb-inbox",
     "/approvals",
     "/catalog",
@@ -58,6 +59,7 @@ TELEGRAM_TITLES = {
     "/ozon-actions": "Ozon все акции",
     "/start": "Главное меню",
     "/wb": "Wildberries",
+    "/wb-analytics": "WB аналитика",
     "/wb-inbox": "WB входящие",
     "/runs": "Запуски",
     "/status": "Статус проекта",
@@ -105,6 +107,8 @@ def handle_telegram_command(
         return _ozon_actions_plan(data_dir=data_dir, credentials=credentials)
     if command in {"/wb-actions", "/wb_actions", "/wb-actions-70-55-55"}:
         return _wb_actions_plan(data_dir=data_dir, credentials=credentials)
+    if command in {"/wb-analytics", "/wb_analytics"}:
+        return _wb_analytics(data_dir=data_dir, credentials=credentials)
     if command in {"/ozon-inbox", "/ozon_inbox"}:
         return _ozon_inbox_plan(data_dir=data_dir, credentials=credentials)
     if command in {"/wb-inbox", "/wb_inbox"}:
@@ -231,6 +235,7 @@ OZON_MENU_KEYBOARD: dict[str, Any] = {
 WB_MENU_KEYBOARD: dict[str, Any] = {
     "keyboard": [
         [{"text": "WB акции"}],
+        [{"text": "WB аналитика"}],
         [{"text": "WB входящие"}],
         [{"text": "Назад"}],
     ],
@@ -280,6 +285,7 @@ def _wb_menu() -> TelegramCommandResult:
             "Wildberries\n\n"
             "Итог: выбери операцию Wildberries.\n\n"
             "- WB акции - акции и скидки по схеме 70-55-55.\n"
+            "- WB аналитика - видимость, позиции и динамика из Parser Data API.\n"
             "- WB входящие - отзывы, вопросы и уведомления."
         ),
         reply_markup=WB_MENU_KEYBOARD,
@@ -315,6 +321,7 @@ def _help() -> TelegramCommandResult:
             "- Кнопка применения Ozon всех акций запускает отдельный apply-контур только по конкретному `plan_run_id`.",
             "- `/wb-actions` строит свежий dry-run WB акций по схеме 70-55-55 и показывает кнопку применения.",
             "- Кнопка применения WB акций запускает apply только по конкретному показанному `plan_run_id`.",
+            "- `/wb-analytics` строит свежую read-only аналитику WB по Parser Data API warehouse.",
             "- `/ozon-inbox` собирает свежие Ozon отзывы/вопросы/чаты/уведомления и показывает кнопку применения согласованного пакета.",
             "- `/wb-inbox` собирает свежие WB отзывы/вопросы и read-only новости/уведомления WB из ЛК `news-v2`.",
             "- Остальные команды показывают последние runtime-данные и статусы.",
@@ -326,6 +333,47 @@ def _help() -> TelegramCommandResult:
         ok=True,
         text="\n".join(lines),
         reply_markup=MAIN_MENU_KEYBOARD,
+    )
+
+
+def _wb_analytics(
+    *,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+) -> TelegramCommandResult:
+    result = WorkflowRunner(data_dir=data_dir, credentials=credentials).run_read_only(
+        "wb-parser-warehouse-analytics",
+        inputs={"supplier_id": "4516781", "limit": 500, "report_limit": 50},
+    )
+    if result.blocked_reason == "workflow_busy":
+        return TelegramCommandResult(
+            command="/wb-analytics",
+            ok=False,
+            blocked_reason="wb_analytics_busy",
+            text=(
+                "WB аналитика\n\n"
+                "Итог: свежая аналитика WB уже собирается другим процессом.\n\n"
+                f"Причина: `{result.error}`\n\n"
+                "Изменений в WB не выполнял."
+            ),
+        )
+    if not result.ok:
+        return TelegramCommandResult(
+            command="/wb-analytics",
+            ok=False,
+            blocked_reason=result.blocked_reason or "wb_analytics_failed",
+            text=(
+                "WB аналитика\n\n"
+                "Итог: свежую read-only аналитику WB не удалось построить.\n\n"
+                f"Причина: `{result.error or result.status}`\n\n"
+                "Изменений в WB не выполнял."
+            ),
+        )
+    return TelegramCommandResult(
+        command="/wb-analytics",
+        ok=True,
+        text=_wb_analytics_chat_text(result.summary),
+        artifacts=result.artifacts,
     )
 
 
@@ -1302,6 +1350,54 @@ def _daily_report_chat_text(result: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _wb_analytics_chat_text(result: dict[str, Any]) -> str:
+    source = _dict_value(result, "source")
+    metrics = _dict_value(result, "metrics")
+    quality = _dict_value(result, "run_quality")
+    lines = [
+        "WB аналитика",
+        "",
+        f"Итог: свежая read-only аналитика построена, статус `{result.get('overall_status') or 'н/д'}`.",
+        f"Run ID: `{result.get('run_id') or 'н/д'}`",
+        f"Период parser warehouse: `{source.get('min_run_date') or 'н/д'}` - `{source.get('max_run_date') or 'н/д'}`.",
+        f"Сборка UTC: `{source.get('built_at_utc') or 'н/д'}`.",
+        "",
+        "Видимость Vital Shevron:",
+        f"- строк видимости: `{_int(metrics.get('visible_rows'))}`",
+        f"- товаров в выдаче: `{_int(metrics.get('unique_products'))}`",
+        f"- запросов с нашими товарами: `{_int(metrics.get('unique_queries'))}`",
+        f"- лучшая позиция: `{_int(metrics.get('best_position'))}`",
+        f"- top-10 / top-30 / top-100: `{_int(metrics.get('top10_rows'))}` / `{_int(metrics.get('top30_rows'))}` / `{_int(metrics.get('top100_rows'))}`",
+        f"- видимых строк с остатком: `{_int(metrics.get('stock_visible_rows'))}`",
+        f"- видимых строк без остатка: `{_int(metrics.get('zero_stock_visible_rows'))}`",
+        "",
+        "Динамика:",
+        f"- daily changes строк: `{_int(metrics.get('daily_change_rows'))}`",
+        f"- улучшений / ухудшений: `{_int(metrics.get('improved_rows'))}` / `{_int(metrics.get('declined_rows'))}`",
+        f"- выпало из выдачи: `{_int(metrics.get('missing_rows'))}`",
+        f"- кандидатов с остатком вне top-30: `{_int(metrics.get('weak_visible_candidates'))}`",
+        "",
+        "Качество данных:",
+        f"- latest run quality: `{quality.get('latest_status') or 'н/д'}`",
+        "",
+        "Что дальше:",
+        "- использовать кандидатов с остатком вне top-30 для очереди SEO/карточек;",
+        "- соединять parser-видимость с продажами, остатками, акциями и ставками;",
+        "- не трактовать позиции parser как продажи.",
+    ]
+    artifacts = _safe_artifacts(result)
+    if artifacts:
+        lines.extend(["", "Файлы:"])
+        if artifacts.get("report"):
+            lines.append(f"- отчет: `{artifacts['report']}`")
+        if artifacts.get("weak_candidates_csv"):
+            lines.append(f"- кандидаты SEO: `{artifacts['weak_candidates_csv']}`")
+        if artifacts.get("summary"):
+            lines.append(f"- summary: `{artifacts['summary']}`")
+    lines.extend(["", "Изменений в WB не выполнял."])
+    return "\n".join(lines)
+
+
 def _status_preflight_chat_text(result: dict[str, Any]) -> str:
     checks = result.get("checks") if isinstance(result.get("checks"), dict) else {}
     status_counts = _check_status_counts(checks)
@@ -2162,6 +2258,9 @@ def _normalize_button_command(command: str) -> str:
         "wb акции": "/wb-actions",
         "вб акции": "/wb-actions",
         "wildberries акции": "/wb-actions",
+        "wb аналитика": "/wb-analytics",
+        "вб аналитика": "/wb-analytics",
+        "wildberries аналитика": "/wb-analytics",
         "wb входящие": "/wb-inbox",
         "вб входящие": "/wb-inbox",
         "wildberries входящие": "/wb-inbox",
