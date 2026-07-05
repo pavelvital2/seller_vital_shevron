@@ -217,8 +217,9 @@
   `wb-inbox`, `apply-wb-inbox`. Ozon route объединяет отзывы/вопросы,
   Messenger и уведомления, использует `/v3/chat/list`, `/v3/chat/history`,
   CDP fallback отправки сообщений и `/v2/chat/read`; WB route объединяет
-  отзывы и вопросы через Feedbacks API, а WB уведомления пока явно
-  маркирует как `not_implemented`.
+  отзывы и вопросы через Feedbacks API, а WB новости/уведомления читает
+  read-only из ЛК `news-v2` через `scripts/notifications/wb_news_readonly.js`;
+  mark-read для WB уведомлений пока не выполняется.
 - `src/seller_agent/tasks/telegram_report_sender.py` - maintenance helper
   `send-telegram-report`: отправляет owner-facing summary и безопасно
   прикрепляет сохраненный report-файл из `data/runs`/`data/reports`; блокирует

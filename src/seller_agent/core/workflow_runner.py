@@ -8,6 +8,7 @@ from typing import Any, Callable
 from seller_agent.config import AppCredentials, load_credentials
 from seller_agent.tasks.approved_cards_apply import run_apply_approved_cards
 from seller_agent.tasks.daily_morning_report import run_daily_morning_report
+from seller_agent.tasks.inbox_workflow import run_ozon_inbox_apply, run_wb_inbox_apply
 from seller_agent.tasks.pricing_status import run_pricing_status
 from seller_agent.tasks.registry import RegisteredTask, TaskRegistry, default_task_registry
 from seller_agent.tasks.status_preflight import run_status_preflight
@@ -190,6 +191,8 @@ def default_workflow_handlers() -> dict[str, WorkflowHandler]:
         "pricing-status": _pricing_status_handler,
         "status-preflight": _status_preflight_handler,
         "approved-cards-batch-apply": _approved_cards_batch_apply_handler,
+        "ozon-inbox-apply": _ozon_inbox_apply_handler,
+        "wb-inbox-apply": _wb_inbox_apply_handler,
     }
 
 
@@ -277,6 +280,44 @@ def _approved_cards_batch_apply_handler(
         ozon_create_allow_manual_review=_bool_input(inputs, "ozon_create_allow_manual_review", False),
         ozon_create_wait_seconds=int(inputs.get("ozon_create_wait_seconds") or 300),
         ozon_create_poll_interval=int(inputs.get("ozon_create_poll_interval") or 10),
+    )
+
+
+def _ozon_inbox_apply_handler(
+    task: RegisteredTask,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    if credentials is None:
+        raise ValueError(f"Task `{task.name}` requires credentials.")
+    source_run_id = _optional_str(inputs.get("source_run_id")) or ""
+    if not source_run_id:
+        raise ValueError("ozon-inbox-apply requires source_run_id.")
+    return run_ozon_inbox_apply(
+        credentials=credentials,
+        data_dir=data_dir,
+        source_run_id=source_run_id,
+        confirmed_by_user=_bool_input(inputs, "confirmed_by_user", False),
+    )
+
+
+def _wb_inbox_apply_handler(
+    task: RegisteredTask,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    if credentials is None:
+        raise ValueError(f"Task `{task.name}` requires credentials.")
+    source_run_id = _optional_str(inputs.get("source_run_id")) or ""
+    if not source_run_id:
+        raise ValueError("wb-inbox-apply requires source_run_id.")
+    return run_wb_inbox_apply(
+        credentials=credentials,
+        data_dir=data_dir,
+        source_run_id=source_run_id,
+        confirmed_by_user=_bool_input(inputs, "confirmed_by_user", False),
     )
 
 

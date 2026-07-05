@@ -102,7 +102,7 @@ class JobService:
                 job_id,
                 final_status,
                 result=result_data,
-                message=f"Read-only workflow finished with status `{result.status}`.",
+                message=f"Workflow finished with status `{result.status}`.",
             )
             return JobServiceResult(job=final, ok=True, status=result.status)
 
@@ -111,7 +111,7 @@ class JobService:
             "failed",
             result=result_data,
             error=result.error or result.blocked_reason or "workflow_failed",
-            message=f"Read-only workflow failed with status `{result.status}`.",
+            message=f"Workflow failed with status `{result.status}`.",
         )
         return JobServiceResult(job=final, ok=False, status=result.status, message=final.error)
 

@@ -252,6 +252,49 @@ def _collect_ozon_messenger_actions(
     }
 
 
+def _collect_wb_notifications(*, run_dir: Path, limit: int) -> dict[str, Any]:
+    raw_dir = ensure_dir(run_dir / "raw" / "wb_notifications")
+    output_path = raw_dir / "wb_news_v2.json"
+    script = PROJECT_ROOT / "scripts" / "notifications" / "wb_news_readonly.js"
+    completed = subprocess.run(
+        ["node", str(script), "--out", str(output_path), "--limit", str(min(max(limit, 1), 100))],
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=180,
+        check=False,
+    )
+    data = _safe_read_json(output_path)
+    if not isinstance(data, dict):
+        return {
+            "status": "error",
+            "source": "WB LK news-v2 read-only",
+            "items": [],
+            "important_items": [],
+            "raw_path": str(output_path),
+            "error": (completed.stderr or completed.stdout or "WB notifications script did not produce JSON").strip()[:800],
+        }
+    items = data.get("items") if isinstance(data.get("items"), list) else []
+    normalized_items = [item for item in items if isinstance(item, dict)]
+    important = [
+        item
+        for item in normalized_items
+        if IMPORTANT_NOTIFICATION_RE.search(f"{item.get('title') or ''} {item.get('text') or ''}")
+    ]
+    return {
+        "status": data.get("status") or ("ok" if completed.returncode == 0 else "error"),
+        "source": "WB LK news-v2 read-only",
+        "url": data.get("url") or "https://seller.wildberries.ru/news-v2",
+        "checked_at": data.get("checkedAt") or "",
+        "items_count": len(normalized_items),
+        "important_count": len(important),
+        "items": normalized_items[: min(max(limit, 1), 100)],
+        "important_items": important[: min(max(limit, 1), 100)],
+        "raw_path": str(output_path),
+        "blocker": data.get("blocker") or "",
+    }
+
+
 def _write_inbox_pending(
     *,
     data_dir: Path,
@@ -292,6 +335,84 @@ def _reviews_counts(summary: dict[str, Any]) -> dict[str, int]:
     return {key: int(value) for key, value in counts.items()}
 
 
+def _review_actions(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    actions_path = ((summary.get("artifacts") or {}).get("actions") if isinstance(summary.get("artifacts"), dict) else None)
+    actions_data = _safe_read_json(Path(actions_path)) if actions_path else None
+    actions = actions_data.get("actions") if isinstance(actions_data, dict) and isinstance(actions_data.get("actions"), list) else []
+    return [action for action in actions if isinstance(action, dict)]
+
+
+def _product_rating_rows(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, str, str, str, str], dict[str, Any]] = {}
+    for action in _review_actions(summary):
+        if action.get("source_type") != "review":
+            continue
+        rating = str(action.get("rating") or "н/д").strip() or "н/д"
+        platform = str(action.get("platform") or "").strip()
+        offer_id = str(action.get("offer_id") or "").strip()
+        sku = str(action.get("sku") or "").strip()
+        title = str(action.get("product_title") or "без названия").strip()
+        key = (platform, offer_id, sku, title, rating)
+        if key not in grouped:
+            grouped[key] = {
+                "platform": platform,
+                "offer_id": offer_id,
+                "sku": sku,
+                "product_title": title,
+                "rating": rating,
+                "count": 0,
+                "action_counts": {},
+            }
+        row = grouped[key]
+        row["count"] = int(row["count"]) + 1
+        action_type = str(action.get("action_type") or "unknown")
+        row["action_counts"][action_type] = int(row["action_counts"].get(action_type, 0)) + 1
+    return sorted(
+        grouped.values(),
+        key=lambda row: (
+            _rating_sort_key(str(row.get("rating") or "н/д")),
+            str(row.get("platform") or ""),
+            str(row.get("offer_id") or row.get("sku") or ""),
+        ),
+    )
+
+
+def _low_rating_product_rows_count(rows: list[dict[str, Any]]) -> int:
+    count = 0
+    for row in rows:
+        try:
+            rating = int(float(str(row.get("rating") or "")))
+        except ValueError:
+            continue
+        if rating <= 3:
+            count += int(row.get("count") or 0)
+    return count
+
+
+def _rating_sort_key(value: str) -> tuple[int, str]:
+    try:
+        return (int(float(value)), value)
+    except ValueError:
+        return (-1, value)
+
+
+def _format_product_rating_rows(rows: list[dict[str, Any]]) -> list[str]:
+    if not rows:
+        return ["- оценок по товарам нет"]
+    lines: list[str] = []
+    for index, row in enumerate(rows[:100], 1):
+        actions = row.get("action_counts") if isinstance(row.get("action_counts"), dict) else {}
+        action_text = ", ".join(f"{key}: {value}" for key, value in sorted(actions.items())) or "н/д"
+        product_id = row.get("offer_id") or row.get("sku") or "без артикула"
+        lines.append(
+            f"{index}. `{row.get('platform') or 'н/д'}` / `{product_id}` / оценка `{row.get('rating') or 'н/д'}` "
+            f"/ отзывов `{row.get('count') or 0}` - {row.get('product_title') or 'без названия'}; действия: {action_text}"
+        )
+    if len(rows) > 100:
+        lines.append(f"- ... еще `{len(rows) - 100}` строк")
+    return lines
+
+
 def _build_ozon_report(
     *,
     run_id: str,
@@ -300,6 +421,7 @@ def _build_ozon_report(
     artifacts: dict[str, str],
 ) -> str:
     review_counts = _reviews_counts(reviews_summary)
+    product_rating_rows = _product_rating_rows(reviews_summary)
     messenger_actions = messenger_summary.get("actions") if isinstance(messenger_summary.get("actions"), list) else []
     messenger_counts = Counter(str(action.get("action_type") or "") for action in messenger_actions if isinstance(action, dict))
     important = [
@@ -322,6 +444,8 @@ def _build_ozon_report(
         f"- отзывы/вопросы требуют действий: `{reviews_summary.get('actions_count') or 0}`",
         f"- публичные ответы на отзывы: `{review_counts.get('public_review_reply', 0)}`",
         f"- отметить отзывы просмотренными: `{review_counts.get('mark_review_viewed', 0)}`",
+        f"- оценок по конкретным товарам: `{sum(int(row.get('count') or 0) for row in product_rating_rows)}`",
+        f"- низких оценок 1-3 по товарам: `{_low_rating_product_rows_count(product_rating_rows)}`",
         f"- Ozon Messenger действий: `{len(messenger_actions)}`",
         f"- покупательские ответы: `{messenger_counts.get('send_chat_message', 0)}`",
         f"- уведомления отметить прочитанными: `{messenger_counts.get('mark_chat_read', 0)}`",
@@ -340,6 +464,8 @@ def _build_ozon_report(
                 f"   Черновик: {action.get('draft_reply')}",
             ]
         )
+    lines.extend(["", "## Оценки по конкретным товарам", ""])
+    lines.extend(_format_product_rating_rows(product_rating_rows))
     lines.extend(["", "## Важные уведомления Ozon", ""])
     if not important:
         lines.append("- важных уведомлений не найдено")
@@ -360,6 +486,9 @@ def _build_wb_report(
     artifacts: dict[str, str],
 ) -> str:
     review_counts = _reviews_counts(reviews_summary)
+    product_rating_rows = _product_rating_rows(reviews_summary)
+    notification_items = wb_notifications.get("items") if isinstance(wb_notifications.get("items"), list) else []
+    important_items = wb_notifications.get("important_items") if isinstance(wb_notifications.get("important_items"), list) else []
     lines = [
         "# WB inbox: отзывы, вопросы и уведомления",
         "",
@@ -373,17 +502,37 @@ def _build_wb_report(
         f"- публичные ответы на отзывы: `{review_counts.get('public_review_reply', 0)}`",
         f"- ответы на вопросы WB: `{review_counts.get('question_answer', 0)}`",
         f"- вопросы на ручную проверку: `{review_counts.get('manual_question_review', 0)}`",
+        f"- оценок по конкретным товарам: `{sum(int(row.get('count') or 0) for row in product_rating_rows)}`",
+        f"- низких оценок 1-3 по товарам: `{_low_rating_product_rows_count(product_rating_rows)}`",
         f"- WB уведомления: `{wb_notifications.get('status') or 'н/д'}`",
+        f"- WB новости/уведомления прочитано: `{len(notification_items)}`",
+        f"- важных WB новостей/уведомлений: `{len(important_items)}`",
+        "",
+        "## Оценки по конкретным товарам",
+        "",
+        *_format_product_rating_rows(product_rating_rows),
         "",
         "## WB уведомления",
         "",
-        "- отдельный подтвержденный маршрут чтения уведомлений WB в проекте пока не реализован;",
-        "- WB отзывы и WB вопросы уже входят в эту кнопку через официальный Feedbacks API;",
-        "- для уведомлений нужен отдельный doc-review/API-or-LK маршрут, затем подключение в этот workflow.",
+        f"Источник: `{wb_notifications.get('source') or 'н/д'}`",
+        f"URL: `{wb_notifications.get('url') or 'н/д'}`",
         "",
-        "## Артефакты",
+        "### Важные",
         "",
     ]
+    if not important_items:
+        lines.append("- важных WB новостей/уведомлений не найдено")
+    for index, item in enumerate(important_items[:20], 1):
+        lines.append(f"{index}. {item.get('date') or 'без даты'} - {item.get('title') or 'без заголовка'} ({item.get('href') or 'без ссылки'})")
+    lines.extend(["", "### Последние новости/уведомления", ""])
+    if not notification_items:
+        lines.append(
+            f"- нет данных; статус `{wb_notifications.get('status') or 'н/д'}`, "
+            f"причина: {wb_notifications.get('blocker') or wb_notifications.get('error') or 'не указана'}"
+        )
+    for index, item in enumerate(notification_items[:20], 1):
+        lines.append(f"{index}. {item.get('date') or 'без даты'} - {item.get('title') or 'без заголовка'} ({item.get('href') or 'без ссылки'})")
+    lines.extend(["", "## Артефакты", ""])
     for key, value in sorted(artifacts.items()):
         lines.append(f"- `{key}`: `{value}`")
     lines.append("")
@@ -425,6 +574,7 @@ def run_ozon_inbox_triage(
             messenger_actions=messenger.get("actions") if isinstance(messenger.get("actions"), list) else [],
         )
     )
+    product_rating_rows = _product_rating_rows(reviews)
     report_text = _build_ozon_report(run_id=run_id, reviews_summary=reviews, messenger_summary=messenger, artifacts=artifacts)
     report_path = run_dir / "ozon_inbox_approval.md"
     report_path.write_text(report_text, encoding="utf-8")
@@ -440,6 +590,8 @@ def run_ozon_inbox_triage(
         "pending_id": f"{run_id}_pending",
         "reviews": reviews,
         "messenger": {k: v for k, v in messenger.items() if k != "actions"},
+        "product_rating_rows_count": sum(int(row.get("count") or 0) for row in product_rating_rows),
+        "low_rating_product_rows_count": _low_rating_product_rows_count(product_rating_rows),
         "actions_count": actions_count,
         "artifacts": artifacts,
     }
@@ -477,15 +629,12 @@ def run_wb_inbox_triage(
         marketplace="wb",
         limit=limit,
     )
-    wb_notifications = {
-        "status": "not_implemented",
-        "source": "WB notifications",
-        "reason": "В проекте нет подтвержденного API/LK маршрута для WB уведомлений.",
-    }
+    wb_notifications = _collect_wb_notifications(run_dir=run_dir, limit=limit)
     artifacts: dict[str, str] = {
         "run_dir": str(run_dir),
         "reviews_report": str((reviews.get("artifacts") or {}).get("report") or ""),
         "reviews_summary": str((reviews.get("artifacts") or {}).get("summary") or ""),
+        "wb_notifications_raw": str(wb_notifications.get("raw_path") or ""),
         "run_manifest": str(run_dir / "manifest.json"),
     }
     artifacts.update(
@@ -497,6 +646,7 @@ def run_wb_inbox_triage(
             wb_notifications=wb_notifications,
         )
     )
+    product_rating_rows = _product_rating_rows(reviews)
     report_text = _build_wb_report(run_id=run_id, reviews_summary=reviews, wb_notifications=wb_notifications, artifacts=artifacts)
     report_path = run_dir / "wb_inbox_approval.md"
     report_path.write_text(report_text, encoding="utf-8")
@@ -504,12 +654,14 @@ def run_wb_inbox_triage(
     summary = {
         "run_id": run_id,
         "started_at": started_at.isoformat(timespec="seconds"),
-        "overall_status": "warning" if wb_notifications["status"] == "not_implemented" else "ok",
+        "overall_status": "ok" if reviews.get("overall_status") in {"ok", "warning"} and wb_notifications.get("status") == "ok" else "warning",
         "mode": "dry_run",
         "marketplace": "wb",
         "pending_id": f"{run_id}_pending",
         "reviews": reviews,
         "wb_notifications": wb_notifications,
+        "product_rating_rows_count": sum(int(row.get("count") or 0) for row in product_rating_rows),
+        "low_rating_product_rows_count": _low_rating_product_rows_count(product_rating_rows),
         "actions_count": int(reviews.get("actions_count") or 0),
         "artifacts": artifacts,
     }

@@ -15,9 +15,7 @@ from seller_agent.tasks.ozon_elastic_apply import run_ozon_elastic_apply
 from seller_agent.tasks.ozon_elastic_plan import run_ozon_elastic_plan
 from seller_agent.tasks.approvals import run_approvals_status
 from seller_agent.tasks.inbox_workflow import (
-    run_ozon_inbox_apply,
     run_ozon_inbox_triage,
-    run_wb_inbox_apply,
     run_wb_inbox_triage,
 )
 from seller_agent.tasks.registry import default_task_registry
@@ -214,7 +212,7 @@ def _help() -> TelegramCommandResult:
             "- `/wb-actions` строит свежий dry-run WB акций по схеме 70-55-55 и показывает кнопку применения.",
             "- Кнопка применения WB акций запускает apply только по конкретному показанному `plan_run_id`.",
             "- `/ozon-inbox` собирает свежие Ozon отзывы/вопросы/чаты/уведомления и показывает кнопку применения согласованного пакета.",
-            "- `/wb-inbox` собирает свежие WB отзывы/вопросы; WB уведомления показываются отдельным неподключенным источником до реализации маршрута.",
+            "- `/wb-inbox` собирает свежие WB отзывы/вопросы и read-only новости/уведомления WB из ЛК `news-v2`.",
             "- Остальные команды показывают последние runtime-данные и статусы.",
             "- Другие изменения в Ozon/WB через Telegram не выполняются.",
         ]
@@ -259,6 +257,8 @@ def _ozon_inbox_plan(
         "",
         "Сводка:",
         f"- отзывы/вопросы к действию: `{_int(reviews.get('actions_count'))}`",
+        f"- оценок по конкретным товарам: `{_int(result.get('product_rating_rows_count'))}`",
+        f"- низких оценок 1-3 по товарам: `{_int(result.get('low_rating_product_rows_count'))}`",
         f"- Messenger/уведомления к действию: `{sum(messenger_counts.values())}`",
         f"- ответы покупателям в чатах: `{_int(messenger_counts.get('send_chat_message'))}`",
         f"- уведомления отметить прочитанными: `{_int(messenger_counts.get('mark_chat_read'))}`",
@@ -322,6 +322,8 @@ def _wb_inbox_plan(
 
     reviews = result.get("reviews") if isinstance(result.get("reviews"), dict) else {}
     notifications = result.get("wb_notifications") if isinstance(result.get("wb_notifications"), dict) else {}
+    notification_items = notifications.get("items") if isinstance(notifications.get("items"), list) else []
+    important_items = notifications.get("important_items") if isinstance(notifications.get("important_items"), list) else []
     run_id = str(result.get("run_id") or "")
     actions_count = int(result.get("actions_count") or 0)
     lines = [
@@ -332,11 +334,15 @@ def _wb_inbox_plan(
         "",
         "Сводка:",
         f"- WB отзывы/вопросы к действию: `{_int(reviews.get('actions_count'))}`",
+        f"- оценок по конкретным товарам: `{_int(result.get('product_rating_rows_count'))}`",
+        f"- низких оценок 1-3 по товарам: `{_int(result.get('low_rating_product_rows_count'))}`",
         f"- WB уведомления: `{notifications.get('status') or 'н/д'}`",
+        f"- WB новости/уведомления прочитано: `{len(notification_items)}`",
+        f"- важных WB новостей/уведомлений: `{len(important_items)}`",
         "",
         "Важно:",
         "- WB вопросы входят в этот пакет через официальный Feedbacks API.",
-        "- WB уведомления отдельно показаны как неподключенный источник; изменений по ним бот не делает.",
+        "- WB новости/уведомления читаются из ЛК `news-v2` в read-only режиме; mark-read для WB уведомлений бот пока не делает.",
         "",
         "Что дальше:",
     ]
@@ -389,11 +395,11 @@ def _ozon_inbox_apply(
             ),
         )
     try:
-        result = run_ozon_inbox_apply(
-            credentials=credentials or load_credentials(),
-            data_dir=data_dir,
+        result = _run_inbox_apply_job(
+            task_id="ozon-inbox-apply",
             source_run_id=source_run_id,
-            confirmed_by_user=True,
+            data_dir=data_dir,
+            credentials=credentials,
         )
     except Exception as exc:  # noqa: BLE001
         return TelegramCommandResult(
@@ -432,11 +438,11 @@ def _wb_inbox_apply(
             ),
         )
     try:
-        result = run_wb_inbox_apply(
-            credentials=credentials or load_credentials(),
-            data_dir=data_dir,
+        result = _run_inbox_apply_job(
+            task_id="wb-inbox-apply",
             source_run_id=source_run_id,
-            confirmed_by_user=True,
+            data_dir=data_dir,
+            credentials=credentials,
         )
     except Exception as exc:  # noqa: BLE001
         return TelegramCommandResult(
@@ -1603,6 +1609,32 @@ def _valid_inbox_run_id(value: str, *, prefix: str) -> bool:
     return all(char.isalnum() or char in {"_", "-"} for char in text)
 
 
+def _run_inbox_apply_job(
+    *,
+    task_id: str,
+    source_run_id: str,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+) -> dict[str, Any]:
+    service = JobService(
+        data_dir=data_dir,
+        workflow_runner=WorkflowRunner(data_dir=data_dir, credentials=credentials),
+    )
+    job = service.submit(
+        task_id=task_id,
+        params={"source_run_id": source_run_id, "confirmed_by_user": True},
+        actor="telegram_owner",
+        source="telegram_callback",
+    )
+    job_result = service.run(job.job_id)
+    workflow_result = job_result.job.result if isinstance(job_result.job.result, dict) else {}
+    summary = workflow_result.get("summary") if isinstance(workflow_result.get("summary"), dict) else {}
+    if job_result.ok and summary:
+        return {**summary, "job_id": job.job_id, "job_status": job_result.job.status}
+    error = job_result.message or job_result.job.error or workflow_result.get("error") or workflow_result.get("blocked_reason")
+    raise RuntimeError(f"job `{job.job_id}` failed: {error or job_result.status}")
+
+
 def _inbox_apply_result_text(*, command: str, title: str, result: dict[str, Any]) -> TelegramCommandResult:
     reviews = result.get("reviews") if isinstance(result.get("reviews"), dict) else {}
     review_apply = reviews.get("apply") if isinstance(reviews.get("apply"), dict) else {}
@@ -1613,6 +1645,7 @@ def _inbox_apply_result_text(*, command: str, title: str, result: dict[str, Any]
         title,
         "",
         f"Итог: apply завершен со статусом `{result.get('overall_status') or 'н/д'}`.",
+        f"Job ID: `{result.get('job_id') or 'н/д'}`",
         f"Run ID: `{result.get('run_id') or 'н/д'}`",
         "",
         "Применено:",

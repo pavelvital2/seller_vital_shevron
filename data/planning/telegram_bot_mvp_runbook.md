@@ -232,9 +232,9 @@ summary и безопасный report-файл.
   действий показывает inline-кнопку `Применить Ozon входящие`.
 - `/wb-inbox` - строит свежий dry-run по WB отзывам и WB вопросам,
   прикрепляет report-файл и при наличии действий показывает inline-кнопку
-  `Применить WB входящие`. WB уведомления в отчете показываются отдельным
-  источником со статусом `not_implemented`, пока для них не реализован
-  подтвержденный API/LK маршрут.
+  `Применить WB входящие`. WB новости/уведомления читаются read-only из ЛК
+  `news-v2`; отчет показывает общее количество прочитанных новостей и
+  выделяет важные. Mark-read для WB уведомлений пока не выполняется.
 - `/approvals` - текущий обзор `approvals status`.
 - `/jobs` - последние runtime job из SQLite `runtime/runtime.db`, статусы и
   команды для просмотра/отмены.
@@ -284,12 +284,12 @@ wbin_apply:<wb_inbox_run_id>
   `run_ozon_elastic_apply(..., confirmed_by_user=True)`;
 - WB actions apply запускается через
   `run_wb_actions_discount_apply(..., confirmed_by_user=True)`;
-- Ozon inbox apply запускается через
-  `run_ozon_inbox_apply(..., confirmed_by_user=True)` и применяет только
-  пакет, сохраненный в `data/pending/<ozon_inbox_run_id>_pending/`;
-- WB inbox apply запускается через
-  `run_wb_inbox_apply(..., confirmed_by_user=True)` и применяет только
-  пакет, сохраненный в `data/pending/<wb_inbox_run_id>_pending/`;
+- Ozon inbox apply создает runtime job `ozon-inbox-apply` через `JobService`
+  с `confirmed_by_user=true`; `WorkflowRunner` применяет только пакет,
+  сохраненный в `data/pending/<ozon_inbox_run_id>_pending/`;
+- WB inbox apply создает runtime job `wb-inbox-apply` через `JobService` с
+  `confirmed_by_user=true`; `WorkflowRunner` применяет только пакет,
+  сохраненный в `data/pending/<wb_inbox_run_id>_pending/`;
 - перед записью Ozon Elastic apply выполняет свежий scoped preflight только для
   Ozon API, новый dry-run, partial drift-check и verify;
 - перед записью WB actions apply выполняет штатный WB preflight, новый dry-run
@@ -340,8 +340,8 @@ cookies, storage state и файлы вне разрешенных директ�
   публичные ответы, отметку просмотренных отзывов, ответы в Ozon Messenger и
   `mark-read` уведомлений.
 - Исключение: `/wb-inbox` + inline-кнопка WB inbox применяет только конкретный
-  показанный пакет WB отзывов и вопросов. WB уведомления пока не применяются,
-  потому что route имеет статус `not_implemented`.
+  показанный пакет WB отзывов и вопросов. WB новости/уведомления читаются
+  read-only из `news-v2`; write/mark-read по ним пока не выполняется.
 - MVP запускает из Telegram только live read-only `/today` и `/status`, если
   явно включены `--live-today` и `--live-status`. Остальные команды показывают
   уже сохраненные runtime-данные.

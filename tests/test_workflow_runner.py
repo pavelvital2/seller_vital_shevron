@@ -4,6 +4,7 @@ import csv
 import fcntl
 from pathlib import Path
 
+import seller_agent.core.workflow_runner as workflow_runner
 from seller_agent.core.workflow_runner import WorkflowRunner
 
 
@@ -145,3 +146,35 @@ def test_workflow_runner_runs_pricing_status_default_handler(tmp_path: Path) -> 
     assert result.task == "pricing-status"
     assert result.summary["summary"]["rows"] == 1
     assert result.artifacts["status_csv"].endswith("pricing_status.csv")
+
+
+def test_workflow_runner_runs_wb_inbox_apply_default_handler(monkeypatch, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+    calls: list[dict] = []
+
+    def fake_apply(**kwargs):  # type: ignore[no-untyped-def]
+        calls.append(kwargs)
+        return {
+            "run_id": "wb_inbox_test_apply",
+            "overall_status": "ok",
+            "source_run_id": kwargs["source_run_id"],
+            "artifacts": {"report": str(tmp_path / "report.md")},
+        }
+
+    monkeypatch.setattr(workflow_runner, "run_wb_inbox_apply", fake_apply)
+
+    runner = WorkflowRunner(
+        data_dir=tmp_path / "data",
+        lock_dir=tmp_path / "locks",
+        credentials=object(),  # type: ignore[arg-type]
+    )
+    result = runner.run_task(
+        "wb-inbox-apply",
+        inputs={"source_run_id": "wb_inbox_test", "confirmed_by_user": True},
+        allowed_modes={"apply"},
+    )
+
+    assert result.ok is True
+    assert result.task == "wb-inbox-apply"
+    assert result.artifacts["report"].endswith("report.md")
+    assert calls[0]["source_run_id"] == "wb_inbox_test"
+    assert calls[0]["confirmed_by_user"] is True

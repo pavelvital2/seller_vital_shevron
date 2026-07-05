@@ -29,13 +29,17 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 
 `/ozon-inbox` собирает fresh dry-run по Ozon отзывам/вопросам и дополнительно
 подключает Ozon Messenger/уведомления. После owner approval inline-кнопка
-вызывает `run_ozon_inbox_apply(..., confirmed_by_user=True)`.
+создает runtime job `ozon-inbox-apply` через `JobService`, а выполнение идет
+через `WorkflowRunner` и workflow lock.
 
 `/wb-inbox` собирает fresh dry-run по WB отзывам и WB вопросам через
-официальный Feedbacks API. WB уведомления в отчете показываются отдельным
-источником со статусом `not_implemented`, пока для них не создан
-подтвержденный API/LK маршрут. Это не блокирует ответы на WB отзывы и WB
-вопросы.
+официальный Feedbacks API. WB новости/уведомления читаются read-only через
+ЛК `https://seller.wildberries.ru/news-v2` helper-ом
+`scripts/notifications/wb_news_readonly.js`; отчет выделяет важные новости по
+словам про тарифы, комиссии, логистику, карточки, блокировки, акции,
+продвижение, поставки и отгрузки. Mark-read/cleanup для WB уведомлений пока
+не выполняется, потому что подтвержденного write-маршрута нет. Это не
+блокирует ответы на WB отзывы и WB вопросы.
 
 CLI-эквиваленты:
 
@@ -68,6 +72,20 @@ data/pending/<marketplace_inbox_run_id>_pending/
 ```
 
 Повторный apply того же inbox-пакета должен блокироваться idempotency marker.
+
+Telegram inline callback для `apply-ozon-inbox` и `apply-wb-inbox` не должен
+вызывать marketplace apply-функции напрямую. Обязательный маршрут:
+
+```text
+callback -> JobService.submit(... confirmed_by_user=true)
+         -> JobService.run(job_id)
+         -> WorkflowRunner task handler
+         -> workflow lock
+         -> профильная apply-функция
+```
+
+Так runtime сохраняет `job_id`, статус, результат и безопасную причину сбоя,
+а параллельные apply-запуски блокируются workflow lock.
 
 ## Apply
 

@@ -31,9 +31,11 @@ description: "Use for Ozon/Wildberries reviews and questions workflows: read-onl
 - WB: official Feedbacks/Questions API first.
 - Ozon: Seller Review/Question API first; if unavailable or 403, use the
   documented LK/CDP fallback from the runbook.
-- WB questions are part of the WB inbox route. WB platform notifications are
-  not yet a confirmed source; report them as `not_implemented` until a
-  docs-first API/LK route is implemented. Do not invent notification counts.
+- WB questions are part of the WB inbox route. WB platform news/notifications
+  are read-only through LK `news-v2` via
+  `scripts/notifications/wb_news_readonly.js`; report actual rows and important
+  rows from that script only. Do not invent unread counts, and do not mark WB
+  notifications read until a confirmed write route exists.
 - For Ozon review media details use
   `scripts/reviews/ozon_review_media_detail_cdp.js` when the list source only
   contains media counts.

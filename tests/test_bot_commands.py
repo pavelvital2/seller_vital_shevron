@@ -729,7 +729,11 @@ def test_bot_wb_inbox_builds_fresh_package_and_reports_notifications(
             "overall_status": "warning",
             "actions_count": 2,
             "reviews": {"actions_count": 2},
-            "wb_notifications": {"status": "not_implemented"},
+            "wb_notifications": {
+                "status": "ok",
+                "items": [{"title": "Новость WB"}],
+                "important_items": [{"title": "Изменение тарифов"}],
+            },
             "artifacts": {"report": str(report)},
         }
 
@@ -739,7 +743,8 @@ def test_bot_wb_inbox_builds_fresh_package_and_reports_notifications(
 
     assert result.ok is True
     assert "WB вопросы входят" in result.text
-    assert "WB уведомления: `not_implemented`" in result.text
+    assert "WB уведомления: `ok`" in result.text
+    assert "важных WB новостей/уведомлений: `1`" in result.text
     assert result.reply_markup["inline_keyboard"][0][0]["callback_data"] == "wbin_apply:wb_inbox_test"
 
 
@@ -751,26 +756,26 @@ def test_bot_inbox_callbacks_apply_specific_packages(
 
     calls: list[tuple[str, dict]] = []
 
-    def fake_ozon_apply(**kwargs: object) -> dict:
-        calls.append(("ozon", kwargs))
-        return {
-            "run_id": "ozon_inbox_test_apply",
-            "overall_status": "ok",
-            "reviews": {
-                "apply": {
-                    "applied_counts": {
-                        "ozon_public_review_replies": 1,
-                        "ozon_marked_viewed": 2,
+    def fake_run_inbox_apply_job(**kwargs: object) -> dict:
+        calls.append((str(kwargs["task_id"]), kwargs))
+        if kwargs["task_id"] == "ozon-inbox-apply":
+            return {
+                "job_id": "job_ozon",
+                "run_id": "ozon_inbox_test_apply",
+                "overall_status": "ok",
+                "reviews": {
+                    "apply": {
+                        "applied_counts": {
+                            "ozon_public_review_replies": 1,
+                            "ozon_marked_viewed": 2,
+                        }
                     }
-                }
-            },
-            "messenger": {"status": "ok", "mark_read": [{"ok": True}]},
-            "artifacts": {"report": str(tmp_path / "ozon_apply.md")},
-        }
-
-    def fake_wb_apply(**kwargs: object) -> dict:
-        calls.append(("wb", kwargs))
+                },
+                "messenger": {"status": "ok", "mark_read": [{"ok": True}]},
+                "artifacts": {"report": str(tmp_path / "ozon_apply.md")},
+            }
         return {
+            "job_id": "job_wb",
             "run_id": "wb_inbox_test_apply",
             "overall_status": "ok",
             "reviews": {
@@ -784,8 +789,7 @@ def test_bot_inbox_callbacks_apply_specific_packages(
             "artifacts": {"report": str(tmp_path / "wb_apply.md")},
         }
 
-    monkeypatch.setattr(commands, "run_ozon_inbox_apply", fake_ozon_apply)
-    monkeypatch.setattr(commands, "run_wb_inbox_apply", fake_wb_apply)
+    monkeypatch.setattr(commands, "_run_inbox_apply_job", fake_run_inbox_apply_job)
 
     ozon_result = dispatch_callback("ozin_apply:ozon_inbox_test", data_dir=tmp_path)
     wb_result = dispatch_callback("wbin_apply:wb_inbox_test", data_dir=tmp_path)
@@ -795,10 +799,10 @@ def test_bot_inbox_callbacks_apply_specific_packages(
     assert "Ozon уведомления mark-read: `1` из `1`" in ozon_result.text
     assert wb_result.ok is True
     assert "вопросы WB: `1`" in wb_result.text
+    assert calls[0][0] == "ozon-inbox-apply"
     assert calls[0][1]["source_run_id"] == "ozon_inbox_test"
-    assert calls[0][1]["confirmed_by_user"] is True
+    assert calls[1][0] == "wb-inbox-apply"
     assert calls[1][1]["source_run_id"] == "wb_inbox_test"
-    assert calls[1][1]["confirmed_by_user"] is True
 
 
 def test_bot_inbox_callbacks_reject_invalid_ids(tmp_path: Path) -> None:
