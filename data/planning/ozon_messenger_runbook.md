@@ -541,6 +541,33 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 - сложные покупательские сообщения без безопасного шаблона ответа оставляет
   как `manual_chat_review`, а не выдумывает ответ.
 
+Если approved package содержит только действия `mark_chat_read` и не содержит
+ни одного `send_chat_message`, CDP-helper отправки сообщений запускать не
+нужно. Такой apply должен пропустить send-этап со статусом `skipped` и считать
+результат по `/v2/chat/read` + контрольному read-only.
+
+Подтвержденная внештатная ситуация 2026-07-05:
+
+- Telegram callback `ozin_apply:ozon_inbox_20260705T124047` создал job
+  `job_ozon-inbox-apply_20260705T094228Z_2f763b3f`;
+- отзывы/вопросы применились успешно: `10` Ozon-отзывов отмечены
+  просмотренными, счетчик `NOT_VIEWED` изменился с `10` на `0`;
+- Ozon Messenger approved package содержал только `1` действие
+  `mark_chat_read` для важного уведомления Ozon и не содержал
+  `send_chat_message`;
+- `/v2/chat/read` успешно вернул `unread_count=0`, но workflow все равно
+  запустил `scripts/messenger/ozon_send_messages_cdp.js`; helper вернул
+  `No approved send_chat_message actions`, и весь messenger stage был ошибочно
+  помечен как `blocked`;
+- recovery: исправить `_apply_ozon_messenger`, чтобы при отсутствии
+  `send_chat_message` send-этап был `skipped`, а не `blocked`; не повторять
+  старый apply целиком, потому что write-действия уже выполнены и есть
+  applied marker;
+- проверка: контрольный dry-run `ozon_inbox_20260705T124603` показал
+  `Ozon Messenger действий: 0`, важных уведомлений нет; остался новый отдельный
+  Ozon review action `mark_review_viewed` по `razpict0051`, который требует
+  отдельного fresh approval.
+
 Низкоуровневый entrypoint `ozon-messenger-workflow` остается
 task-runner-каркасом для будущей полной декомпозиции triage/apply/verify:
 

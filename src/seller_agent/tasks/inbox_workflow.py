@@ -775,18 +775,26 @@ def _apply_ozon_messenger(
 
     package_path = Path(approved["approved_package"])
     raw_dir = ensure_dir(run_dir / "raw" / "ozon_messenger_apply")
-    script = PROJECT_ROOT / "scripts" / "messenger" / "ozon_send_messages_cdp.js"
-    completed = subprocess.run(
-        ["node", str(script), "--approved-path", str(package_path), "--run-dir", str(run_dir)],
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        timeout=240,
-        check=False,
-    )
-    send_result = _safe_read_json(raw_dir / "ozon_messenger_lk_send" / "send_result.json")
-    if not isinstance(send_result, dict):
-        send_result = {"ok": completed.returncode == 0, "blocker": (completed.stderr or completed.stdout or "").strip()[:1000]}
+    send_actions = [
+        action
+        for action in actions
+        if action.get("action_type") == "send_chat_message" and str(action.get("draft_reply") or "").strip()
+    ]
+    if send_actions:
+        script = PROJECT_ROOT / "scripts" / "messenger" / "ozon_send_messages_cdp.js"
+        completed = subprocess.run(
+            ["node", str(script), "--approved-path", str(package_path), "--run-dir", str(run_dir)],
+            cwd=PROJECT_ROOT,
+            text=True,
+            capture_output=True,
+            timeout=240,
+            check=False,
+        )
+        send_result = _safe_read_json(raw_dir / "ozon_messenger_lk_send" / "send_result.json")
+        if not isinstance(send_result, dict):
+            send_result = {"ok": completed.returncode == 0, "blocker": (completed.stderr or completed.stdout or "").strip()[:1000]}
+    else:
+        send_result = {"ok": True, "skipped": True, "reason": "no approved send_chat_message actions"}
 
     mark_read: list[dict[str, Any]] = []
     if credentials.ozon_seller:
