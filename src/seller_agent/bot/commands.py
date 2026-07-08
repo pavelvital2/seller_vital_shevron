@@ -668,6 +668,7 @@ def _wb_actions_plan(
         f"- вне активных акций: `{_int(summary.get('outside_promos'))}`",
         f"- в нескольких акциях: `{_int(summary.get('multiple_promos'))}`",
         f"- изменить скидку: `{_int(changed_rows)}`",
+        f"- из них пошагово до цели: `{_int(summary.get('step_limited'))}`",
         f"- повысить скидку: `{_int(summary.get('increase'))}`",
         f"- снизить скидку: `{_int(summary.get('decrease'))}`",
         f"- не менять: `{_int(summary.get('no_change'))}`",
@@ -689,6 +690,7 @@ def _wb_actions_plan(
             [
                 "Нажатие кнопки ниже является явным подтверждением владельца для этого dry-run.",
                 "Перед записью apply сам выполнит fresh preflight, fresh dry-run, partial drift-check и verify.",
+                "Изменение скидки за один upload ограничено шагом `35 п.п.`; если цель дальше, следующий `/wb-actions` продолжит доведение.",
                 "Если часть строк изменилась, будут применены только неизменившиеся строки; изменившиеся останутся на новый review.",
             ]
         )
@@ -790,7 +792,8 @@ def _wb_actions_apply(
         "Применено:",
         f"- отправлено строк: `{_int(applied.get('payload_rows_count'))}`",
         f"- напрямую: `{_int(applied.get('regular_payload_rows_count'))}`",
-        f"- пошагово через карантин: `{_int(applied.get('staged_payload_rows_count'))}`",
+        f"- через карантинный fallback: `{_int(applied.get('staged_payload_rows_count'))}`",
+        f"- лимит шага скидки: `{_int(result.get('discount_step_limit_pp')) or 35} п.п.`",
         f"- upload ID: `{applied.get('upload_id') or 'н/д'}`",
         f"- пропущено из-за drift: `{_int(drift.get('skipped_due_to_drift_count'))}` строк / `{_int(drift.get('skipped_due_to_drift_product_count'))}` товаров",
         "",
@@ -2071,7 +2074,7 @@ def _run_inbox_apply_job(
     job_result = service.run(job.job_id)
     workflow_result = job_result.job.result if isinstance(job_result.job.result, dict) else {}
     summary = workflow_result.get("summary") if isinstance(workflow_result.get("summary"), dict) else {}
-    if job_result.ok and summary:
+    if summary:
         return {**summary, "job_id": job.job_id, "job_status": job_result.job.status}
     error = job_result.message or job_result.job.error or workflow_result.get("error") or workflow_result.get("blocked_reason")
     raise RuntimeError(f"job `{job.job_id}` failed: {error or job_result.status}")
@@ -2097,7 +2100,7 @@ def _run_plan_apply_job(
     job_result = service.run(job.job_id)
     workflow_result = job_result.job.result if isinstance(job_result.job.result, dict) else {}
     summary = workflow_result.get("summary") if isinstance(workflow_result.get("summary"), dict) else {}
-    if job_result.ok and summary:
+    if summary:
         return {**summary, "job_id": job.job_id, "job_status": job_result.job.status}
     error = job_result.message or job_result.job.error or workflow_result.get("error") or workflow_result.get("blocked_reason")
     raise RuntimeError(f"job `{job.job_id}` failed: {error or job_result.status}")

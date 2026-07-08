@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from seller_agent.config import (
+    AppCredentials,
     WbCredentials,
     load_ozon_performance_credentials,
     load_ozon_seller_credentials,
@@ -22,6 +23,7 @@ from seller_agent.tasks.reviews_questions import (
     draft_question_reply,
     normalize_wb_feedback,
     normalize_wb_question,
+    run_reviews_questions_apply,
     run_reviews_questions_prepare_approved,
 )
 
@@ -485,6 +487,96 @@ def test_prepare_reviews_questions_approved_builds_mark_viewed_package(tmp_path:
 
     assert [action["action_type"] for action in package["actions"]] == ["mark_review_viewed"]
     assert result["selected_actions_count"] == 1
+
+
+def test_prepare_reviews_questions_approved_includes_ozon_question_answers(tmp_path: Path) -> None:
+    pending_id = "reviews_questions_test_pending"
+    pending_dir = tmp_path / "pending" / pending_id
+    pending_dir.mkdir(parents=True)
+    (pending_dir / "manifest.json").write_text(
+        json.dumps({"run_id": "reviews_questions_test"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    actions = [
+        {
+            "platform": "ozon",
+            "source_type": "question",
+            "source_id": "question-1",
+            "sku": "123",
+            "action_type": "question_answer",
+            "state": "pending_owner_confirmation",
+            "draft_text": "Здравствуйте! Ответ на вопрос.",
+        },
+    ]
+    (pending_dir / "draft_answers.json").write_text(
+        json.dumps({"actions": actions}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    result = run_reviews_questions_prepare_approved(
+        data_dir=tmp_path,
+        source_pending=pending_id,
+        mode="all",
+    )
+
+    package = json.loads(Path(result["artifacts"]["approved_package"]).read_text(encoding="utf-8"))
+
+    assert result["selected_actions_count"] == 1
+    assert result["skipped_actions_count"] == 0
+    assert package["actions"][0]["platform"] == "ozon"
+    assert package["actions"][0]["action_type"] == "question_answer"
+    assert package["actions"][0]["approved"] is True
+
+
+def test_apply_reviews_questions_allows_ozon_question_answers(monkeypatch, tmp_path: Path) -> None:
+    approved_dir = tmp_path / "approved" / "ozon_questions_approved"
+    approved_dir.mkdir(parents=True)
+    approved_path = approved_dir / "approved_apply_plan.json"
+    action = {
+        "platform": "ozon",
+        "source_type": "question",
+        "source_id": "question-1",
+        "sku": "123",
+        "action_type": "question_answer",
+        "draft_text": "Здравствуйте! Ответ на вопрос.",
+        "approved": True,
+        "state": "approved",
+    }
+    from seller_agent.safety.approvals import action_rows_checksum
+
+    approved_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "approval-package/v1",
+                "status": "approved",
+                "pending_id": "pending-1",
+                "source_run_id": "run-1",
+                "actions_checksum": action_rows_checksum([action]),
+                "actions": [action],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        "seller_agent.tasks.reviews_questions._apply_wb_public_replies",
+        lambda **kwargs: {"ok": True, "sent": [], "questions_answered": [], "blocker": ""},
+    )
+    monkeypatch.setattr(
+        "seller_agent.tasks.reviews_questions._apply_ozon_public_replies",
+        lambda **kwargs: {"ok": True, "sent": [], "questions_answered": [{"ok": True}], "marked_viewed": []},
+    )
+
+    result = run_reviews_questions_apply(
+        credentials=AppCredentials(ozon_seller=None, ozon_performance=None, wb=None),
+        data_dir=tmp_path,
+        approved_path=approved_path,
+        confirmed_by_user=True,
+    )
+
+    assert result["overall_status"] == "ok"
+    assert result["applied_counts"]["ozon_question_answers"] == 1
 
 
 def test_approved_actions_rejects_checksum_mismatch(tmp_path: Path) -> None:

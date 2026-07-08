@@ -11,6 +11,8 @@ WB через Parser Data API.
 
 - Parser Data API: `http://127.0.0.1:8787`, dataset `wb`.
 - Env с token/base URL: `/home/pavel/.parser-data-api.env`.
+- Общий seller guide по выбору endpoints:
+  `/home/pavel/projects/codex_workspace/PARSER_DATA_API_SELLER_GUIDE.md`.
 - Основной маршрут после 2026-07-05 - WB warehouse endpoints Parser Data API:
   - `/warehouse/wb/summary`;
   - `/warehouse/wb/query-positions`;
@@ -18,6 +20,26 @@ WB через Parser Data API.
   - `/warehouse/wb/top-movers`;
   - `/warehouse/wb/seller-changes`;
   - `/warehouse/wb/run-quality`.
+- Для бизнес-аналитики после 2026-07-05 сначала выбирать узкие aggregate
+  endpoints, а не выгружать первые 500 строк:
+  - `/warehouse/wb/aggregates/store-query-positions`;
+  - `/warehouse/wb/aggregates/visibility-gaps`;
+  - `/warehouse/wb/aggregates/query-coverage`;
+  - `/warehouse/wb/aggregates/competitors-top`;
+  - `/warehouse/wb/aggregates/top-movers`;
+  - `/warehouse/wb/aggregates/seo-visibility-candidates`;
+  - `/warehouse/wb/aggregates/promotion-visibility-candidates`;
+  - `/warehouse/wb/aggregates/market-summary`;
+  - `/warehouse/wb/aggregates/product-position-history`;
+  - `/warehouse/wb/aggregates/query-product-matrix`;
+  - `/warehouse/wb/aggregates/price-position-map`;
+  - `/warehouse/wb/aggregates/rating-review-gaps`;
+  - `/warehouse/wb/aggregates/brand-supplier-share`;
+  - `/warehouse/wb/aggregates/new-lost-top`;
+  - `/warehouse/wb/aggregates/serp-volatility`;
+  - `/warehouse/wb/aggregates/niche-opportunities`;
+  - `/warehouse/wb/aggregates/content-proxy-gaps`;
+  - `/warehouse/wb/aggregates/query-discovery`.
 - Legacy raw/marts sources оставлены только как справочный слой Parser VPS:
   `marts/serp/latest/products_daily.csv`,
   `marts/sellers/latest/seller_query_product_bridge.csv`,
@@ -27,6 +49,9 @@ WB через Parser Data API.
 
 Parser Data API используется только read-only. Полные датасеты парсера не
 копировать в проект.
+
+Токен из `/home/pavel/.parser-data-api.env` не выводить в чат, отчеты, логи и
+коммиты.
 
 Перед анализом свежего top-query прохода обязательно подтвердить актуальность
 среза Parser Data API через `/warehouse/wb/summary` и `/warehouse/wb/run-quality`:
@@ -97,6 +122,12 @@ python -m seller_agent.cli wb-parser-warehouse-analytics \
 - регистрирует запуск в `RunManifest` как task
   `wb-parser-warehouse-analytics`;
 - доступна в Telegram через `/wb-analytics` и кнопку `WB аналитика`.
+
+Эта команда закрывает базовый штатный отчет. Если задача шире базового отчета
+(`ниши`, `конкуренты`, `поиск SEO-кандидатов`, `что продвигать`, `позиции по
+конкретному запросу`, `rating/review gaps`, `query discovery`), агент должен
+использовать aggregate endpoints из общего guide напрямую или расширить
+проектную команду отдельной проверяемой задачей.
 
 ## Интеграция в карточный SEO/backlog
 

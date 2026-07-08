@@ -27,6 +27,18 @@ ApprovalStatus = Literal[
     "closed",
 ]
 
+CardWorkStatus = Literal[
+    "draft",
+    "owner_review",
+    "owner_approved",
+    "applying",
+    "applied",
+    "verified",
+    "closed",
+    "blocked",
+    "failed",
+]
+
 
 @dataclass(frozen=True)
 class JobRecord:
@@ -82,4 +94,19 @@ class ApprovalRecord:
     updated_at: str
     owner_job_id: str = ""
     checksum: str = ""
+    data: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class CardWorkItem:
+    internal_sku: str
+    status: CardWorkStatus
+    created_at: str
+    updated_at: str
+    approval_id: str = ""
+    plan_run_id: str = ""
+    apply_run_id: str = ""
+    post_verify_run_id: str = ""
+    checksum: str = ""
+    closed_at: str = ""
     data: dict[str, Any] = field(default_factory=dict)

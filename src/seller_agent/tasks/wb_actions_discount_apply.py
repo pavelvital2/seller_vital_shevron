@@ -25,6 +25,7 @@ from seller_agent.safety.approvals import (
 )
 from seller_agent.tasks.status_preflight import run_status_preflight
 from seller_agent.tasks.wb_actions_discount_plan import (
+    WB_MAX_DISCOUNT_STEP_PERCENTAGE_POINTS,
     WbActionsSnapshotLock,
     _lock_path,
     _price_value,
@@ -39,6 +40,22 @@ WB_BUFFER_TASK_URL = "https://discounts-prices-api.wildberries.ru/api/v2/buffer/
 WB_BUFFER_GOODS_URL = "https://discounts-prices-api.wildberries.ru/api/v2/buffer/goods/task"
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 WB_STAGED_INTERMEDIATE_DISCOUNT = 49
+
+
+def _upload_discount(row: dict[str, str], *, discount_override: int | None = None) -> int:
+    if discount_override is not None:
+        return int(discount_override)
+    value = row.get("Скидка к загрузке")
+    if value not in (None, ""):
+        return int(value)
+    return int(row["Финальная скидка"])
+
+
+def _upload_delta(row: dict[str, str]) -> int:
+    value = row.get("Дельта загрузки, п.п.")
+    if value not in (None, ""):
+        return int(value)
+    return int(row["Дельта, п.п."])
 
 
 def _read_csv(path: Path) -> list[dict[str, str]]:
@@ -86,7 +103,7 @@ def _plan_dir(data_dir: Path, plan_run_id: str | None) -> Path:
 
 
 def _payload_from_rows(rows: list[dict[str, str]]) -> tuple[dict[str, Any], list[dict[str, str]]]:
-    changed_rows = [row for row in rows if int(row["Дельта, п.п."]) != 0]
+    changed_rows = [row for row in rows if _upload_delta(row) != 0]
     payload = _payload_from_changed_rows(changed_rows)
     return payload, changed_rows
 
@@ -101,7 +118,7 @@ def _payload_from_changed_rows(
             {
                 "nmID": int(row["Артикул WB"]),
                 "price": _price_value(row["Базовая цена"]),
-                "discount": int(discount_override if discount_override is not None else row["Финальная скидка"]),
+                "discount": _upload_discount(row, discount_override=discount_override),
             }
             for row in rows
         ]
@@ -119,7 +136,7 @@ def _row_signature(row: dict[str, str], *, discount_override: int | None = None)
     return (
         int(row["Артикул WB"]),
         str(_price_value(row["Базовая цена"])),
-        int(discount_override if discount_override is not None else row["Финальная скидка"]),
+        _upload_discount(row, discount_override=discount_override),
     )
 
 
@@ -141,7 +158,9 @@ def _requires_staged_discount(row: dict[str, str]) -> bool:
     if base_price is None or base_price <= 0:
         return False
     current_discount = int(row.get("Текущая скидка") or 0)
-    target_discount = int(row.get("Финальная скидка") or 0)
+    target_discount = _upload_discount(row)
+    if abs(target_discount - current_discount) <= WB_MAX_DISCOUNT_STEP_PERCENTAGE_POINTS:
+        return False
     if current_discount >= WB_STAGED_INTERMEDIATE_DISCOUNT or target_discount <= WB_STAGED_INTERMEDIATE_DISCOUNT:
         return False
     current_price = _discounted_price(base_price, current_discount)
@@ -291,6 +310,7 @@ def _write_report(path: Path, result: dict[str, Any]) -> None:
         f"- payload rows submitted: `{result['applied']['payload_rows_count']}`",
         f"- regular rows: `{applied.get('regular_payload_rows_count', 0)}`",
         f"- staged rows: `{applied.get('staged_payload_rows_count', 0)}`",
+        f"- max discount step: `{result.get('discount_step_limit_pp', WB_MAX_DISCOUNT_STEP_PERCENTAGE_POINTS)} п.п.`",
         f"- HTTP status: `{result['applied']['response'].get('httpStatus')}`",
         f"- upload ID: `{result['applied'].get('upload_id')}`",
         f"- skipped because of drift: `{result['drift'].get('skipped_due_to_drift_count', 0)}`",
@@ -756,6 +776,7 @@ def run_wb_actions_discount_apply(
         "started_at": started_at.isoformat(timespec="seconds"),
         "mode": "apply",
         "overall_status": overall_status,
+        "discount_step_limit_pp": WB_MAX_DISCOUNT_STEP_PERCENTAGE_POINTS,
         "approved_plan_run_id": approved_id,
         "approved_id": approved_id,
         "scheme": scheme,

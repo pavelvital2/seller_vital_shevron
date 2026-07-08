@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from seller_agent.config import AppCredentials, load_credentials
-from seller_agent.tasks.approved_cards_apply import run_apply_approved_cards
+from seller_agent.tasks.approved_cards_apply import run_apply_approved_cards, run_plan_approved_cards
 from seller_agent.tasks.daily_morning_report import run_daily_morning_report
 from seller_agent.tasks.inbox_workflow import run_ozon_inbox_apply, run_wb_inbox_apply
 from seller_agent.tasks.ozon_actions_optimizer_apply import run_ozon_actions_optimizer_apply
@@ -200,6 +200,7 @@ def default_workflow_handlers() -> dict[str, WorkflowHandler]:
         "pricing-status": _pricing_status_handler,
         "status-preflight": _status_preflight_handler,
         "wb-parser-warehouse-analytics": _wb_parser_warehouse_analytics_handler,
+        "approved-cards-batch-plan": _approved_cards_batch_plan_handler,
         "approved-cards-batch-apply": _approved_cards_batch_apply_handler,
         "ozon-actions-optimizer-apply": _ozon_actions_optimizer_apply_handler,
         "ozon-cpc-bids-apply": _ozon_cpc_bids_apply_handler,
@@ -294,12 +295,16 @@ def _approved_cards_batch_apply_handler(
     internal_skus = inputs.get("internal_skus") or inputs.get("internal_sku") or []
     if isinstance(internal_skus, str):
         internal_skus = [item.strip() for item in internal_skus.replace(",", " ").split() if item.strip()]
-    if not isinstance(internal_skus, list) or not internal_skus:
-        raise ValueError("approved-cards-batch-apply requires internal_skus list.")
+    plan_run_id = _optional_str(inputs.get("plan_run_id")) or ""
+    if not isinstance(internal_skus, list):
+        internal_skus = []
+    if not internal_skus and not plan_run_id:
+        raise ValueError("approved-cards-batch-apply requires internal_skus list or plan_run_id.")
     return run_apply_approved_cards(
         credentials=credentials,
         data_dir=data_dir,
         internal_skus=[str(item) for item in internal_skus],
+        plan_run_id=plan_run_id,
         run_id=_optional_str(inputs.get("run_id")),
         confirmed_by_user=_bool_input(inputs, "confirmed_by_user", False),
         content_wait_seconds=int(inputs.get("content_wait_seconds") or 180),
@@ -312,6 +317,31 @@ def _approved_cards_batch_apply_handler(
         ozon_create_allow_manual_review=_bool_input(inputs, "ozon_create_allow_manual_review", False),
         ozon_create_wait_seconds=int(inputs.get("ozon_create_wait_seconds") or 300),
         ozon_create_poll_interval=int(inputs.get("ozon_create_poll_interval") or 10),
+        runtime_db=_optional_path(inputs.get("runtime_db")),
+    )
+
+
+def _approved_cards_batch_plan_handler(
+    task: RegisteredTask,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    if credentials is None:
+        raise ValueError(f"Task `{task.name}` requires credentials.")
+    internal_skus = inputs.get("internal_skus") or inputs.get("internal_sku") or []
+    if isinstance(internal_skus, str):
+        internal_skus = [item.strip() for item in internal_skus.replace(",", " ").split() if item.strip()]
+    if not isinstance(internal_skus, list) or not internal_skus:
+        raise ValueError("approved-cards-batch-plan requires internal_skus list.")
+    return run_plan_approved_cards(
+        credentials=credentials,
+        data_dir=data_dir,
+        internal_skus=[str(item) for item in internal_skus],
+        run_id=_optional_str(inputs.get("run_id")),
+        ozon_create_min_price=_optional_str(inputs.get("ozon_create_min_price")) or "",
+        ozon_create_allow_manual_review=_bool_input(inputs, "ozon_create_allow_manual_review", False),
+        runtime_db=_optional_path(inputs.get("runtime_db")),
     )
 
 

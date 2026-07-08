@@ -30,7 +30,7 @@ Owner-approved HTML по карточке является review-пакетом
 | --- | --- | --- |
 | Создание карточки на WB из owner-approved HTML / Layer 3 passport | `data/planning/card_ops/01_wb_card_create_from_html.md` | частично автоматизировано: `plan-wb-card-create`, `apply-wb-card-create`; есть ограничение legacy plan |
 | Смена артикулов продавца Ozon/WB на внутренний артикул | `data/planning/card_ops/02_seller_sku_update_ozon_wb.md` | автоматизировано: `plan-seller-sku-update`, `apply-seller-sku-update` |
-| Изменение параметров существующих карточек Ozon/WB | `data/planning/card_ops/03_card_content_update_ozon_wb.md` | быстрый путь: `apply-approved-card`; batch-путь: `apply-approved-cards`; verify-only: `verify-card-content-update`; ручной debug-путь: `plan-card-content-update`, `apply-card-content-update` |
+| Изменение параметров существующих карточек Ozon/WB | `data/planning/card_ops/03_card_content_update_ozon_wb.md` | быстрый путь: `apply-approved-card`; batch-путь: `plan-approved-cards`, затем `apply-approved-cards --plan-run-id`; verify-only: `verify-card-content-update`; ручной debug-путь: `plan-card-content-update`, `apply-card-content-update` |
 | Promotion owner-approved Layer 2 audit/HTML в Layer 3 passport | этот файл | автоматизировано: `promote-approved-card-passport`; также встроено как preflight в `apply-approved-cards` |
 | Создание карточки на Ozon из owner-approved HTML / Layer 3 passport | `data/planning/card_ops/04_ozon_card_create_later.md` | автоматизировано: `plan-ozon-card-create`, `apply-ozon-card-create`; встроено в `apply-approved-cards` при `--ozon-create-min-price`; WB price fallback требует manual review |
 | Удаление не созданной Ozon-карточки без SKU или архивирование созданной карточки | `data/planning/card_ops/05_ozon_product_remove.md` | автоматизировано: `plan-ozon-product-remove`, `apply-ozon-product-remove` |
@@ -52,6 +52,16 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 ```bash
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   -m seller_agent.cli fetch-card-content
+```
+
+Точечный refresh по SKU запускать только с merge-режимом, чтобы не
+перезаписать общий content index частичной выборкой:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli fetch-card-content \
+  --internal-sku <internal_sku> \
+  --merge-existing
 ```
 
 ```bash
@@ -128,26 +138,38 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 перезаписывает существующий Layer 3 без `--overwrite`.
 
 Если владелец согласовал сразу несколько HTML/passport карточек и сказал
-`применяй`, использовать batch-команду, а не запускать одноштучный сценарий
-по кругу:
+`применяй`, сначала собрать единый dry-run package. Он фиксирует checksum
+Layer 3 passport по каждому SKU и stage run ids для seller SKU/content/create:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli plan-approved-cards \
+  --internal-sku <sku_1> \
+  --internal-sku <sku_2> \
+  --internal-sku <sku_3> \
+  --ozon-create-min-price <min_price_if_needed>
+```
+
+После проверки package применять только по `plan_run_id`. Apply перед write
+сверяет checksum плана и текущих Layer 3 passport; если паспорт изменился
+после плана, операция блокируется до нового `plan-approved-cards`.
 
 ```bash
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   -m seller_agent.cli apply-approved-cards \
-  --internal-sku <sku_1> \
-  --internal-sku <sku_2> \
-  --internal-sku <sku_3> \
-  --ozon-create-min-price <min_price_if_needed> \
+  --plan-run-id <plan_run_id> \
   --confirmed-by-user
 ```
 
 Что делает batch-команда:
 
-- проверяет наличие Layer 3 passport по каждому SKU и автоматически
+- на dry-run проверяет наличие Layer 3 passport по каждому SKU и автоматически
   восстанавливает отсутствующие паспорта из owner-approved Layer 2 audit/HTML;
-- строит единый targeted content plan по пачке;
-- применяет Ozon/WB content update пачкой;
 - строит и применяет seller SKU replacement пачкой;
+- после успешной смены seller SKU строит единый targeted content plan уже по
+  финальным internal SKU;
+- применяет Ozon/WB content update пачкой уже по финальным `offer_id` /
+  `vendorCode`;
 - строит WB create plan из owner-approved Layer 3 passport только по
   указанным SKU;
 - создает недостающие WB-карточки, загружает фото и проверяет результат;
@@ -159,8 +181,11 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   internal SKU, `product_id` и `nmID`;
 - обновляет локальные `products`, `content_master`, `processed/master_catalog`
   и approved passports, удаляет склеенные WB-only дубли и сохраняет WB barcode;
-- запускает нормализованный post-verify по новым internal SKU после seller SKU
-  replacement и catalog-sync;
+- запускает нормализованный post-verify по финальным internal SKU после
+  content/SKU/create/catalog-sync;
+- после `post_verify_status=ok` вызывает `card_status_sync`: закрывает Layer 2
+  audit, Layer 3 passport, пишет `data/catalog/card_status/latest.json` и
+  обновляет `card_work_items` в `runtime/runtime.db`;
 - пишет один общий run/report для пачки.
 
 Если одна карточка или отдельная стадия блокируется на dry-run, batch должен
@@ -180,12 +205,12 @@ data/catalog/master_passport/approved/<internal_sku>.json
 `audit.json`/HTML без новых бизнес-решений, затем запускать batch на полный
 согласованный список.
 
-После batch, где сначала меняется content, а затем seller SKU, первичная
-content-verify может дать ложные warning по старым `offer_id`/`vendorCode` или
-по форматам (`100*100*10` против `100*100*10 мм`, WB `isValid`, схлопнутые
-переносы строк в описании). Начиная с 2026-06-29 `apply-approved-cards`
-сам делает повторный read-only targeted verify по новым internal SKU и
-нормализует сравнение размеров и переносов перед итоговым статусом.
+С 2026-07-05 `apply-approved-cards` сначала выполняет seller SKU replacement,
+а затем content update. Это обязательный порядок для пачек, где меняется
+артикул продавца: иначе WB seller SKU update может перезаписать часть content
+старым payload, а Ozon/WB verify будет временно сверять старые и новые
+идентификаторы. Если после apply появляется warning, считать результат только
+по финальному `post_apply_content_verify` на новых internal SKU.
 
 ## Debug-путь изменения существующих карточек
 

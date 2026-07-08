@@ -221,8 +221,10 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   WB уже согласованы в другом формате.
 - Для категории шевронов обязательный Boolean-атрибут
   `23536 / Нужен код маркировки` должен присутствовать в payload как
-  `false`. Проверять не только `/v1/product/import/info`, но и фактическое
-  наличие атрибута в `/v4/product/info/attributes`.
+  `false`. На текущий момент по всем изделиям Vital Shevron маркировка не
+  требуется; если правила маркировки изменятся, это отдельный docs-first review
+  и owner decision. Проверять не только `/v1/product/import/info`, но и
+  фактическое наличие атрибута в `/v4/product/info/attributes`.
 - Для Ozon `#Хештеги` (`23171`) API-формат отличается от удобного
   owner-facing списка. В payload каждый хештег должен начинаться с `#`,
   хештеги разделяются пробелом, внутри хештега нельзя использовать пробелы,
@@ -237,6 +239,21 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   `/v1/product/attributes/update` и дождаться его `task_id`. Этот endpoint
   может вернуть `task_id` в корне ответа, а `/v3/product/import` - в
   `result.task_id`; обработчик должен поддерживать оба формата.
+- Recovery 2026-07-08: точечный Ozon `/v1/product/attributes/update` только
+  по `23536` и `4497` успешно исправил эти поля на 9 карточках, но после apply
+  Ozon изменил порядок значений `10096 / Цвет товара` у 7 карточек, хотя
+  `10096` не отправлялся в payload. Поэтому после любых точечных Ozon
+  attributes/update проверять не только отправленные поля, но и порядок
+  owner-critical dictionary fields, особенно `10096`. Если порядок цветов
+  важен по owner rule, не закрывать карточки в `applied_verified`, пока порядок
+  не восстановлен отдельным approved dry-run или пока владелец явно не
+  разрешит считать порядок несущественным.
+- Recovery 2026-07-08 по `10096 / Цвет товара`: первый ответ
+  `/v1/product/import/info` по task `attributes/update` может быть частичным.
+  В подтвержденном кейсе первый poll показал `4` строки из `7`, второй poll -
+  все `7` строк как `imported`, `errors=[]`. Для batch attributes recovery
+  не завершать wait только по наличию слова `imported`; продолжать polling до
+  ожидаемого количества строк, явных errors или timeout.
 - Recovery 2026-07-04: если карточка Ozon находится в `PARTIAL_APPROVED`
   только из-за отдельных атрибутов, не запускать полный карточный apply без
   необходимости. Сначала сделать точечный `/v1/product/attributes/update` по

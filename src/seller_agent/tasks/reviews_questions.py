@@ -603,7 +603,7 @@ def _is_approvable_action(action: dict[str, Any]) -> bool:
     platform = action.get("platform")
     if action_type == "public_review_reply" and platform in {"ozon", "wb"}:
         return bool(str(action.get("draft_text") or "").strip())
-    if action_type == "question_answer" and platform == "wb":
+    if action_type == "question_answer" and platform in {"ozon", "wb"}:
         return bool(str(action.get("draft_text") or "").strip())
     if action_type == "mark_review_viewed" and platform == "ozon":
         return True
@@ -1305,6 +1305,7 @@ def run_reviews_questions_apply(
         for action in actions
         if not (
             (action.get("platform") in {"ozon", "wb"} and action.get("action_type") == "public_review_reply")
+            or (action.get("platform") == "ozon" and action.get("action_type") == "question_answer")
             or (action.get("platform") == "wb" and action.get("action_type") == "question_answer")
             or (action.get("platform") == "ozon" and action.get("action_type") == "mark_review_viewed")
         )
@@ -1343,6 +1344,7 @@ def run_reviews_questions_apply(
             "wb_public_review_replies": len(wb_result.get("sent") or []),
             "wb_question_answers": len(wb_result.get("questions_answered") or []),
             "ozon_public_review_replies": len(ozon_result.get("sent") or []),
+            "ozon_question_answers": len(ozon_result.get("questions_answered") or []),
             "ozon_marked_viewed": len(ozon_result.get("marked_viewed") or []),
         },
         "wb": wb_result,

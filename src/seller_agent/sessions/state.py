@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import socket
 import subprocess
@@ -51,6 +52,18 @@ def safe_error(exc: BaseException) -> str:
     return str(exc).replace("\n", " ")[:800]
 
 
+def systemd_user_env() -> dict[str, str]:
+    env = dict(os.environ)
+    uid = os.getuid()
+    runtime_dir = env.get("XDG_RUNTIME_DIR") or f"/run/user/{uid}"
+    bus = env.get("DBUS_SESSION_BUS_ADDRESS") or f"unix:path={runtime_dir}/bus"
+    if Path(runtime_dir).exists():
+        env["XDG_RUNTIME_DIR"] = runtime_dir
+    if Path(f"{runtime_dir}/bus").exists():
+        env["DBUS_SESSION_BUS_ADDRESS"] = bus
+    return env
+
+
 def parse_timestamp(value: Any) -> datetime | None:
     if not value:
         return None
@@ -95,6 +108,7 @@ def systemd_user_unit_status(unit: str) -> dict[str, Any]:
             ],
             text=True,
             capture_output=True,
+            env=systemd_user_env(),
             timeout=30,
             check=False,
         )

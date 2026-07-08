@@ -17,7 +17,9 @@ from seller_agent.reports.writer import ensure_dir, write_json
 
 
 READ_PAGE_SIZE = 100
-ELASTIC_ACTION_TYPE = "MARKETPLACE_MULTI_LEVEL_DISCOUNT_ON_AMOUNT"
+LEGACY_ELASTIC_ACTION_TYPE = "MARKETPLACE_MULTI_LEVEL_DISCOUNT_ON_AMOUNT"
+ELASTIC_ACTION_TYPE = "ELASTIC_BOOSTING"
+ELASTIC_ACTION_TYPES = {LEGACY_ELASTIC_ACTION_TYPE, ELASTIC_ACTION_TYPE}
 ELASTIC_TITLE_MARKER = "Эластичный бустинг"
 
 ACTIVE = "active"
@@ -83,7 +85,7 @@ def _safe_action(action: dict[str, Any]) -> dict[str, Any]:
 
 def _is_elastic(action: dict[str, Any]) -> bool:
     return (
-        action.get("action_type") == ELASTIC_ACTION_TYPE
+        action.get("action_type") in ELASTIC_ACTION_TYPES
         and ELASTIC_TITLE_MARKER in str(action.get("title") or action.get("name") or "")
     )
 

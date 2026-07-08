@@ -30,6 +30,14 @@ def _split_values(value: Any) -> list[str]:
     return [_normalize_text(item) for item in re.split(r"[,;]", _normalize_text(value)) if _normalize_text(item)]
 
 
+def _split_hashtags(value: Any) -> list[str]:
+    if isinstance(value, list):
+        raw_items = value
+    else:
+        raw_items = re.split(r"[\s,;]+", _normalize_text(value))
+    return [item.rstrip(",;") for item in (_normalize_text(item) for item in raw_items) if item.rstrip(",;")]
+
+
 def _numbers(value: Any) -> list[float]:
     return [float(item.replace(",", ".")) for item in re.findall(r"\d+(?:[,.]\d+)?", _normalize_text(value))]
 
@@ -125,7 +133,9 @@ def _media_assets(audit: dict[str, Any], proposed: dict[str, Any]) -> tuple[list
         marketplace = "wb" if "wb" in source_lower else "ozon"
         source_numbers = _numbers(source)
         source_position = int(source_numbers[-1]) if source_numbers else position
-        url = urls.get((marketplace, source_position)) or urls.get(("ozon", position)) or urls.get(("wb", position))
+        url = _first_existing(row.get("source_url"), row.get("url"))
+        if not url:
+            url = urls.get((marketplace, source_position)) or urls.get(("ozon", position)) or urls.get(("wb", position))
         if not url:
             warnings.append(f"missing_photo_url:{source or position}")
             continue
@@ -142,14 +152,25 @@ def _media_assets(audit: dict[str, Any], proposed: dict[str, Any]) -> tuple[list
     return assets, warnings
 
 
-def _physical(proposed: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
-    source = proposed.get("target_physical_params") or proposed.get("target_physical_parameters") or {}
+def _physical(proposed: dict[str, Any], identity: dict[str, Any] | None = None) -> tuple[dict[str, Any], list[str]]:
+    identity = identity or {}
+    source = proposed.get("target_physical_params")
+    if not isinstance(source, dict):
+        source = proposed.get("target_physical_parameters")
+    if not isinstance(source, dict):
+        source = {}
     errors: list[str] = []
     product_size = _first_existing(source.get("product_size_mm"), source.get("product_size"), proposed.get("product_size_mm"))
     ozon_package = _first_existing(source.get("ozon_package_mm"), source.get("ozon_package"))
     wb_package = _first_existing(source.get("wb_package_cm"), source.get("wb_package"))
-    weight = _as_int(source.get("weight_g") or source.get("weight"), 0)
-    pack_qty = _as_int(source.get("pack_qty") or source.get("units_in_one_product"), 1)
+    weight = _as_int(source.get("weight_g") or source.get("ozon_weight_g") or source.get("weight"), 0)
+    pack_qty = _as_int(
+        source.get("pack_qty")
+        or source.get("units_in_one_product")
+        or proposed.get("pack_qty")
+        or identity.get("pack_qty"),
+        1,
+    )
     if not product_size:
         errors.append("product_size_missing")
     if not ozon_package:
@@ -209,13 +230,45 @@ def _colors(proposed: dict[str, Any]) -> list[str]:
     )
 
 
-def _composition(proposed: dict[str, Any]) -> list[str]:
+def _is_patch_product(identity: dict[str, Any], proposed: dict[str, Any], sku: str) -> bool:
+    values = [
+        sku,
+        identity.get("product_type"),
+        identity.get("product_group"),
+        proposed.get("canonical_title"),
+        proposed.get("ozon_title"),
+        proposed.get("wb_title"),
+    ]
+    text = " ".join(_normalize_text(value).lower() for value in values)
+    return sku.startswith("nash_") or "нашивк" in text
+
+
+def _composition(proposed: dict[str, Any], *, is_patch: bool = False) -> list[str]:
     return _split_values(
         proposed.get("composition")
         or _get_nested(proposed, "target_physical_parameters", "composition")
         or _get_nested(proposed, "target_physical_params", "composition")
-        or ["полиэстер", "нейлон"]
+        or (["полиэстер"] if is_patch else ["полиэстер", "нейлон"])
     )
+
+
+def _attachment_type(*, is_patch: bool = False) -> str:
+    if is_patch:
+        return "пришивная без липучки"
+    return "липучка Velcro: крючок пришит с обратной стороны, петля в комплекте"
+
+
+def _wb_decor_type(proposed: dict[str, Any], *, is_patch: bool = False) -> str:
+    explicit = _field_value(proposed.get("wb_attributes") or {}, "Вид декора для одежды", "decor_type")
+    if explicit:
+        return explicit
+    return "нашивка" if is_patch else "шеврон"
+
+
+def _package_contents(pack_qty: str, *, is_patch: bool = False) -> str:
+    if is_patch:
+        return f"нашивка без липучки пришивная {pack_qty} шт."
+    return f"шеврон на липучке {pack_qty} шт."
 
 
 def _material(proposed: dict[str, Any]) -> str:
@@ -246,6 +299,7 @@ def _marketplace_attributes(
     composition: list[str],
     ozon_model_name: str,
     hashtags: str,
+    is_patch: bool,
 ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     pack_qty = str(physical["pack_qty"])
     composition_text = "; ".join(composition)
@@ -269,6 +323,7 @@ def _marketplace_attributes(
         {"field": "Вид выпуска товара", "value": "Фабричное производство"},
         {"field": "Страна-изготовитель", "value": "Россия"},
         {"field": "ТН ВЭД коды ЕАЭС", "value": "5810999000 - Прочие вышивки из прочих текстильных материалов"},
+        {"field": "Нужен код маркировки", "value": "false"},
     ]
     wb_attrs = [
         {"field": "Наименование", "value": content["wb_title"]},
@@ -276,12 +331,13 @@ def _marketplace_attributes(
         {"field": "Бренд", "value": "VitalEmb"},
         {"field": "Категория продавца", "value": "Декор для одежды"},
         {"field": "Цвет", "value": ", ".join(colors)},
-        {"field": "Вид декора для одежды", "value": _field_value(proposed.get("wb_attributes") or {}, "Вид декора для одежды", "decor_type") or "шеврон"},
+        {"field": "Вид декора для одежды", "value": _wb_decor_type(proposed, is_patch=is_patch)},
         {"field": "Состав", "value": composition_text},
         {"field": "Страна производства", "value": "Россия"},
         {"field": "Количество предметов в упаковке", "value": f"{pack_qty} шт."},
-        {"field": "Комплектация", "value": f"шеврон на липучке {pack_qty} шт."},
+        {"field": "Комплектация", "value": _package_contents(pack_qty, is_patch=is_patch)},
         {"field": "ТНВЭД", "value": "5810999000"},
+        {"field": "КИЗ", "value": "false / unchecked"},
     ]
     return ozon_attrs, wb_attrs
 
@@ -298,8 +354,9 @@ def build_passport_from_audit(audit: dict[str, Any], audit_path: Path) -> tuple[
     sku = _audit_internal_sku(audit)
     if not sku:
         errors.append("internal_sku_missing")
+    is_patch = _is_patch_product(identity, proposed, sku)
     content, content_errors = _content(proposed)
-    physical, physical_errors = _physical(proposed)
+    physical, physical_errors = _physical(proposed, identity)
     errors.extend(content_errors)
     errors.extend(physical_errors)
     colors = _colors(proposed)
@@ -313,9 +370,18 @@ def build_passport_from_audit(audit: dict[str, Any], audit_path: Path) -> tuple[
     if not color_name:
         errors.append("color_name_missing")
     material = _material(proposed)
-    composition = _composition(proposed)
+    composition = _composition(proposed, is_patch=is_patch)
     ozon_model_name = _first_existing(proposed.get("ozon_model_name"), _get_nested(proposed, "ozon_attributes", "Название модели"), _get_nested(proposed, "ozon_attributes", "model_name"))
-    hashtags = _first_existing(proposed.get("ozon_hashtags"), _get_nested(proposed, "ozon_attributes", "#Хештеги"), _get_nested(proposed, "ozon_attributes", "hashtags"))
+    hashtags = " ".join(
+        _split_hashtags(
+            _first_existing(
+                proposed.get("ozon_hashtags"),
+                _get_nested(proposed, "ozon_attributes", "#Хештеги"),
+                _get_nested(proposed, "ozon_attributes", "hashtags"),
+            )
+        )
+    )
+    wb_tags = _split_values(_get_nested(proposed, "wb_attributes", "wb_tags") or proposed.get("wb_tags"))
     media_assets, media_warnings = _media_assets(audit, proposed)
     warnings.extend(media_warnings)
     if errors:
@@ -330,6 +396,7 @@ def build_passport_from_audit(audit: dict[str, Any], audit_path: Path) -> tuple[
         composition=composition,
         ozon_model_name=ozon_model_name,
         hashtags=hashtags,
+        is_patch=is_patch,
     )
     owner_review = audit.get("owner_review") if isinstance(audit.get("owner_review"), dict) else {}
     approved_at = _first_existing(owner_review.get("approved_at"), owner_review.get("final_review_sent_at"), datetime.now().isoformat(timespec="seconds"))
@@ -363,7 +430,7 @@ def build_passport_from_audit(audit: dict[str, Any], audit_path: Path) -> tuple[
         "materials": {
             "material": material,
             "composition": composition,
-            "attachment_type": "липучка Velcro: крючок пришит с обратной стороны, петля в комплекте",
+            "attachment_type": _attachment_type(is_patch=is_patch),
         },
         "classification": {"tnved": "5810999000", "country_of_origin": "Россия"},
         "grouping": {
@@ -377,8 +444,8 @@ def build_passport_from_audit(audit: dict[str, Any], audit_path: Path) -> tuple[
         },
         "seo": {
             "search_queries": _get_nested(audit, "seo", "query_pack", "terms") or [],
-            "ozon_hashtags": hashtags.split() if hashtags else [],
-            "wb_tags": _first_existing(_get_nested(proposed, "wb_attributes", "wb_tags"), proposed.get("wb_tags")),
+            "ozon_hashtags": _split_hashtags(hashtags),
+            "wb_tags": wb_tags,
         },
         "ozon": {"attributes": ozon_attrs},
         "wb": {"attributes": wb_attrs},

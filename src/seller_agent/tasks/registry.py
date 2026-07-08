@@ -992,6 +992,23 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         lock_keys=("marketplace:ozon", "marketplace:wb", "cards:approved-card"),
     ),
     RegisteredTask(
+        name="approved-cards-batch-plan",
+        command="plan-approved-cards",
+        title="Plan approved cards batch",
+        description=(
+            "Build a dry-run owner-approved batch apply plan with stage run ids, "
+            "passport checksums and marketplace readiness checks before write operations."
+        ),
+        mode="dry_run",
+        risk="high",
+        marketplaces=("ozon", "wb"),
+        runbook_path="data/planning/card_ops/quick_access.md",
+        requires_credentials=True,
+        requires_mapping=True,
+        verify_task="card-content-update-verify",
+        lock_keys=("marketplace:ozon", "marketplace:wb", "cards:batch-plan"),
+    ),
+    RegisteredTask(
         name="approved-cards-batch-apply",
         command="apply-approved-cards",
         title="Apply approved cards batch",
@@ -1007,7 +1024,7 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_credentials=True,
         requires_mapping=True,
         requires_confirmation=True,
-        source_plan_task="owner-approved-card-html-layer3-passport",
+        source_plan_task="approved-cards-batch-plan",
         verify_task="card-content-update-verify",
         lock_keys=("marketplace:ozon", "marketplace:wb", "cards:batch-apply"),
     ),

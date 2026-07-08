@@ -86,6 +86,34 @@ def test_job_store_approval_reserve_is_atomic(tmp_path: Path) -> None:
     assert approval.owner_job_id == "job_apply_1"
 
 
+def test_job_store_upserts_card_work_item_lifecycle(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "runtime.db")
+
+    planned = store.upsert_card_work_item(
+        internal_sku="chev_test_001",
+        status="owner_approved",
+        plan_run_id="plan_1",
+        checksum="sha256:abc",
+        data={"overall_status": "ok"},
+    )
+    closed = store.upsert_card_work_item(
+        internal_sku="chev_test_001",
+        status="closed",
+        apply_run_id="apply_1",
+        post_verify_run_id="verify_1",
+        data={"overall_status": "ok"},
+    )
+
+    assert planned.status == "owner_approved"
+    assert closed.status == "closed"
+    assert closed.plan_run_id == "plan_1"
+    assert closed.apply_run_id == "apply_1"
+    assert closed.post_verify_run_id == "verify_1"
+    assert closed.checksum == "sha256:abc"
+    assert closed.closed_at
+    assert [item.internal_sku for item in store.list_card_work_items(status="closed")] == ["chev_test_001"]
+
+
 def test_job_store_initializes_schema_once(tmp_path: Path) -> None:
     db_path = tmp_path / "runtime.db"
     store = JobStore(db_path)
@@ -108,4 +136,5 @@ def test_job_store_initializes_schema_once(tmp_path: Path) -> None:
         "approvals",
         "resource_leases",
         "telegram_updates",
+        "card_work_items",
     }.issubset(tables)

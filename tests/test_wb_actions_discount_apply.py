@@ -158,6 +158,48 @@ def test_split_regular_and_staged_rows_keeps_target_payload_approval() -> None:
     assert [row["Артикул WB"] for row in regular_rows] == ["102"]
 
 
+def test_payload_from_rows_uses_limited_upload_discount() -> None:
+    payload, changed_rows = _payload_from_rows(
+        [
+            {
+                "Артикул WB": "101",
+                "Базовая цена": "1100",
+                "Текущая скидка": "0",
+                "Финальная скидка": "55",
+                "Дельта, п.п.": "55",
+                "Скидка к загрузке": "35",
+                "Дельта загрузки, п.п.": "35",
+            }
+        ]
+    )
+
+    assert len(changed_rows) == 1
+    assert payload == {"data": [{"nmID": 101, "price": 1100, "discount": 35}]}
+
+
+def test_split_regular_and_staged_rows_does_not_quarantine_limited_step() -> None:
+    fresh_rows = [
+        {
+            "Артикул WB": "101",
+            "Базовая цена": "1100",
+            "Текущая скидка": "0",
+            "Финальная скидка": "55",
+            "Дельта, п.п.": "55",
+            "Скидка к загрузке": "35",
+            "Дельта загрузки, п.п.": "35",
+        }
+    ]
+    eligible_payload = {"data": [{"nmID": 101, "price": 1100, "discount": 35}]}
+
+    regular_rows, staged_rows = _split_regular_and_staged_rows(
+        eligible_payload=eligible_payload,
+        fresh_changed_rows=fresh_rows,
+    )
+
+    assert [row["Артикул WB"] for row in regular_rows] == ["101"]
+    assert staged_rows == []
+
+
 def test_classify_verify_status_detects_price_quarantine() -> None:
     assert (
         _classify_verify_status(

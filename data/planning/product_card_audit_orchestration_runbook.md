@@ -18,7 +18,7 @@ Shevron. Схема описывает подготовку слоя 2 `data/cat
 
 ```text
 data/planning/card_audit_agent_docs/README.md
-data/planning/card_audit_agent_docs/card_auditor_minimal_prompt.md
+data/planning/card_audit_agent_docs/fresh_single_card_auditor_prompt_v2.md
 data/planning/card_audit_agent_docs/card_validator_minimal_prompt.md
 data/planning/card_audit_agent_docs/card_audit_minimal_rules.md
 data/planning/card_audit_agent_docs/card_audit_output_contract.md
@@ -378,7 +378,7 @@ runbook, `data/planning/recommendations_index.md`, skill при необходи
 
 Перед массовым запуском нужно подготовить:
 
-1. `auditor prompt`;
+1. `fresh_single_card_auditor_prompt_v2.md`;
 2. `validator prompt`;
 3. точную schema `audit.json`;
 4. HTML-шаблон;

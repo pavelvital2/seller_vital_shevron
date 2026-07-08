@@ -49,6 +49,11 @@ Prefer the narrowest matching skill:
 - User-level `marketplace-reporting` - owner-facing Telegram/Markdown/Excel
   report formatting and approval summaries.
 
+For parser-backed WB analytics, first read the shared seller guide:
+`/home/pavel/projects/codex_workspace/PARSER_DATA_API_SELLER_GUIDE.md`.
+Use Parser Data API aggregate endpoints for business questions instead of
+copying parser datasets or pulling arbitrary first-page rows.
+
 ## Required Source Check
 
 For any marketplace task, read the matching runbook before acting. Common

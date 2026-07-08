@@ -18,6 +18,29 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli pla
 data/runs/<date>/ozon_elastic_plan_<timestamp>/
 ```
 
+### Ozon API action type
+
+Проверено 2026-07-07: Ozon изменил `action_type` для текущей акции
+`Эластичный бустинг. Без ограничения срока действия`, `action_id=1977747`, на
+`ELASTIC_BOOSTING`. Старый тип `MARKETPLACE_MULTI_LEVEL_DISCOUNT_ON_AMOUNT`
+оставлен в коде как legacy-compatible вариант.
+
+Если `/elastic` или `plan-ozon-elastic` падает с
+`Ozon elastic action not found`, сначала проверить безопасный snapshot
+`raw/ozon_actions_page_001.json`: если акция с названием `Эластичный бустинг`
+есть, но тип отличается, нужно обновить список допустимых Elastic action types
+в `src/seller_agent/tasks/ozon_elastic_plan.py`, а не переключать товары через
+другой контур.
+
+Подтвержденный smoke после фикса 2026-07-07:
+
+- run: `ozon_elastic_plan_20260707T083117`;
+- action: `1977747`, `Эластичный бустинг. Без ограничения срока действия`;
+- active rows: `500`;
+- candidates: `45`;
+- unique products: `545`;
+- apply не выполнялся.
+
 ## Сравнение с Ozon Супербустинг
 
 `Супербустинг` в Ozon API является отдельной акцией типа `STOCK_DISCOUNT`, а

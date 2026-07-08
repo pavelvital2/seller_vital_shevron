@@ -54,12 +54,12 @@
   apply handler-ы для Ozon/WB actions, promotion bids, reviews/questions,
   inbox и approved card batch.
 - `src/seller_agent/core/job_models.py` - dataclass-модели runtime job
-  контура: job status, approval status, job events, Telegram updates и
-  resource leases.
+  контура: job status, approval status, card work item status, job events,
+  Telegram updates и resource leases.
 - `src/seller_agent/core/job_store.py` - SQLite Job Store MVP:
-  `jobs/job_events/task_requests/approvals/resource_leases/telegram_updates`,
-  dedup Telegram `update_id`, resource leases с TTL и атомарный reserve
-  approval `approved -> applying`.
+  `jobs/job_events/task_requests/approvals/resource_leases/telegram_updates/
+  card_work_items`, dedup Telegram `update_id`, resource leases с TTL,
+  атомарный reserve approval `approved -> applying` и MVP lifecycle карточек.
 - `src/seller_agent/core/job_service.py` - первый JobService v1:
   `submit(task_id, params, actor)`, `run(job_id)` через текущий
   `WorkflowRunner`, перевод apply-задач без `confirmed_by_user=true` в
@@ -163,10 +163,15 @@
   Этот же helper используется preflight-слоем `apply-approved-cards`, чтобы
   не начинать marketplace write неполной пачкой при отсутствующем паспорте.
 - `src/seller_agent/tasks/approved_cards_apply.py` - batch owner-approved
-  карточный apply: проверка/восстановление Layer 3 passport, content update,
-  seller SKU replacement, WB create/media, Ozon create при переданном
-  `--ozon-create-min-price`, финальный catalog-sync и нормализованный
-  post-verify по новым internal SKU.
+  карточный plan/apply: `plan-approved-cards` пишет dry-run package с stage
+  statuses, passport checksums и `plan_checksum`; `apply-approved-cards`
+  применяет по `--plan-run-id` или SKU, проверяет/восстанавливает Layer 3
+  passport, выполняет seller SKU replacement, content update, WB create/media,
+  Ozon create при переданном `--ozon-create-min-price`, финальный catalog-sync
+  и нормализованный post-verify по новым internal SKU.
+- `src/seller_agent/tasks/card_status_sync.py` - локальное закрытие карточного
+  lifecycle после успешного `apply -> verify`: Layer 2 audit, Layer 3 approved
+  passport, `data/catalog/card_status/latest.json` и run links.
 - `src/seller_agent/tasks/ozon_card_create_plan.py` и
   `src/seller_agent/tasks/ozon_card_create_apply.py` - штатный безопасный
   контур создания Ozon-карточек из owner-approved Layer 3 passports:
@@ -477,6 +482,9 @@ Ozon CDP port по умолчанию: `9544`.
   Telegram `--runtime-jobs` для `/status`/`/today`, `bot run-job-next`
   notifier, `bot run-job-loop`, apply handler-ы основных Ozon/WB контуров в
   `WorkflowRunner` и tests.
+- `data/planning/development_work_checkpoint.md` - текущий checkpoint работ по
+  развитию проекта перед возвратом к карточкам: что уже реализовано в runtime,
+  что отложено и откуда продолжать карточный контур.
 - `data/planning/daily_morning_report_runbook.md`
 - `data/planning/reviews_questions_runbook.md`
 - `data/planning/ozon_messenger_runbook.md` - Ozon Messenger/уведомления:
@@ -516,8 +524,9 @@ Ozon CDP port по умолчанию: `9544`.
   одноразовых fresh-аудиторов, fresh-проверяющих, проверенные HTML/JSON слоя 2
   и общий индекс/дашборд.
 - `data/planning/card_audit_agent_docs/` - минимальный пакет документов для
-  одноразовых агентов карточного аудита: prompt аудитора, prompt
-  проверяющего, краткие правила карточки и контракт HTML/JSON результата.
+  одноразовых агентов карточного аудита: основной
+  `fresh_single_card_auditor_prompt_v2.md`, prompt проверяющего, краткие
+  правила карточки, HTML-шаблон и контракт HTML/JSON результата.
 - `data/planning/product_card_work_runbook.md` - обязательная инструкция
   покарточной работы: просмотр всех фото, описание изображения/цветов/фона,
   правила липучки и пришивных нашивок, размеры/вес/упаковка,

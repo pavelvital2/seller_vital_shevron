@@ -258,6 +258,16 @@ fallback.
 - Если Ozon Seller Review API возвращает `HTTP 403: not available with existing
   subscription`, использовать fallback через Ozon ЛК/CDP, но явно писать это в
   отчете как ограничение источника.
+- Для Ozon-вопросов официальный Seller API `/v1/question/*` и
+  `/v1/question/answer/create` может быть недоступен без Premium Plus. В
+  подтвержденном LK/CDP fallback страница вопросов использует внутренний
+  endpoint `/api/v1/create-answer`. Payload должен быть в snake_case:
+  `{"text": "...", "question_id": "...", "questionId": "...",
+  "sc_company_id": "...", "company_type": "seller"}`. CamelCase
+  `scCompanyId` может вернуть `403 PermissionDenied: Failed to get body
+  company ID`. После apply обязательно проверить
+  `/api/v1/get-new-question-counter`: счетчик `NEW` должен уменьшиться до
+  ожидаемого значения.
 - Для Ozon-отзывов с `photos_count > 0` список `/api/v4/review/list` может
   отдавать только счетчик фото без ссылок. Чтобы получить вложения перед
   ответом, через активную Ozon LK/CDP-сессию открыть read-only detail:
@@ -324,6 +334,27 @@ NODE_PATH=/home/Codex/agent-tools/node/node_modules \
 - Проверка: fresh dry-run `ozon_inbox_20260705T132045` показал
   `reviews_count=2`, `questions_count=3`, `actions_count=5`; owner-facing
   отчет содержит отдельный блок `Вопросы покупателей`.
+
+### Внештатная ситуация 2026-07-07: Ozon-вопросы были в отчете, но не попали в approved package
+
+- Симптом: owner-facing `/ozon-inbox` report `ozon_inbox_20260707T204115`
+  показывал `4` согласованных Ozon `question_answer`, но
+  `prepare-reviews-questions-approved` выбрал только Ozon отзывы и
+  `mark_review_viewed`; Ozon questions ушли в `skipped_actions.json`.
+- Причина: `_is_approvable_action` и apply guard разрешали
+  `question_answer` только для WB, хотя Ozon-вопросы уже выводились в
+  согласованный inbox report.
+- Recovery: Ozon отзывы были применены через CDP после восстановления
+  контура `127.0.0.1:9544`, затем 4 Ozon-вопроса применены через LK/CDP
+  endpoint `/api/v1/create-answer` с snake_case payload.
+- Проверка: Ozon reviews counter `NOT_VIEWED 81 -> 0`, `PROCESSED 2639 ->
+  2646`; Ozon question counter `NEW 4 -> 0`; свежий verify
+  `ozon_inbox_20260707T210819` показал `reviews_count=0`,
+  `questions_count=0`, `actions_count=0`.
+- Исправление: Ozon `question_answer` добавлен в approvable actions,
+  apply guard и `scripts/reviews/ozon_apply_reviews_questions_cdp.js`.
+  Тесты: `tests/test_reviews_questions.py`, `tests/test_inbox_workflow.py` -
+  `27 passed`.
 
 ### Штатный apply 2026-07-01
 

@@ -223,6 +223,60 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   `.sessions/ozon/chrome-profile`;
 - WB keepalive подтвердил продавца `ИП Витальская И. П.`.
 
+### Внештатная ситуация с user systemd linger 2026-07-08
+
+Симптом:
+
+- unit-файлы `vital-shevron-ozon-keeper.service`,
+  `vital-shevron-ozon-session-refresh.timer` и
+  `vital-shevron-wb-session-refresh.timer` есть в
+  `~/.config/systemd/user` и имеют состояние `enabled`;
+- после закрытия пользовательского user manager или после reboot
+  `systemctl --user` возвращает ошибку подключения к bus, `/run/user/1000/bus`
+  отсутствует, а `sessions status --marketplace ozon` показывает
+  `CDP port is not listening`;
+- в `journalctl` видно, что `user@1000.service` остановил
+  `vital-shevron-ozon-keeper.service` и session refresh timers.
+
+Причина:
+
+- для пользователя `pavel` не был включен linger;
+- `systemd --user` завершался вместе с пользовательской сессией, поэтому
+  enabled user units не являлись постоянным автоподъемом.
+
+Проверка:
+
+```bash
+loginctl show-user pavel -p Linger -p State -p RuntimePath
+ls -ld /run/user/1000 /run/user/1000/bus
+XDG_RUNTIME_DIR=/run/user/1000 \
+DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
+  systemctl --user list-unit-files 'vital-shevron-*'
+```
+
+Постоянное исправление:
+
+```bash
+loginctl enable-linger pavel
+loginctl show-user pavel -p Linger -p State -p RuntimePath
+```
+
+После этого user manager должен переходить в `State=lingering`, создавать
+`/run/user/1000/bus`, а enabled Ozon/WB user units должны подниматься без
+активной SSH/терминальной сессии. После восстановления авторизованной Ozon
+сессии нужно снова запустить Ozon units/timers и проверить:
+
+```bash
+XDG_RUNTIME_DIR=/run/user/1000 \
+DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
+  systemctl --user start vital-shevron-ozon-keeper.service \
+  vital-shevron-ozon-session-refresh.timer
+
+node scripts/sessions/ozon_session_keepalive_cdp.js
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli sessions status --marketplace ozon
+```
+
 ## WB Watchdog
 
 WB watchdog запускается через:

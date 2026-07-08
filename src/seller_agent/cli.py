@@ -25,7 +25,7 @@ from seller_agent.core.job_store import JobStore
 from seller_agent.core.job_worker import JobWorker
 from seller_agent.core.run_manifest import find_run, latest_run, list_runs
 from seller_agent.tasks.approvals import run_approvals_close, run_approvals_status
-from seller_agent.tasks.approved_cards_apply import run_apply_approved_cards
+from seller_agent.tasks.approved_cards_apply import run_apply_approved_cards, run_plan_approved_cards
 from seller_agent.tasks.card_content_audit_backlog import run_card_content_audit_backlog
 from seller_agent.tasks.card_content_audit_packages import run_card_content_audit_packages
 from seller_agent.tasks.card_content_parameter_inventory import run_card_content_parameter_inventory
@@ -1821,9 +1821,9 @@ def build_parser() -> argparse.ArgumentParser:
     apply_approved_cards.add_argument(
         "--internal-sku",
         action="append",
-        required=True,
         help="Owner-approved internal SKU. Repeat for each card in the approved batch.",
     )
+    apply_approved_cards.add_argument("--plan-run-id", default="", help="Approved plan run id from plan-approved-cards.")
     apply_approved_cards.add_argument(
         "--confirmed-by-user",
         action="store_true",
@@ -1847,6 +1847,33 @@ def build_parser() -> argparse.ArgumentParser:
     )
     apply_approved_cards.add_argument("--ozon-create-wait-seconds", type=int, default=300)
     apply_approved_cards.add_argument("--ozon-create-poll-interval", type=int, default=10)
+    apply_approved_cards.add_argument("--runtime-db", default="runtime/runtime.db", help="SQLite runtime DB path.")
+    apply_approved_cards.add_argument("--no-runtime-db", action="store_true", help="Do not update card lifecycle in SQLite.")
+
+    plan_approved_cards = subparsers.add_parser(
+        "plan-approved-cards",
+        help="Dry-run batch owner-approved card plan with passport checksums before apply.",
+    )
+    plan_approved_cards.add_argument("--data-dir", default="data", help="Project data directory.")
+    plan_approved_cards.add_argument("--run-id", default=None, help="Optional stable base run id.")
+    plan_approved_cards.add_argument(
+        "--internal-sku",
+        action="append",
+        required=True,
+        help="Owner-approved internal SKU. Repeat for each card in the approved batch.",
+    )
+    plan_approved_cards.add_argument(
+        "--ozon-create-min-price",
+        default="",
+        help="Required when the approved batch contains WB-only cards that must be created on Ozon.",
+    )
+    plan_approved_cards.add_argument(
+        "--ozon-create-allow-manual-review",
+        action="store_true",
+        help="Allow Ozon create rows that use owner-approved manual-review price fallback.",
+    )
+    plan_approved_cards.add_argument("--runtime-db", default="runtime/runtime.db", help="SQLite runtime DB path.")
+    plan_approved_cards.add_argument("--no-runtime-db", action="store_true", help="Do not update card lifecycle in SQLite.")
 
     reviews_questions = subparsers.add_parser(
         "reviews-questions",
@@ -2939,6 +2966,7 @@ def main(argv: list[str] | None = None) -> int:
             credentials=load_credentials(),
             data_dir=Path(args.data_dir),
             internal_skus=args.internal_sku,
+            plan_run_id=args.plan_run_id,
             run_id=args.run_id,
             confirmed_by_user=args.confirmed_by_user,
             content_wait_seconds=args.content_wait_seconds,
@@ -2951,6 +2979,20 @@ def main(argv: list[str] | None = None) -> int:
             ozon_create_allow_manual_review=args.ozon_create_allow_manual_review,
             ozon_create_wait_seconds=args.ozon_create_wait_seconds,
             ozon_create_poll_interval=args.ozon_create_poll_interval,
+            runtime_db=None if args.no_runtime_db else Path(args.runtime_db),
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
+
+    if args.command == "plan-approved-cards":
+        result = run_plan_approved_cards(
+            credentials=load_credentials(),
+            data_dir=Path(args.data_dir),
+            internal_skus=args.internal_sku,
+            run_id=args.run_id,
+            ozon_create_min_price=args.ozon_create_min_price,
+            ozon_create_allow_manual_review=args.ozon_create_allow_manual_review,
+            runtime_db=None if args.no_runtime_db else Path(args.runtime_db),
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["overall_status"] in {"ok", "warning"} else 2

@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import csv
 from datetime import datetime
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
 
 from seller_agent.config import AppCredentials
+from seller_agent.core.job_store import JobStore
 from seller_agent.core.run_manifest import write_summary_run_manifest
 from seller_agent.reports.writer import ensure_dir, write_json
 from seller_agent.tasks.card_passport_promotion import ensure_approved_passports_for_batch
+from seller_agent.tasks.card_status_sync import sync_card_apply_status
 from seller_agent.tasks.card_content_update import (
     run_card_content_update_apply,
     run_card_content_update_plan,
@@ -335,6 +338,370 @@ def _run_ozon_create_stage(
     )
     status = "ok" if apply.get("overall_status") == "ok" else "warning"
     return _stage(status, plan=plan, apply=apply, ready_skus=ready_skus, blocked=blocked)
+
+
+def _artifact_path(result: dict[str, Any], *keys: str) -> Path | None:
+    artifacts = result.get("artifacts") if isinstance(result.get("artifacts"), dict) else {}
+    for key in keys:
+        value = artifacts.get(key)
+        if value:
+            return Path(str(value))
+    return None
+
+
+def _sha256_bytes(value: bytes) -> str:
+    return "sha256:" + hashlib.sha256(value).hexdigest()
+
+
+def _canonical_json_bytes(payload: Any) -> bytes:
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def _passport_checksums(data_dir: Path, skus: list[str]) -> dict[str, str]:
+    checksums: dict[str, str] = {}
+    for sku in skus:
+        path = data_dir / "catalog" / "master_passport" / "approved" / f"{sku}.json"
+        checksums[sku] = _sha256_bytes(path.read_bytes()) if path.exists() else ""
+    return checksums
+
+
+def _plan_checksum(plan_package: dict[str, Any]) -> str:
+    payload = {key: value for key, value in plan_package.items() if key != "plan_checksum"}
+    return _sha256_bytes(_canonical_json_bytes(payload))
+
+
+def _find_run_dir(data_dir: Path, run_id: str) -> Path | None:
+    runs_root = data_dir / "runs"
+    if not runs_root.exists():
+        return None
+    for path in runs_root.glob(f"*/*{run_id}*"):
+        if path.is_dir() and path.name == run_id:
+            return path
+    direct_matches = [path for path in runs_root.glob(f"*/{run_id}") if path.is_dir()]
+    return direct_matches[0] if direct_matches else None
+
+
+def _load_plan_package(data_dir: Path, plan_run_id: str) -> tuple[Path, dict[str, Any]]:
+    run_dir = _find_run_dir(data_dir, plan_run_id)
+    if run_dir is None:
+        raise FileNotFoundError(f"plan run not found: {plan_run_id}")
+    plan_path = run_dir / "approved_cards_plan.json"
+    if not plan_path.exists():
+        raise FileNotFoundError(f"approved cards plan package not found: {plan_path}")
+    plan = _read_json(plan_path)
+    if not isinstance(plan, dict):
+        raise ValueError(f"approved cards plan package is not an object: {plan_path}")
+    return run_dir, plan
+
+
+def _validate_plan_package(data_dir: Path, plan_run_id: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    _run_dir, plan = _load_plan_package(data_dir, plan_run_id)
+    errors: list[dict[str, Any]] = []
+    expected_checksum = _normalize_text(plan.get("plan_checksum"))
+    actual_checksum = _plan_checksum(plan)
+    if expected_checksum != actual_checksum:
+        errors.append(
+            {
+                "reason": "plan_checksum_mismatch",
+                "expected": expected_checksum,
+                "actual": actual_checksum,
+            }
+        )
+    skus = [_normalize_text(sku) for sku in plan.get("input_skus") or [] if _normalize_text(sku)]
+    expected_passports = plan.get("passport_checksums") if isinstance(plan.get("passport_checksums"), dict) else {}
+    actual_passports = _passport_checksums(data_dir, skus)
+    changed = [
+        {"internal_sku": sku, "expected": _normalize_text(expected_passports.get(sku)), "actual": actual_passports.get(sku, "")}
+        for sku in skus
+        if _normalize_text(expected_passports.get(sku)) != actual_passports.get(sku, "")
+    ]
+    if changed:
+        errors.append({"reason": "passport_checksum_mismatch", "items": changed})
+    return plan, errors
+
+
+def _stage_run_id(stage: dict[str, Any], key: str) -> str:
+    payload = stage.get(key) if isinstance(stage.get(key), dict) else {}
+    return _normalize_text(payload.get("run_id")) if isinstance(payload, dict) else ""
+
+
+def _maybe_upsert_card_work_items(
+    *,
+    runtime_db: Path | None,
+    skus: list[str],
+    status: str,
+    plan_run_id: str = "",
+    apply_run_id: str = "",
+    post_verify_run_id: str = "",
+    checksums: dict[str, str] | None = None,
+    data: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if runtime_db is None:
+        return {"status": "skipped", "reason": "runtime_db_disabled"}
+    store = JobStore(runtime_db)
+    updated = 0
+    for sku in skus:
+        store.upsert_card_work_item(
+            internal_sku=sku,
+            status=status,  # type: ignore[arg-type]
+            plan_run_id=plan_run_id,
+            apply_run_id=apply_run_id,
+            post_verify_run_id=post_verify_run_id,
+            checksum=(checksums or {}).get(sku, ""),
+            data=data or {},
+        )
+        updated += 1
+    return {"status": "ok", "updated": updated, "runtime_db": str(runtime_db)}
+
+
+def _run_content_plan_stage(
+    *,
+    credentials: AppCredentials,
+    data_dir: Path,
+    internal_skus: list[str],
+    base_run_id: str,
+) -> dict[str, Any]:
+    plan = run_card_content_update_plan(
+        credentials=credentials,
+        data_dir=data_dir,
+        internal_skus=internal_skus,
+        run_id=f"{base_run_id}_content_plan_all",
+        skip_api=False,
+    )
+    plan_path = _artifact_path(plan, "plan")
+    ready_skus, blocked = _ready_skus_from_plan(plan_path) if plan_path else ([], [{"reason": "missing_content_plan_artifact"}])
+    status = "ok" if ready_skus else "blocked"
+    if blocked and ready_skus:
+        status = "warning"
+    return _stage(status, plan=plan, ready_skus=ready_skus, blocked=blocked)
+
+
+def _run_seller_sku_plan_stage(
+    *,
+    credentials: AppCredentials,
+    data_dir: Path,
+    internal_skus: list[str],
+    base_run_id: str,
+) -> dict[str, Any]:
+    plan = run_seller_sku_update_plan(
+        credentials=credentials,
+        data_dir=data_dir,
+        internal_skus=internal_skus,
+        run_id=f"{base_run_id}_seller_sku_plan_all",
+        skip_api=False,
+    )
+    plan_path = _artifact_path(plan, "seller_sku_update_plan", "plan")
+    ready_skus, blocked = _ready_skus_from_plan(plan_path) if plan_path else ([], [{"reason": "missing_seller_sku_plan_artifact"}])
+    status = "ok" if ready_skus else "blocked"
+    if blocked and ready_skus:
+        status = "warning"
+    return _stage(status, plan=plan, ready_skus=ready_skus, blocked=blocked)
+
+
+def _run_wb_create_plan_stage(
+    *,
+    credentials: AppCredentials,
+    data_dir: Path,
+    internal_skus: list[str],
+    base_run_id: str,
+) -> dict[str, Any]:
+    create_skus = [sku for sku in internal_skus if _passport_wants_wb_create(data_dir, sku)]
+    if not create_skus:
+        return _stage("skipped", plan=None, ready_skus=[], blocked=[])
+    plan = run_wb_card_create_plan(
+        credentials=credentials,
+        data_dir=data_dir,
+        internal_skus=create_skus,
+        run_id=f"{base_run_id}_wb_create_plan",
+    )
+    plan_items = int((plan.get("summary") or {}).get("plan_items") or 0)
+    manual_review_items = int((plan.get("summary") or {}).get("manual_review_items") or 0)
+    if plan_items <= 0:
+        return _stage("skipped", plan=plan, ready_skus=[], blocked=[])
+    if manual_review_items:
+        return _stage("blocked", plan=plan, ready_skus=[], blocked=[{"reason": "wb_create_manual_review_items"}])
+    return _stage("ok", plan=plan, ready_skus=create_skus, blocked=[])
+
+
+def _run_ozon_create_plan_stage(
+    *,
+    credentials: AppCredentials,
+    data_dir: Path,
+    internal_skus: list[str],
+    base_run_id: str,
+    min_price: str,
+    allow_manual_review: bool,
+) -> dict[str, Any]:
+    create_skus = [sku for sku in internal_skus if _passport_wants_ozon_create(data_dir, sku)]
+    if not create_skus:
+        return _stage("skipped", plan=None, ready_skus=[], blocked=[])
+    if not _normalize_text(min_price):
+        return _stage(
+            "blocked",
+            plan=None,
+            ready_skus=[],
+            blocked=[{"reason": "ozon_create_min_price_required", "internal_skus": create_skus}],
+        )
+    plan = run_ozon_card_create_plan(
+        credentials=credentials,
+        data_dir=data_dir,
+        internal_skus=create_skus,
+        run_id=f"{base_run_id}_ozon_create_plan",
+        min_price=min_price,
+        allow_wb_price_fallback=allow_manual_review,
+    )
+    plan_path = _artifact_path(plan, "plan")
+    ready_skus, blocked = _ready_skus_from_plan(plan_path) if plan_path else ([], [{"reason": "missing_ozon_create_plan_artifact"}])
+    manual_review_items = int(plan.get("manual_review_items") or 0)
+    if not ready_skus:
+        return _stage("blocked", plan=plan, ready_skus=[], blocked=blocked)
+    if manual_review_items and not allow_manual_review:
+        blocked = [*blocked, {"reason": "ozon_create_manual_review_items", "count": manual_review_items}]
+        return _stage("blocked", plan=plan, ready_skus=ready_skus, blocked=blocked)
+    return _stage("warning" if blocked else "ok", plan=plan, ready_skus=ready_skus, blocked=blocked)
+
+
+def run_plan_approved_cards(
+    *,
+    credentials: AppCredentials,
+    data_dir: Path = Path("data"),
+    internal_skus: list[str] | None = None,
+    run_id: str | None = None,
+    ozon_create_min_price: str = "",
+    ozon_create_allow_manual_review: bool = False,
+    runtime_db: Path | None = None,
+) -> dict[str, Any]:
+    skus = [sku.strip() for sku in (internal_skus or []) if sku and sku.strip()]
+    if not skus:
+        raise ValueError("no internal_skus")
+    started_at = datetime.now()
+    base_run_id = run_id or f"plan_approved_cards_{started_at.strftime('%Y%m%dT%H%M%S')}"
+    run_dir = ensure_dir(data_dir / "runs" / started_at.strftime("%Y-%m-%d") / base_run_id)
+
+    passport_preflight = ensure_approved_passports_for_batch(data_dir=data_dir, internal_skus=skus, base_run_id=base_run_id)
+    passport_checksums = _passport_checksums(data_dir, skus)
+    stages: dict[str, Any] = {}
+    if passport_preflight.get("status") == "ok":
+        seller_sku = _run_seller_sku_plan_stage(
+            credentials=credentials,
+            data_dir=data_dir,
+            internal_skus=skus,
+            base_run_id=base_run_id,
+        )
+        seller_ready = seller_sku.get("ready_skus") or []
+        content = _run_content_plan_stage(
+            credentials=credentials,
+            data_dir=data_dir,
+            internal_skus=seller_ready or skus,
+            base_run_id=base_run_id,
+        )
+        content_ready = content.get("ready_skus") or []
+        final_skus = seller_ready or content_ready or skus
+        wb_create = _run_wb_create_plan_stage(
+            credentials=credentials,
+            data_dir=data_dir,
+            internal_skus=final_skus,
+            base_run_id=base_run_id,
+        )
+        ozon_create = _run_ozon_create_plan_stage(
+            credentials=credentials,
+            data_dir=data_dir,
+            internal_skus=final_skus,
+            base_run_id=base_run_id,
+            min_price=ozon_create_min_price,
+            allow_manual_review=ozon_create_allow_manual_review,
+        )
+        stages = {
+            "seller_sku_update": seller_sku,
+            "content_update": content,
+            "wb_card_create": wb_create,
+            "ozon_card_create": ozon_create,
+        }
+    else:
+        stages = {
+            "seller_sku_update": _stage("skipped", plan=None, ready_skus=[], blocked=[]),
+            "content_update": _stage("skipped", plan=None, ready_skus=[], blocked=[]),
+            "wb_card_create": _stage("skipped", plan=None, ready_skus=[], blocked=[]),
+            "ozon_card_create": _stage("skipped", plan=None, ready_skus=[], blocked=[]),
+        }
+
+    stage_statuses = [stage["status"] for stage in stages.values()]
+    if passport_preflight.get("status") != "ok" or any(status == "blocked" for status in stage_statuses):
+        overall_status = "blocked"
+    elif any(status == "warning" for status in stage_statuses):
+        overall_status = "warning"
+    else:
+        overall_status = "ok"
+
+    plan_package = {
+        "schema_version": "approved-cards-plan/v1",
+        "run_id": base_run_id,
+        "created_at": started_at.isoformat(timespec="seconds"),
+        "mode": "dry_run",
+        "task": "plan-approved-cards",
+        "overall_status": overall_status,
+        "input_skus": skus,
+        "passport_checksums": passport_checksums,
+        "options": {
+            "ozon_create_min_price": ozon_create_min_price,
+            "ozon_create_allow_manual_review": ozon_create_allow_manual_review,
+        },
+        "summary": {
+            "input_skus": len(skus),
+            "seller_sku_ready": len(stages["seller_sku_update"].get("ready_skus") or []),
+            "content_ready": len(stages["content_update"].get("ready_skus") or []),
+            "wb_create_ready": len(stages["wb_card_create"].get("ready_skus") or []),
+            "ozon_create_ready": len(stages["ozon_card_create"].get("ready_skus") or []),
+            "passport_preflight_status": passport_preflight.get("status", "unknown"),
+            "seller_sku_status": stages["seller_sku_update"]["status"],
+            "content_status": stages["content_update"]["status"],
+            "wb_create_status": stages["wb_card_create"]["status"],
+            "ozon_create_status": stages["ozon_card_create"]["status"],
+        },
+        "passport_preflight": passport_preflight,
+        "stages": stages,
+        "artifacts": {
+            "run_dir": str(run_dir),
+            "plan": str(run_dir / "approved_cards_plan.json"),
+            "summary": str(run_dir / "summary.json"),
+            "report": str(run_dir / "plan_approved_cards_report.md"),
+        },
+    }
+    plan_package["plan_checksum"] = _plan_checksum(plan_package)
+    write_json(run_dir / "approved_cards_plan.json", plan_package)
+    write_json(run_dir / "summary.json", plan_package)
+    _write_plan_report(run_dir / "plan_approved_cards_report.md", plan_package)
+    manifest = write_summary_run_manifest(
+        data_dir=data_dir,
+        run_dir=run_dir,
+        summary=plan_package,
+        task="plan-approved-cards",
+        mode="dry_run",
+        risk="high",
+        marketplaces=["ozon", "wb"],
+        inputs={
+            "internal_skus": skus,
+            "ozon_create_min_price": ozon_create_min_price,
+            "ozon_create_allow_manual_review": ozon_create_allow_manual_review,
+        },
+        lifecycle_status="approved" if overall_status == "ok" else "pending_review",
+        closed=False,
+    )
+    plan_package["artifacts"]["run_manifest"] = manifest["manifest"]
+    lifecycle = _maybe_upsert_card_work_items(
+        runtime_db=runtime_db,
+        skus=skus,
+        status="owner_approved" if overall_status == "ok" else "blocked",
+        plan_run_id=base_run_id,
+        checksums=passport_checksums,
+        data={"overall_status": overall_status},
+    )
+    plan_package["runtime_lifecycle"] = lifecycle
+    plan_package["plan_checksum"] = _plan_checksum(plan_package)
+    write_json(run_dir / "approved_cards_plan.json", plan_package)
+    write_json(run_dir / "summary.json", plan_package)
+    _write_plan_report(run_dir / "plan_approved_cards_report.md", plan_package)
+    return plan_package
 
 
 def _update_json_rows(path: Path, key_names: tuple[str, ...], values: dict[str, dict[str, str]]) -> int:
@@ -886,6 +1253,7 @@ def run_apply_approved_cards(
     credentials: AppCredentials,
     data_dir: Path = Path("data"),
     internal_skus: list[str] | None = None,
+    plan_run_id: str = "",
     run_id: str | None = None,
     confirmed_by_user: bool = False,
     content_wait_seconds: int = 180,
@@ -898,18 +1266,28 @@ def run_apply_approved_cards(
     ozon_create_allow_manual_review: bool = False,
     ozon_create_wait_seconds: int = 300,
     ozon_create_poll_interval: int = 10,
+    runtime_db: Path | None = None,
 ) -> dict[str, Any]:
     if not confirmed_by_user:
         raise RuntimeError("Apply requires explicit user confirmation")
+    plan_package: dict[str, Any] | None = None
+    plan_validation_errors: list[dict[str, Any]] = []
+    if plan_run_id:
+        plan_package, plan_validation_errors = _validate_plan_package(data_dir, plan_run_id)
+        if not internal_skus:
+            internal_skus = [_normalize_text(sku) for sku in plan_package.get("input_skus") or [] if _normalize_text(sku)]
+        options = plan_package.get("options") if isinstance(plan_package.get("options"), dict) else {}
+        if not ozon_create_min_price:
+            ozon_create_min_price = _normalize_text(options.get("ozon_create_min_price"))
+        if not ozon_create_allow_manual_review:
+            ozon_create_allow_manual_review = bool(options.get("ozon_create_allow_manual_review"))
     skus = [sku.strip() for sku in (internal_skus or []) if sku and sku.strip()]
     if not skus:
         raise ValueError("no internal_skus")
     started_at = datetime.now()
     base_run_id = run_id or f"apply_approved_cards_{started_at.strftime('%Y%m%dT%H%M%S')}"
     run_dir = ensure_dir(data_dir / "runs" / started_at.strftime("%Y-%m-%d") / base_run_id)
-
-    passport_preflight = ensure_approved_passports_for_batch(data_dir=data_dir, internal_skus=skus, base_run_id=base_run_id)
-    if passport_preflight.get("status") != "ok":
+    if plan_validation_errors:
         result = {
             "run_id": base_run_id,
             "started_at": started_at.isoformat(timespec="seconds"),
@@ -917,6 +1295,7 @@ def run_apply_approved_cards(
             "task": "apply-approved-cards",
             "overall_status": "blocked",
             "input_skus": skus,
+            "plan_run_id": plan_run_id,
             "summary": {
                 "input_skus": len(skus),
                 "content_ready": 0,
@@ -929,10 +1308,85 @@ def run_apply_approved_cards(
                 "ozon_create_status": "skipped",
                 "catalog_sync_status": "skipped",
                 "passport_preflight_status": "blocked",
+                "plan_validation_status": "blocked",
             },
+            "plan_validation": {"status": "blocked", "errors": plan_validation_errors},
+            "passport_preflight": {"status": "skipped"},
+            "stages": {},
+            "local_catalog_sync": {"status": "skipped"},
+            "local_status_sync": {"status": "skipped"},
+            "artifacts": {
+                "run_dir": str(run_dir),
+                "summary": str(run_dir / "summary.json"),
+                "report": str(run_dir / "apply_approved_cards_report.md"),
+            },
+        }
+        write_json(run_dir / "summary.json", result)
+        _write_report(run_dir / "apply_approved_cards_report.md", result)
+        manifest = write_summary_run_manifest(
+            data_dir=data_dir,
+            run_dir=run_dir,
+            summary=result,
+            task="apply-approved-cards",
+            mode="apply",
+            risk="high",
+            marketplaces=["ozon", "wb"],
+            inputs={"internal_skus": skus, "plan_run_id": plan_run_id},
+            source_run_ids=[plan_run_id] if plan_run_id else [],
+            lifecycle_status="failed",
+            closed=False,
+        )
+        result["artifacts"]["run_manifest"] = manifest["manifest"]
+        _maybe_upsert_card_work_items(
+            runtime_db=runtime_db,
+            skus=skus,
+            status="blocked",
+            plan_run_id=plan_run_id,
+            apply_run_id=base_run_id,
+            data={"reason": "plan_validation_failed", "errors": plan_validation_errors},
+        )
+        write_json(run_dir / "summary.json", result)
+        return result
+
+    _maybe_upsert_card_work_items(
+        runtime_db=runtime_db,
+        skus=skus,
+        status="applying",
+        plan_run_id=plan_run_id,
+        apply_run_id=base_run_id,
+        checksums=_passport_checksums(data_dir, skus),
+        data={"started_at": started_at.isoformat(timespec="seconds")},
+    )
+
+    passport_preflight = ensure_approved_passports_for_batch(data_dir=data_dir, internal_skus=skus, base_run_id=base_run_id)
+    if passport_preflight.get("status") != "ok":
+        result = {
+            "run_id": base_run_id,
+            "started_at": started_at.isoformat(timespec="seconds"),
+            "mode": "apply",
+            "task": "apply-approved-cards",
+            "overall_status": "blocked",
+            "input_skus": skus,
+            "plan_run_id": plan_run_id,
+            "summary": {
+                "input_skus": len(skus),
+                "content_ready": 0,
+                "seller_sku_ready": 0,
+                "wb_create_ready": 0,
+                "ozon_create_ready": 0,
+                "content_status": "skipped",
+                "seller_sku_status": "skipped",
+                "wb_create_status": "skipped",
+                "ozon_create_status": "skipped",
+                "catalog_sync_status": "skipped",
+                "passport_preflight_status": "blocked",
+                "plan_validation_status": "ok" if plan_run_id else "not_used",
+            },
+            "plan_validation": {"status": "ok" if plan_run_id else "not_used"},
             "passport_preflight": passport_preflight,
             "stages": {},
             "local_catalog_sync": {"status": "skipped"},
+            "local_status_sync": {"status": "skipped"},
             "artifacts": {
                 "run_dir": str(run_dir),
                 "summary": str(run_dir / "summary.json"),
@@ -950,32 +1404,44 @@ def run_apply_approved_cards(
             risk="high",
             marketplaces=["ozon", "wb"],
             inputs={"internal_skus": skus},
+            source_run_ids=[plan_run_id] if plan_run_id else [],
             lifecycle_status="blocked",
             closed=False,
         )
         result["artifacts"]["run_manifest"] = manifest["manifest"]
+        _maybe_upsert_card_work_items(
+            runtime_db=runtime_db,
+            skus=skus,
+            status="blocked",
+            plan_run_id=plan_run_id,
+            apply_run_id=base_run_id,
+            data={"reason": "passport_preflight_blocked"},
+        )
         write_json(run_dir / "summary.json", result)
         return result
-
-    content = _run_content_stage(
-        credentials=credentials,
-        data_dir=data_dir,
-        internal_skus=skus,
-        base_run_id=base_run_id,
-        wait_seconds=content_wait_seconds,
-        poll_interval=content_poll_interval,
-    )
-    content_ready = content.get("ready_skus") or []
 
     seller_sku = _run_seller_sku_stage(
         credentials=credentials,
         data_dir=data_dir,
-        internal_skus=content_ready or skus,
+        internal_skus=skus,
         base_run_id=base_run_id,
         wait_seconds=seller_sku_wait_seconds,
         poll_interval=seller_sku_poll_interval,
     )
     seller_ready = seller_sku.get("ready_skus") or []
+
+    if not seller_ready and seller_sku["status"] == "blocked":
+        content = _stage("skipped", plan=None, apply=None, ready_skus=[], blocked=[{"reason": "seller_sku_stage_blocked"}])
+    else:
+        content = _run_content_stage(
+            credentials=credentials,
+            data_dir=data_dir,
+            internal_skus=seller_ready or skus,
+            base_run_id=base_run_id,
+            wait_seconds=content_wait_seconds,
+            poll_interval=content_poll_interval,
+        )
+    content_ready = content.get("ready_skus") or []
 
     wb_create = _run_wb_create_stage(
         credentials=credentials,
@@ -1020,6 +1486,30 @@ def run_apply_approved_cards(
     elif any(status == "warning" for status in stage_statuses):
         overall_status = "warning"
 
+    status_sync = {"status": "skipped", "reason": "post_verify_not_ok"}
+    if post_verify["status"] == "ok":
+        status_sync = sync_card_apply_status(
+            data_dir=data_dir,
+            internal_skus=final_skus,
+            run_id=base_run_id,
+            summary_path=str(run_dir / "summary.json"),
+            report_path=str(run_dir / "apply_approved_cards_report.md"),
+            post_verify_run_id=_stage_run_id(post_verify, "verify"),
+            content_update_run_id=_stage_run_id(content, "apply"),
+            seller_sku_update_run_id=_stage_run_id(seller_sku, "apply"),
+            catalog_sync_run_id=base_run_id if catalog_sync.get("status") == "ok" else "",
+        )
+    runtime_lifecycle = _maybe_upsert_card_work_items(
+        runtime_db=runtime_db,
+        skus=final_skus,
+        status="closed" if overall_status == "ok" else "applied",
+        plan_run_id=plan_run_id,
+        apply_run_id=base_run_id,
+        post_verify_run_id=_stage_run_id(post_verify, "verify"),
+        checksums=_passport_checksums(data_dir, final_skus),
+        data={"overall_status": overall_status, "status_sync": status_sync},
+    )
+
     result = {
         "run_id": base_run_id,
         "started_at": started_at.isoformat(timespec="seconds"),
@@ -1027,6 +1517,7 @@ def run_apply_approved_cards(
         "task": "apply-approved-cards",
         "overall_status": overall_status,
         "input_skus": skus,
+        "plan_run_id": plan_run_id,
         "summary": {
             "input_skus": len(skus),
             "content_ready": len(content_ready),
@@ -1040,16 +1531,21 @@ def run_apply_approved_cards(
             "catalog_sync_status": catalog_sync.get("status", "unknown"),
             "post_verify_status": post_verify["status"],
             "passport_preflight_status": passport_preflight.get("status", "unknown"),
+            "plan_validation_status": "ok" if plan_run_id else "not_used",
+            "status_sync_status": status_sync.get("status", "unknown"),
         },
+        "plan_validation": {"status": "ok" if plan_run_id else "not_used"},
         "passport_preflight": passport_preflight,
         "stages": {
-            "content_update": content,
             "seller_sku_update": seller_sku,
+            "content_update": content,
             "wb_card_create": wb_create,
             "ozon_card_create": ozon_create,
             "post_apply_content_verify": post_verify,
         },
         "local_catalog_sync": catalog_sync,
+        "local_status_sync": status_sync,
+        "runtime_lifecycle": runtime_lifecycle,
         "artifacts": {
             "run_dir": str(run_dir),
             "summary": str(run_dir / "summary.json"),
@@ -1074,7 +1570,9 @@ def run_apply_approved_cards(
             "ozon_create_min_price": ozon_create_min_price,
             "ozon_create_allow_manual_review": ozon_create_allow_manual_review,
             "ozon_create_wait_seconds": ozon_create_wait_seconds,
+            "plan_run_id": plan_run_id,
         },
+        source_run_ids=[plan_run_id] if plan_run_id else [],
         lifecycle_status="verified" if overall_status == "ok" else "applied",
         closed=overall_status == "ok",
     )
@@ -1119,5 +1617,34 @@ def _write_report(path: Path, result: dict[str, Any]) -> None:
             if key == "status":
                 continue
             lines.append(f"- `{key}`: `{value}`")
+        lines.append("")
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _write_plan_report(path: Path, result: dict[str, Any]) -> None:
+    lines = [
+        "# Plan Approved Cards Batch",
+        "",
+        f"Run ID: `{result['run_id']}`",
+        f"Status: `{result['overall_status']}`",
+        f"Plan checksum: `{result.get('plan_checksum', '')}`",
+        "",
+        "## Summary",
+        "",
+    ]
+    for key, value in result["summary"].items():
+        lines.append(f"- `{key}`: `{value}`")
+    lines.extend(["", "## SKUs", ""])
+    for sku in result["input_skus"]:
+        lines.append(f"- `{sku}`")
+    lines.extend(["", "## Stage Run IDs", ""])
+    for name, stage in result["stages"].items():
+        lines.append(f"### {name}")
+        lines.append(f"- status: `{stage.get('status')}`")
+        plan = stage.get("plan") or {}
+        if plan:
+            lines.append(f"- plan: `{plan.get('run_id')}`")
+        if stage.get("blocked"):
+            lines.append(f"- blocked: `{len(stage['blocked'])}`")
         lines.append("")
     path.write_text("\n".join(lines), encoding="utf-8")

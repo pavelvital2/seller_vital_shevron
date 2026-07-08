@@ -21,6 +21,7 @@ from seller_agent.reports.writer import ensure_dir, write_json
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
+WB_MAX_DISCOUNT_STEP_PERCENTAGE_POINTS = 35
 
 
 class WbActionsSnapshotBusyError(RuntimeError):
@@ -141,6 +142,26 @@ def ceil_percent_from_price(base_price: Decimal, plan_price: Decimal) -> int:
         return 0
     raw = (Decimal("1") - (plan_price / base_price)) * Decimal("100")
     return int(raw.to_integral_value(rounding=ROUND_CEILING))
+
+
+def limit_discount_step(
+    *,
+    current_discount: int,
+    target_discount: int,
+    max_step: int = WB_MAX_DISCOUNT_STEP_PERCENTAGE_POINTS,
+) -> int:
+    delta = target_discount - current_discount
+    if abs(delta) <= max_step:
+        return target_discount
+    if delta > 0:
+        return current_discount + max_step
+    return current_discount - max_step
+
+
+def _discount_price(base_price: Decimal | None, discount: int) -> str:
+    if base_price is None:
+        return ""
+    return str((base_price * (Decimal("100") - Decimal(discount)) / Decimal("100")).quantize(Decimal("0.01")))
 
 
 def _run_snapshot(*, day: str, raw_dir: Path, prices_dir: Path) -> dict[str, Any]:
@@ -288,10 +309,17 @@ def build_rows(*, actions_dir: Path, prices_path: Path, scheme: Scheme) -> tuple
             final_discount = scheme.fallback_no_promo
             reason = f"товара нет в активных акциях -> {scheme.fallback_no_promo}%"
 
-        final_price = ""
-        if base_price is not None:
-            final_price = str((base_price * (Decimal("100") - Decimal(final_discount)) / Decimal("100")).quantize(Decimal("0.01")))
+        final_price = _discount_price(base_price, final_discount)
         delta = final_discount - current_discount
+        upload_discount = limit_discount_step(
+            current_discount=current_discount,
+            target_discount=final_discount,
+        )
+        upload_delta = upload_discount - current_discount
+        upload_price = _discount_price(base_price, upload_discount)
+        remaining_delta = final_discount - upload_discount
+        if remaining_delta:
+            summary["step_limited"] += 1
         if delta > 0:
             action = "увеличить скидку"
             summary["increase"] += 1
@@ -328,6 +356,11 @@ def build_rows(*, actions_dir: Path, prices_path: Path, scheme: Scheme) -> tuple
                 "Финальная скидка": final_discount,
                 "Финальная цена": final_price,
                 "Дельта, п.п.": delta,
+                "Скидка к загрузке": upload_discount,
+                "Цена к загрузке": upload_price,
+                "Дельта загрузки, п.п.": upload_delta,
+                "Осталось до целевой, п.п.": remaining_delta,
+                "Ограничение шага": f"{WB_MAX_DISCOUNT_STEP_PERCENTAGE_POINTS} п.п." if remaining_delta else "",
                 "Действие": action,
                 "Причина": reason,
             }
@@ -369,19 +402,28 @@ def _price_value(value: str) -> int | float:
 
 
 def build_payload(rows: list[dict[str, Any]]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    changed_rows = [row for row in rows if int(row["Дельта, п.п."]) != 0]
+    changed_rows = [row for row in rows if int(row.get("Дельта загрузки, п.п.") or row["Дельта, п.п."]) != 0]
     payload = {
         "dry_run": True,
         "upload_endpoint": "https://discounts-prices-api.wildberries.ru/api/v2/upload/task",
+        "discount_step_limit_pp": WB_MAX_DISCOUNT_STEP_PERCENTAGE_POINTS,
         "data": [
             {
                 "nmID": int(row["Артикул WB"]),
                 "price": _price_value(str(row["Базовая цена"])),
-                "discount": int(row["Финальная скидка"]),
+                "discount": int(row.get("Скидка к загрузке") or row["Финальная скидка"]),
             }
             for row in changed_rows
         ],
-        "note": "Preview only. Do not upload without explicit owner confirmation.",
+        "target_discounts": {
+            str(int(row["Артикул WB"])): int(row["Финальная скидка"])
+            for row in changed_rows
+            if int(row.get("Скидка к загрузке") or row["Финальная скидка"]) != int(row["Финальная скидка"])
+        },
+        "note": (
+            "Preview only. Do not upload without explicit owner confirmation. "
+            f"WB discount changes are limited to {WB_MAX_DISCOUNT_STEP_PERCENTAGE_POINTS} percentage points per upload."
+        ),
     }
     return payload, changed_rows
 
@@ -403,6 +445,7 @@ def write_report(path: Path, *, run_id: str, scheme: Scheme, summary: dict[str, 
         "outside_promos",
         "multiple_promos",
         "threshold_triggered",
+        "step_limited",
         "to_change",
         "increase",
         "decrease",

@@ -187,6 +187,14 @@ async function fetchCounter(page, companyId) {
     action.approved === true &&
     action.draft_text
   ));
+  const questionActions = approvedActions.filter((action) => (
+    action.platform === 'ozon' &&
+    action.source_type === 'question' &&
+    action.action_type === 'question_answer' &&
+    action.approved === true &&
+    action.source_id &&
+    action.draft_text
+  ));
   const markViewedActions = approvedActions.filter((action) => (
     action.platform === 'ozon' &&
     action.source_type === 'review' &&
@@ -202,8 +210,11 @@ async function fetchCounter(page, companyId) {
     ok: false,
     blocker: '',
     beforeCounter: null,
+    beforeQuestionsCounter: null,
     afterCounter: null,
+    afterQuestionsCounter: null,
     sent: [],
+    questions_answered: [],
     marked_viewed: [],
     mark_viewed_batches: [],
     skipped: [],
@@ -214,7 +225,7 @@ async function fetchCounter(page, companyId) {
   try {
     const companyId = loadCompanyId();
     if (!companyId) throw new Error('Missing Ozon company id. Set OZON_REVIEW_COMPANY_ID or Ozon seller credentials file.');
-    if (!replyActions.length && !markViewedActions.length) {
+    if (!replyActions.length && !markViewedActions.length && !questionActions.length) {
       result.ok = true;
       result.skipped.push({ reason: 'no_approved_ozon_actions' });
       return;
@@ -264,6 +275,38 @@ async function fetchCounter(page, companyId) {
       await page.waitForTimeout(700);
     }
 
+    if (questionActions.length) {
+      await page.goto('https://seller.ozon.ru/app/reviews/questions', { waitUntil: 'domcontentloaded', timeout: 60000 });
+      await page.waitForTimeout(3000);
+      result.beforeQuestionsCounter = await post(page, '/api/v1/get-new-question-counter', {
+        sc_company_id: companyId,
+        company_type: companyType,
+      }, 'questions', companyId);
+
+      for (const action of questionActions) {
+        const response = await post(page, '/api/v1/create-answer', {
+          text: action.draft_text,
+          question_id: String(action.source_id),
+          questionId: String(action.source_id),
+          sc_company_id: companyId,
+          company_type: companyType,
+        }, 'questions', companyId);
+        const row = {
+          source_id: action.source_id,
+          offer_id: action.offer_id,
+          sku: action.sku,
+          status: response.status,
+          ok: response.ok,
+          response: compactResponse(response),
+        };
+        result.questions_answered.push(row);
+        if (!response.ok) {
+          throw new Error(`Ozon question answer failed for ${action.offer_id}/${action.source_id}: HTTP ${response.status}`);
+        }
+        await page.waitForTimeout(700);
+      }
+    }
+
     const markBatches = chunkList(markViewedActions, 50);
     for (let batchIndex = 0; batchIndex < markBatches.length; batchIndex += 1) {
       const batch = markBatches[batchIndex];
@@ -301,6 +344,12 @@ async function fetchCounter(page, companyId) {
 
     await page.waitForTimeout(3000);
     result.afterCounter = await fetchCounter(page, companyId);
+    if (questionActions.length) {
+      result.afterQuestionsCounter = await post(page, '/api/v1/get-new-question-counter', {
+        sc_company_id: companyId,
+        company_type: companyType,
+      }, 'questions', companyId);
+    }
     result.ok = true;
   } catch (error) {
     result.blocker = error.message || String(error);

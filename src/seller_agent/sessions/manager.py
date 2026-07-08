@@ -12,7 +12,7 @@ from typing import Any
 
 from seller_agent.reports.writer import ensure_dir, write_json
 from seller_agent.safety.locks import file_lock
-from seller_agent.sessions.state import PROJECT_ROOT, combined_session_status
+from seller_agent.sessions.state import PROJECT_ROOT, combined_session_status, systemd_user_env
 
 
 SCRIPT_DIR = PROJECT_ROOT / "scripts" / "sessions"
@@ -98,7 +98,7 @@ def _run_systemd_commands(commands: list[list[str]], *, timeout: int = 180) -> l
     if not systemd_user_available():
         return [{"status": "warning", "returncode": None, "error": "systemd --user is not available"}]
     for command in commands:
-        results.append(_run_command(["systemctl", "--user", *command], timeout=timeout))
+        results.append(_run_command(["systemctl", "--user", *command], env=systemd_user_env(), timeout=timeout))
     return results
 
 
@@ -306,7 +306,7 @@ def restore_ozon_session(
         )
         login_returncode = operations["interactive_login"].get("returncode")
 
-        if systemd_available:
+        if systemd_available and login_returncode == 0:
             operations["start_systemd"] = _run_systemd_commands(
                 [
                     ["restart", "vital-shevron-ozon-keeper.service"],
@@ -315,9 +315,14 @@ def restore_ozon_session(
                 ],
                 timeout=180,
             )
-        else:
+        elif not systemd_available and login_returncode == 0:
             operations["start_keeper"] = _run_command(["bash", str(SCRIPT_DIR / "start_ozon_keeper.sh")])
             operations["start_watchdog"] = _run_command(["bash", str(SCRIPT_DIR / "start_ozon_session_watchdog.sh")])
+        else:
+            operations["start_after_login"] = {
+                "status": "skipped",
+                "reason": "interactive login did not complete successfully",
+            }
 
     status = combined_session_status(["ozon"])
     result_status = "ok" if login_returncode == 0 and status["overall_status"] == "ok" else "warning"
@@ -336,7 +341,7 @@ def restore_ozon_session(
 
 
 def systemd_user_available() -> bool:
-    result = _run_command(["systemctl", "--user", "show-environment"], timeout=30)
+    result = _run_command(["systemctl", "--user", "show-environment"], env=systemd_user_env(), timeout=30)
     return result["status"] == "ok"
 
 
@@ -361,22 +366,22 @@ def install_systemd_units(*, switch: bool = False, dry_run: bool = True) -> dict
         shutil.copy2(source, target)
         operations.append({"status": "ok", "operation": "copy", "source": str(source), "target": str(target)})
 
-    operations.append(_run_command(["systemctl", "--user", "daemon-reload"], timeout=60))
+    operations.append(_run_command(["systemctl", "--user", "daemon-reload"], env=systemd_user_env(), timeout=60))
     if switch:
         operations.append(_run_command(["bash", str(SCRIPT_DIR / "stop_ozon_session_watchdog.sh")]))
         operations.append(_run_command(["bash", str(SCRIPT_DIR / "stop_wb_session_watchdog.sh")]))
         operations.append(_run_command(["bash", str(SCRIPT_DIR / "stop_ozon_keeper.sh")]))
-        operations.append(_run_command(["systemctl", "--user", "enable", "vital-shevron-ozon-keeper.service"], timeout=60))
-        operations.append(_run_command(["systemctl", "--user", "restart", "vital-shevron-ozon-keeper.service"], timeout=60))
-        operations.append(_run_command(["systemctl", "--user", "enable", "vital-shevron-ozon-session-refresh.timer"], timeout=60))
-        operations.append(_run_command(["systemctl", "--user", "restart", "vital-shevron-ozon-session-refresh.timer"], timeout=60))
-        operations.append(_run_command(["systemctl", "--user", "enable", "vital-shevron-wb-session-refresh.timer"], timeout=60))
-        operations.append(_run_command(["systemctl", "--user", "restart", "vital-shevron-wb-session-refresh.timer"], timeout=60))
-        operations.append(_run_command(["systemctl", "--user", "start", "vital-shevron-ozon-session-refresh.service"], timeout=180))
-        operations.append(_run_command(["systemctl", "--user", "start", "vital-shevron-wb-session-refresh.service"], timeout=240))
+        operations.append(_run_command(["systemctl", "--user", "enable", "vital-shevron-ozon-keeper.service"], env=systemd_user_env(), timeout=60))
+        operations.append(_run_command(["systemctl", "--user", "restart", "vital-shevron-ozon-keeper.service"], env=systemd_user_env(), timeout=60))
+        operations.append(_run_command(["systemctl", "--user", "enable", "vital-shevron-ozon-session-refresh.timer"], env=systemd_user_env(), timeout=60))
+        operations.append(_run_command(["systemctl", "--user", "restart", "vital-shevron-ozon-session-refresh.timer"], env=systemd_user_env(), timeout=60))
+        operations.append(_run_command(["systemctl", "--user", "enable", "vital-shevron-wb-session-refresh.timer"], env=systemd_user_env(), timeout=60))
+        operations.append(_run_command(["systemctl", "--user", "restart", "vital-shevron-wb-session-refresh.timer"], env=systemd_user_env(), timeout=60))
+        operations.append(_run_command(["systemctl", "--user", "start", "vital-shevron-ozon-session-refresh.service"], env=systemd_user_env(), timeout=180))
+        operations.append(_run_command(["systemctl", "--user", "start", "vital-shevron-wb-session-refresh.service"], env=systemd_user_env(), timeout=240))
     else:
-        operations.append(_run_command(["systemctl", "--user", "enable", "vital-shevron-ozon-session-refresh.timer"], timeout=60))
-        operations.append(_run_command(["systemctl", "--user", "enable", "vital-shevron-wb-session-refresh.timer"], timeout=60))
+        operations.append(_run_command(["systemctl", "--user", "enable", "vital-shevron-ozon-session-refresh.timer"], env=systemd_user_env(), timeout=60))
+        operations.append(_run_command(["systemctl", "--user", "enable", "vital-shevron-wb-session-refresh.timer"], env=systemd_user_env(), timeout=60))
 
     overall_status = "error" if any(item.get("status") == "error" for item in operations) else "ok"
     return {"overall_status": overall_status, "plan": plan, "operations": operations}

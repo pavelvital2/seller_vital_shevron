@@ -11,7 +11,11 @@ Shevron.
 
 ## Файлы
 
-- `card_auditor_minimal_prompt.md` - задача для fresh-аудитора одной карточки.
+- `fresh_single_card_auditor_prompt_v2.md` - основной готовый prompt для
+  одноразового fresh-аудитора одной карточки с переменными запуска,
+  ограничением write-scope и чеклистом приемки.
+- `card_auditor_minimal_prompt.md` - legacy compact prompt; для новых
+  запусков использовать `fresh_single_card_auditor_prompt_v2.md`.
 - `card_validator_minimal_prompt.md` - задача для fresh-проверяющего результата.
 - `card_audit_minimal_rules.md` - краткие правила заполнения карточки.
 - `card_audit_output_contract.md` - формат HTML/JSON результата слоя 2.
@@ -23,12 +27,14 @@ Shevron.
 
 Оркестратор передает аудитору:
 
-1. `card_auditor_minimal_prompt.md`;
+1. `fresh_single_card_auditor_prompt_v2.md`;
 2. `card_audit_minimal_rules.md`;
 3. `card_audit_output_contract.md`;
 4. `card_audit_html_template.html`;
 5. входной пакет одной карточки из слоя 1;
-6. ссылки на фото/коллаж/`photos.html`, если есть.
+6. ссылки на фото/коллаж/`photos.html`, если есть;
+7. `seo_query_pack`, если нужны SEO-рекомендации по спросу;
+8. owner-corrections, если карточка уже частично согласована.
 
 Оркестратор передает проверяющему:
 

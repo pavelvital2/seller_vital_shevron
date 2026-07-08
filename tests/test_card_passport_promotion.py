@@ -37,7 +37,8 @@ def _minimal_owner_approved_audit(sku: str = "chev_nr_oborg_pict0001") -> dict:
             "material": "Габардин",
             "composition": ["полиэстер", "нейлон"],
             "ozon_model_name": "ОО",
-            "ozon_hashtags": "#шеврон #шеврон_на_липучке",
+            "ozon_hashtags": "#шеврон, #шеврон_на_липучке",
+            "wb_tags": ["шеврон", "шеврон на липучке"],
             "target_physical_params": {
                 "product_size_mm": "75*85",
                 "ozon_package_mm": "100*100*10",
@@ -79,6 +80,8 @@ def test_promote_approved_card_passport_writes_layer3_passport(tmp_path: Path) -
     assert passport["content"]["canonical_title"] == "Шеврон на липучке Русская народная дружина"
     assert passport["physical"]["package_dimensions_wb_cm"] == "10*10*1 см"
     assert passport["media"]["target_assets"][0]["url"] == "https://example.test/ozon-1.jpg"
+    assert passport["seo"]["ozon_hashtags"] == ["#шеврон", "#шеврон_на_липучке"]
+    assert passport["seo"]["wb_tags"] == ["шеврон", "шеврон на липучке"]
 
 
 def test_ensure_approved_passports_for_batch_promotes_missing_only(tmp_path: Path) -> None:

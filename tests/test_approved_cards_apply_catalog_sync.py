@@ -2,7 +2,13 @@ import csv
 import json
 from pathlib import Path
 
-from seller_agent.tasks.approved_cards_apply import _passport_wants_ozon_create, _sync_approved_card_catalog_layers
+from seller_agent.tasks import approved_cards_apply
+from seller_agent.tasks.approved_cards_apply import (
+    _passport_wants_ozon_create,
+    _sync_approved_card_catalog_layers,
+    run_apply_approved_cards,
+    run_plan_approved_cards,
+)
 
 
 def _write_csv(path: Path, rows: list[dict[str, str]]) -> None:
@@ -146,3 +152,126 @@ def test_passport_wants_ozon_create_for_wb_only_owner_approved_passport(tmp_path
     _write_json(passport_path, passport)
 
     assert _passport_wants_ozon_create(data_dir, sku) is False
+
+
+def test_apply_approved_cards_runs_seller_sku_before_content(monkeypatch, tmp_path: Path) -> None:
+    calls: list[tuple[str, list[str]]] = []
+
+    monkeypatch.setattr(
+        approved_cards_apply,
+        "ensure_approved_passports_for_batch",
+        lambda **kwargs: {"status": "ok"},
+    )
+
+    def fake_seller_sku_stage(**kwargs):
+        calls.append(("seller_sku", list(kwargs["internal_skus"])))
+        return {"status": "ok", "ready_skus": ["sku_final"], "blocked": [], "plan": {}, "apply": {}}
+
+    def fake_content_stage(**kwargs):
+        calls.append(("content", list(kwargs["internal_skus"])))
+        return {"status": "ok", "ready_skus": list(kwargs["internal_skus"]), "blocked": [], "plan": {}, "apply": {}}
+
+    def fake_wb_create_stage(**kwargs):
+        calls.append(("wb_create", list(kwargs["internal_skus"])))
+        return {"status": "skipped", "ready_skus": [], "blocked": [], "plan": None, "apply": None}
+
+    def fake_ozon_create_stage(**kwargs):
+        calls.append(("ozon_create", list(kwargs["internal_skus"])))
+        return {"status": "skipped", "ready_skus": [], "blocked": [], "plan": None, "apply": None}
+
+    def fake_catalog_sync(**kwargs):
+        calls.append(("catalog_sync", list(kwargs["internal_skus"])))
+        return {"status": "ok"}
+
+    def fake_post_verify(**kwargs):
+        calls.append(("post_verify", list(kwargs["internal_skus"])))
+        return {"status": "ok", "ready_skus": list(kwargs["internal_skus"]), "blocked_count": 0}
+
+    monkeypatch.setattr(approved_cards_apply, "_run_seller_sku_stage", fake_seller_sku_stage)
+    monkeypatch.setattr(approved_cards_apply, "_run_content_stage", fake_content_stage)
+    monkeypatch.setattr(approved_cards_apply, "_run_wb_create_stage", fake_wb_create_stage)
+    monkeypatch.setattr(approved_cards_apply, "_run_ozon_create_stage", fake_ozon_create_stage)
+    monkeypatch.setattr(approved_cards_apply, "_sync_approved_card_catalog_layers", fake_catalog_sync)
+    monkeypatch.setattr(approved_cards_apply, "_run_post_apply_content_verify", fake_post_verify)
+
+    result = run_apply_approved_cards(
+        credentials=None,
+        data_dir=tmp_path / "data",
+        internal_skus=["sku_old"],
+        run_id="run_order",
+        confirmed_by_user=True,
+    )
+
+    assert result["overall_status"] == "ok"
+    assert calls == [
+        ("seller_sku", ["sku_old"]),
+        ("content", ["sku_final"]),
+        ("wb_create", ["sku_final"]),
+        ("ozon_create", ["sku_final"]),
+        ("catalog_sync", ["sku_final"]),
+        ("post_verify", ["sku_final"]),
+    ]
+
+
+def test_plan_approved_cards_writes_checksum_and_apply_blocks_after_passport_change(monkeypatch, tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    sku = "chev_test_001"
+    _write_json(
+        data_dir / "catalog" / "master_passport" / "approved" / f"{sku}.json",
+        {
+            "identity": {
+                "internal_sku": sku,
+                "ozon_offer_id": sku,
+                "wb_vendor_code": sku,
+                "wb_nm_id": "123456789",
+            },
+            "approval": {"status": "owner_approved"},
+        },
+    )
+    monkeypatch.setattr(
+        approved_cards_apply,
+        "ensure_approved_passports_for_batch",
+        lambda **kwargs: {"status": "ok"},
+    )
+
+    def fake_seller_plan(**kwargs):
+        plan_path = data_dir / "plans" / f"{kwargs['run_id']}.json"
+        _write_json(plan_path, [{"internal_sku": sku, "ready": True}])
+        return {"run_id": kwargs["run_id"], "overall_status": "ok", "artifacts": {"seller_sku_update_plan": str(plan_path)}}
+
+    def fake_content_plan(**kwargs):
+        plan_path = data_dir / "plans" / f"{kwargs['run_id']}.json"
+        _write_json(plan_path, [{"internal_sku": sku, "ready": True}])
+        return {"run_id": kwargs["run_id"], "overall_status": "ok", "artifacts": {"plan": str(plan_path)}}
+
+    monkeypatch.setattr(approved_cards_apply, "run_seller_sku_update_plan", fake_seller_plan)
+    monkeypatch.setattr(approved_cards_apply, "run_card_content_update_plan", fake_content_plan)
+
+    plan = run_plan_approved_cards(
+        credentials=None,
+        data_dir=data_dir,
+        internal_skus=[sku],
+        run_id="plan_approved_cards_test",
+        runtime_db=tmp_path / "runtime.db",
+    )
+
+    assert plan["overall_status"] == "ok"
+    assert plan["plan_checksum"].startswith("sha256:")
+    assert plan["runtime_lifecycle"]["status"] == "ok"
+
+    passport_path = data_dir / "catalog" / "master_passport" / "approved" / f"{sku}.json"
+    passport = json.loads(passport_path.read_text(encoding="utf-8"))
+    passport["content"] = {"title": "changed after plan"}
+    _write_json(passport_path, passport)
+
+    result = run_apply_approved_cards(
+        credentials=None,
+        data_dir=data_dir,
+        plan_run_id="plan_approved_cards_test",
+        run_id="apply_should_block",
+        confirmed_by_user=True,
+        runtime_db=tmp_path / "runtime.db",
+    )
+
+    assert result["overall_status"] == "blocked"
+    assert result["plan_validation"]["errors"][0]["reason"] == "passport_checksum_mismatch"

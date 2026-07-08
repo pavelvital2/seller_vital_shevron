@@ -169,7 +169,13 @@ async function fillEmail(page) {
     await editableCandidates[0].fill(opts.email);
     return;
   }
-  throw new Error('No editable email input found');
+  const summary = await summarizePage(page).catch(() => ({ url: '', title: '', text: '' }));
+  const status = classify(summary);
+  if (status.blocked) {
+    console.log(JSON.stringify(publicResult('BLOCKED_BEFORE_EMAIL', summary, false), null, 2));
+    process.exit(20);
+  }
+  throw new Error(`No editable email input found; visibleInputs=${JSON.stringify(await visibleInputs(page))}`);
 }
 
 async function enterCode(page, code) {
@@ -313,6 +319,13 @@ function publicResult(status, summary, stateExported) {
   await clickFirst(page.getByRole('button', { name: /^Войти$/ }), 20000).catch(() => false);
   await page.waitForTimeout(2500);
   await clickFirst(page.getByText(/войти по почте/i), 20000).catch(() => false);
+  summary = await summarizePage(page);
+  status = classify(summary);
+  if (status.blocked) {
+    console.log(JSON.stringify(publicResult('BLOCKED_BEFORE_EMAIL', summary, false), null, 2));
+    await context.close();
+    process.exit(20);
+  }
   await fillEmail(page);
   await clickFirst(page.getByRole('button', { name: /^Войти$/ }), 20000);
 

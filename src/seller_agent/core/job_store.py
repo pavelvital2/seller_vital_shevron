@@ -11,6 +11,8 @@ from typing import Any, Iterator
 from seller_agent.core.job_models import (
     ApprovalRecord,
     ApprovalStatus,
+    CardWorkItem,
+    CardWorkStatus,
     JobEvent,
     JobRecord,
     JobStatus,
@@ -372,6 +374,84 @@ class JobStore:
             ).fetchone()
         return _approval_from_row(row) if row is not None else None
 
+    def upsert_card_work_item(
+        self,
+        *,
+        internal_sku: str,
+        status: CardWorkStatus,
+        approval_id: str = "",
+        plan_run_id: str = "",
+        apply_run_id: str = "",
+        post_verify_run_id: str = "",
+        checksum: str = "",
+        data: dict[str, Any] | None = None,
+    ) -> CardWorkItem:
+        now = _now()
+        closed_at_expr = "excluded.closed_at" if status in {"closed", "failed"} else "card_work_items.closed_at"
+        with self._transaction() as connection:
+            connection.execute(
+                f"""
+                INSERT INTO card_work_items (
+                  internal_sku, status, approval_id, plan_run_id, apply_run_id,
+                  post_verify_run_id, checksum, data_json, created_at, updated_at,
+                  closed_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(internal_sku) DO UPDATE SET
+                  status = excluded.status,
+                  approval_id = CASE WHEN excluded.approval_id != '' THEN excluded.approval_id ELSE card_work_items.approval_id END,
+                  plan_run_id = CASE WHEN excluded.plan_run_id != '' THEN excluded.plan_run_id ELSE card_work_items.plan_run_id END,
+                  apply_run_id = CASE WHEN excluded.apply_run_id != '' THEN excluded.apply_run_id ELSE card_work_items.apply_run_id END,
+                  post_verify_run_id = CASE WHEN excluded.post_verify_run_id != '' THEN excluded.post_verify_run_id ELSE card_work_items.post_verify_run_id END,
+                  checksum = CASE WHEN excluded.checksum != '' THEN excluded.checksum ELSE card_work_items.checksum END,
+                  data_json = excluded.data_json,
+                  updated_at = excluded.updated_at,
+                  closed_at = {closed_at_expr}
+                """,
+                (
+                    internal_sku,
+                    status,
+                    approval_id,
+                    plan_run_id,
+                    apply_run_id,
+                    post_verify_run_id,
+                    checksum,
+                    _json_dumps(data or {}),
+                    now,
+                    now,
+                    now if status in {"closed", "failed"} else "",
+                ),
+            )
+        item = self.get_card_work_item(internal_sku)
+        if item is None:
+            raise KeyError(f"Unknown card work item after upsert: {internal_sku}")
+        return item
+
+    def get_card_work_item(self, internal_sku: str) -> CardWorkItem | None:
+        self.initialize()
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM card_work_items WHERE internal_sku = ?",
+                (internal_sku,),
+            ).fetchone()
+        return _card_work_item_from_row(row) if row is not None else None
+
+    def list_card_work_items(
+        self,
+        *,
+        status: CardWorkStatus | None = None,
+        limit: int = 100,
+    ) -> list[CardWorkItem]:
+        self.initialize()
+        where = "WHERE status = ?" if status else ""
+        values: tuple[Any, ...] = (status, limit) if status else (limit,)
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"SELECT * FROM card_work_items {where} ORDER BY updated_at DESC, internal_sku ASC LIMIT ?",
+                values,
+            ).fetchall()
+        return [_card_work_item_from_row(row) for row in rows]
+
     @contextmanager
     def _transaction(self) -> Iterator[sqlite3.Connection]:
         self.initialize()
@@ -493,6 +573,22 @@ CREATE TABLE IF NOT EXISTS telegram_updates (
 );
 
 CREATE INDEX IF NOT EXISTS idx_telegram_updates_status ON telegram_updates(processing_status);
+
+CREATE TABLE IF NOT EXISTS card_work_items (
+  internal_sku TEXT PRIMARY KEY,
+  status TEXT NOT NULL,
+  approval_id TEXT NOT NULL DEFAULT '',
+  plan_run_id TEXT NOT NULL DEFAULT '',
+  apply_run_id TEXT NOT NULL DEFAULT '',
+  post_verify_run_id TEXT NOT NULL DEFAULT '',
+  checksum TEXT NOT NULL DEFAULT '',
+  data_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  closed_at TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_card_work_items_status ON card_work_items(status, updated_at);
 """
 
 
@@ -571,4 +667,20 @@ def _approval_from_row(row: sqlite3.Row) -> ApprovalRecord:
         data=_json_loads(str(row["data_json"])),
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
+    )
+
+
+def _card_work_item_from_row(row: sqlite3.Row) -> CardWorkItem:
+    return CardWorkItem(
+        internal_sku=str(row["internal_sku"]),
+        status=str(row["status"]),  # type: ignore[arg-type]
+        approval_id=str(row["approval_id"]),
+        plan_run_id=str(row["plan_run_id"]),
+        apply_run_id=str(row["apply_run_id"]),
+        post_verify_run_id=str(row["post_verify_run_id"]),
+        checksum=str(row["checksum"]),
+        data=_json_loads(str(row["data_json"])),
+        created_at=str(row["created_at"]),
+        updated_at=str(row["updated_at"]),
+        closed_at=str(row["closed_at"]),
     )

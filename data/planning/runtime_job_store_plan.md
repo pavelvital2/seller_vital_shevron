@@ -67,6 +67,9 @@ runtime/runtime.db
 - `approvals` - draft/pending/approved/applying/applied/verified/closed;
 - `resource_leases` - атомарные locks/leases с TTL;
 - `telegram_updates` - dedup Telegram update/callback;
+- `card_work_items` - MVP lifecycle owner-approved карточек по internal SKU:
+  `owner_approved -> applying -> applied/closed` с `plan_run_id`,
+  `apply_run_id`, `post_verify_run_id` и checksum паспорта;
 - `artifacts` - безопасные ссылки на report/result files.
 
 ## Статусы
@@ -140,6 +143,9 @@ MVP-функции:
 - `JobStore.acquire_resource_lease()` / `release_resource_lease()`;
 - `JobStore.create_approval()` и атомарный
   `reserve_approval_for_apply(approved -> applying)`;
+- 2026-07-08 добавлен карточный lifecycle MVP:
+  `card_work_items`, `JobStore.upsert_card_work_item()`,
+  `get_card_work_item()`, `list_card_work_items()`;
 - тесты `tests/test_job_store.py`.
 
 ### Этап 2. JobService / JobRunner v1

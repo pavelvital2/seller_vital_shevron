@@ -35,6 +35,14 @@ description: "Use for Ozon/Wildberries reviews and questions workflows: read-onl
   reports new questions but `/api/v1/question-list` returns
   `invalid google.protobuf.Timestamp value ""`, verify the helper is not
   sending empty `last_published_at`; only include that field when non-empty.
+- For Ozon question replies, do not assume the public Seller API is available:
+  `/v1/question/*` can return Premium Plus `403`. Confirmed LK/CDP fallback is
+  `/api/v1/create-answer` from the questions page with snake_case body fields
+  `sc_company_id`, `company_type`, `question_id`, `questionId`, and `text`.
+  Verify with `/api/v1/get-new-question-counter` before/after. If an
+  owner-facing report lists Ozon `question_answer`, the approved package must
+  include those actions; otherwise treat it as a tooling bug, not a completed
+  apply.
 - WB questions are part of the WB inbox route. WB platform news/notifications
   are read-only through LK `news-v2` via
   `scripts/notifications/wb_news_readonly.js`; report actual rows and important

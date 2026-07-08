@@ -106,6 +106,9 @@
 - `data/planning/runtime_job_store_plan.md` - план следующего runtime-слоя:
   SQLite Job Store, JobService/JobRunner, TaskRegistry v2, Telegram
   deduplication, atomic approvals и resource leases.
+- `data/planning/development_work_checkpoint.md` - checkpoint работ по
+  развитию проекта перед возвратом к карточкам: реализованный runtime-слой,
+  отложенные задачи и точка продолжения карточного контура.
 - `data/planning/telegram_bot_mvp_runbook.md` - read-only Telegram MVP:
   command layer, preview CLI, safe Telegram adapter, controlled polling,
   live read-only `/today` и `/status`, безопасное прикрепление файла отчета
@@ -234,6 +237,33 @@
 должны выбирать самый узкий repo skill из `.agents/skills/` и профильный
 runbook в `data/planning/`.
 
+## Parser Data API
+
+Для read-only данных парсеров селлер-агенты должны использовать Parser Data API,
+а не копировать полные датасеты с Parser VPS. Перед задачами по WB-позициям,
+SEO, продвижению, нишам, конкурентам, карточкам или отчетам читать общий
+справочник:
+
+```text
+/home/pavel/projects/codex_workspace/PARSER_DATA_API_SELLER_GUIDE.md
+```
+
+Env с endpoint/token:
+
+```text
+/home/pavel/.parser-data-api.env
+```
+
+Правила:
+
+- токен не печатать и не сохранять в отчеты;
+- использовать `supplier_id`, `product_id`, `nmID` или проверенный `brand` для
+  определения своих товаров;
+- не определять свои товары по названию;
+- выбирать самый узкий aggregate endpoint под бизнес-вопрос;
+- держать `limit <= 500`;
+- в отчетах указывать endpoint, дату/свежесть warehouse, фильтры и ограничения.
+
 Помимо проектных repo skills, агенты должны использовать общие user-level
 skills из `/home/pavel/.codex/skills`, если задача попадает в их область:
 
@@ -304,6 +334,14 @@ Telegram/Markdown-сводку. Постоянные Markdown-документы
 
 После каждой успешной операции по магазинам нужно создать или обновить
 инструкцию по этой операции.
+
+После каждого успешного `apply -> verify` по карточкам агент обязан сразу
+синхронизировать локальные статусы во всех карточных слоях: Layer 2
+`data/catalog/card_audits/.../audit.json`, Layer 3
+`data/catalog/master_passport/approved/*.json`, профильный checkpoint
+`data/planning/product_card_work_checkpoint.md` и ссылки на run/report
+artifacts. Нельзя оставлять уже примененные и проверенные карточки в статусе
+`pending`.
 
 Для ежедневных операций с входящими сущностями магазинов (уведомления,
 сообщения покупателей, отзывы, вопросы, pending approvals) после согласования
