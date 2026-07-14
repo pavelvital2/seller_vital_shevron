@@ -387,3 +387,78 @@ def run_ozon_cpc_bids_apply(
         checksum=canonical_checksum({"approved_id": approved_id, "summary": summary, "drift": drift}),
     )
     return result
+
+
+def run_ozon_cpc_bids_verify(
+    *,
+    credentials: AppCredentials,
+    data_dir: Path = Path("data"),
+    plan_run_id: str | None = None,
+    run_id: str | None = None,
+    min_bid: Decimal = Decimal("1.00"),
+) -> dict[str, Any]:
+    if not credentials.ozon_performance:
+        raise RuntimeError("missing Ozon Performance API credentials")
+
+    approved_plan_dir = _plan_dir(data_dir, plan_run_id)
+    approved_id = approved_plan_dir.name
+    approved_rows = _read_csv(approved_plan_dir / "ozon_cpc_bid_changes.csv")
+    campaign_ids = sorted({str(row.get("campaign_id") or "") for row in approved_rows if row.get("campaign_id")})
+    if len(campaign_ids) != 1:
+        raise RuntimeError(f"expected exactly one campaign_id, got {campaign_ids}")
+    campaign_id = campaign_ids[0]
+    apply_rows, skipped_rows = _split_apply_rows(approved_rows, min_bid=min_bid)
+
+    started_at = datetime.now()
+    run_id = run_id or f"ozon_cpc_bids_verify_{started_at.strftime('%Y%m%dT%H%M%S')}"
+    run_dir = ensure_dir(data_dir / "runs" / started_at.strftime("%Y-%m-%d") / run_id)
+    raw_dir = ensure_dir(run_dir / "raw")
+    processed_dir = ensure_dir(run_dir / "processed")
+
+    ozon = OzonPerformanceAdapter(credentials.ozon_performance)
+    products = ozon.fetch_campaign_products(campaign_id)
+    write_json(raw_dir / "current_products_verify.json", products)
+    current_rows = _current_bid_rows(products)
+    write_json(processed_dir / "current_bids_verify.json", current_rows)
+    write_json(processed_dir / "skipped_rows.json", skipped_rows)
+    verify = _verify_applied_rows(current_bids=_current_bid_map(current_rows), apply_rows=apply_rows)
+    summary = {
+        "campaign_id": campaign_id,
+        "approved_rows": len(approved_rows),
+        "checked_rows": len(apply_rows),
+        "skipped_rows": len(skipped_rows),
+        "min_bid_floor": _round2(min_bid),
+    }
+    result = {
+        "run_id": run_id,
+        "started_at": started_at.isoformat(timespec="seconds"),
+        "mode": "verify",
+        "overall_status": "ok" if verify["status"] == "ok" else "warning",
+        "approved_plan_run_id": approved_id,
+        "approved_id": approved_id,
+        "summary": summary,
+        "verify": verify,
+        "artifacts": {
+            "run_dir": str(run_dir),
+            "summary": str(run_dir / "summary.json"),
+            "current_bids": str(processed_dir / "current_bids_verify.json"),
+            "skipped_rows": str(processed_dir / "skipped_rows.json"),
+            "run_manifest": str(run_dir / "manifest.json"),
+        },
+    }
+    write_json(run_dir / "summary.json", result)
+    manifest_paths = write_summary_run_manifest(
+        data_dir=data_dir,
+        run_dir=run_dir,
+        summary=result,
+        task="ozon-cpc-bids-verify",
+        mode="verify",
+        risk="low",
+        marketplaces=["ozon"],
+        inputs={"plan_run_id": plan_run_id, "min_bid": str(min_bid)},
+        lifecycle_status="verified" if verify["status"] == "ok" else "needs_attention",
+        closed=verify["status"] == "ok",
+    )
+    result["artifacts"]["run_manifest"] = manifest_paths["manifest"]
+    write_json(run_dir / "summary.json", result)
+    return result

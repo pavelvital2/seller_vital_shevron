@@ -580,6 +580,97 @@ def _verify_wb_updates(
     return results
 
 
+def run_seller_sku_update_verify(
+    *,
+    credentials: AppCredentials,
+    data_dir: Path = Path("data"),
+    plan_run_id: str | None = None,
+    run_id: str | None = None,
+    wait_seconds: int = 0,
+    poll_interval: int = 5,
+) -> dict[str, Any]:
+    """Verify seller SKU changes from current Ozon/WB state without writes."""
+    started_at = datetime.now()
+    run_id = run_id or f"seller_sku_update_verify_{started_at.strftime('%Y%m%dT%H%M%S')}"
+    run_dir = ensure_dir(data_dir / "runs" / started_at.strftime("%Y-%m-%d") / run_id)
+    plan_dir = _resolve_plan_dir(data_dir, plan_run_id)
+    plan = _read_json(plan_dir / "seller_sku_update_plan.json")
+    if not isinstance(plan, list) or not plan:
+        raise RuntimeError(f"Seller SKU update plan has no rows: {plan_dir}")
+    if any(not row.get("ready") for row in plan):
+        raise RuntimeError("Seller SKU update plan contains blocked rows")
+
+    ozon_expected = sum(1 for row in plan if isinstance(row.get("ozon"), dict))
+    wb_expected = sum(1 for row in plan if isinstance(row.get("wb"), dict))
+    if ozon_expected and not credentials.ozon_seller:
+        raise RuntimeError("Ozon credentials are required for planned Ozon seller SKU updates")
+    if wb_expected and not credentials.wb:
+        raise RuntimeError("WB credentials are required for planned WB seller SKU updates")
+
+    ozon_verify = (
+        _verify_ozon_updates(
+            ozon=OzonSellerAdapter(credentials.ozon_seller),
+            plan=plan,
+            run_dir=run_dir,
+        )
+        if ozon_expected and credentials.ozon_seller
+        else []
+    )
+    wb_verify = (
+        _verify_wb_updates(
+            wb=WbContentAdapter(credentials.wb),
+            plan=plan,
+            run_dir=run_dir,
+            wait_seconds=wait_seconds,
+            poll_interval=poll_interval,
+        )
+        if wb_expected and credentials.wb
+        else []
+    )
+    ozon_ok = len(ozon_verify) == ozon_expected and all(item.get("ok") for item in ozon_verify)
+    wb_ok = len(wb_verify) == wb_expected and all(item.get("ok") for item in wb_verify)
+    overall_status = "ok" if ozon_ok and wb_ok else "warning"
+    summary = {
+        "run_id": run_id,
+        "started_at": started_at.isoformat(timespec="seconds"),
+        "mode": "verify",
+        "overall_status": overall_status,
+        "approved_plan_run_id": plan_dir.name,
+        "plan_checksum": canonical_checksum(plan),
+        "ozon_expected_rows": ozon_expected,
+        "ozon_verified_rows": sum(1 for item in ozon_verify if item.get("ok")),
+        "wb_expected_rows": wb_expected,
+        "wb_verified_rows": sum(1 for item in wb_verify if item.get("ok")),
+        "verify": {"status": overall_status, "ozon": ozon_verify, "wb": wb_verify},
+        "artifacts": {
+            "run_dir": str(run_dir),
+            "ozon_verify": str(run_dir / "ozon_verify_results.json"),
+            "wb_verify": str(run_dir / "wb_verify_results.json"),
+            "summary": str(run_dir / "summary.json"),
+        },
+    }
+    write_json(run_dir / "ozon_verify_results.json", ozon_verify)
+    write_json(run_dir / "wb_verify_results.json", wb_verify)
+    write_json(run_dir / "summary.json", summary)
+    manifest = write_summary_run_manifest(
+        data_dir=data_dir,
+        run_dir=run_dir,
+        summary=summary,
+        task="seller-sku-update-verify",
+        mode="verify",
+        risk="low",
+        marketplaces=[name for name, count in (("ozon", ozon_expected), ("wb", wb_expected)) if count],
+        inputs={"plan_run_id": plan_dir.name, "wait_seconds": wait_seconds, "poll_interval": poll_interval},
+        source_run_ids=[plan_dir.name],
+        approved_id=plan_dir.name,
+        lifecycle_status="verified" if overall_status == "ok" else "created",
+        closed=overall_status == "ok",
+    )
+    summary["artifacts"]["run_manifest"] = manifest["manifest"]
+    write_json(run_dir / "summary.json", summary)
+    return summary
+
+
 def _apply_local_row_update(row: dict[str, Any], updates: dict[str, dict[str, str]], run_id: str) -> bool:
     sku = str(row.get("internal_sku") or row.get("master_sku") or "").strip()
     update = updates.get(sku)

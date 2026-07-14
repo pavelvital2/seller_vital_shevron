@@ -19,6 +19,7 @@ from seller_agent.safety.approvals import (
     canonical_checksum,
     mark_approved_applied,
 )
+from seller_agent.tasks.approvals import run_approvals_close
 from seller_agent.tasks.reviews_questions import (
     run_reviews_questions,
     run_reviews_questions_apply,
@@ -125,7 +126,24 @@ def _draft_customer_chat_reply(text: str) -> str:
     return ""
 
 
-def _classify_messenger_action(*, chat_id: str, message: dict[str, Any]) -> dict[str, Any]:
+def _is_customer_tail_closing_text(text: str) -> bool:
+    normalized = re.sub(r"\s+", " ", str(text or "").strip().lower())
+    normalized = normalized.strip(" .,!?:;\"'«»")
+    return normalized in {
+        "спасибо",
+        "спасибо но нет",
+        "спасибо, но нет",
+        "нет спасибо",
+        "нет, спасибо",
+        "отказ",
+        "отказываюсь",
+        "не надо",
+        "не нужно",
+        "уже не нужно",
+    }
+
+
+def _classify_messenger_action(*, chat_id: str, message: dict[str, Any], previous_message: dict[str, Any] | None = None) -> dict[str, Any]:
     text = _extract_message_text(message)
     user_type = _message_user_type(message)
     message_id = _message_id(message)
@@ -141,6 +159,17 @@ def _classify_messenger_action(*, chat_id: str, message: dict[str, Any]) -> dict
         "risk": "normal",
     }
     if user_type == "Customer":
+        previous_user_type = _message_user_type(previous_message or {})
+        if previous_user_type == "Seller" and _is_customer_tail_closing_text(text):
+            return {
+                **base,
+                "action_type": "mark_chat_read",
+                "state": "pending_owner_confirmation",
+                "risk": "low",
+                "draft_reply": "",
+                "processing_status": "customer_tail_closing_no_reply",
+                "notes": "Короткий закрывающий ответ покупателя после ответа продавца; закрыть без нового сообщения после approval.",
+            }
         draft = _draft_customer_chat_reply(text)
         if draft:
             return {
@@ -268,10 +297,12 @@ def _collect_ozon_messenger_actions(
                 }
             )
             continue
-        for message in _extract_messages(history):
+        messages = _extract_messages(history)
+        for index, message in enumerate(messages):
             if not _is_unread(message):
                 continue
-            actions.append(_classify_messenger_action(chat_id=chat_id, message=message))
+            previous_message = messages[index + 1] if index + 1 < len(messages) else None
+            actions.append(_classify_messenger_action(chat_id=chat_id, message=message, previous_message=previous_message))
 
     return {
         "status": "ok",
@@ -488,6 +519,7 @@ def _build_ozon_report(
     product_rating_rows = _product_rating_rows(reviews_summary)
     question_rows = _question_action_rows(reviews_summary)
     messenger_actions = messenger_summary.get("actions") if isinstance(messenger_summary.get("actions"), list) else []
+    verification_warnings = reviews_summary.get("verification_warnings") if isinstance(reviews_summary.get("verification_warnings"), list) else []
     messenger_counts = Counter(str(action.get("action_type") or "") for action in messenger_actions if isinstance(action, dict))
     important = [
         action
@@ -496,6 +528,11 @@ def _build_ozon_report(
     ]
     customer_replies = [
         action for action in messenger_actions if isinstance(action, dict) and action.get("action_type") == "send_chat_message"
+    ]
+    customer_mark_read = [
+        action
+        for action in messenger_actions
+        if isinstance(action, dict) and action.get("action_type") == "mark_chat_read" and action.get("user_type") == "Customer"
     ]
     lines = [
         "# Ozon inbox: отзывы, вопросы и уведомления",
@@ -532,6 +569,17 @@ def _build_ozon_report(
                 f"   Черновик: {action.get('draft_reply')}",
             ]
         )
+    lines.extend(["", "### Закрыть без ответа", ""])
+    if not customer_mark_read:
+        lines.append("- чатов к закрытию без ответа нет")
+    for index, action in enumerate(customer_mark_read[:20], 1):
+        lines.extend(
+            [
+                f"{index}. Chat `{action.get('chat_id')}`",
+                f"   Покупатель: {action.get('source_text') or 'без текста'}",
+                f"   Причина: {action.get('notes') or 'закрыть без ответа'}",
+            ]
+        )
     lines.extend(["", "## Оценки по конкретным товарам", ""])
     lines.extend(_format_product_rating_rows(product_rating_rows))
     lines.extend(["", "## Вопросы покупателей", ""])
@@ -541,6 +589,13 @@ def _build_ozon_report(
         lines.append("- важных уведомлений не найдено")
     for index, action in enumerate(important[:20], 1):
         lines.append(f"{index}. Chat `{action.get('chat_id')}`: {action.get('source_text') or 'без текста'}")
+    lines.extend(["", "## Предупреждения проверки", ""])
+    if not verification_warnings:
+        lines.append("- предупреждений проверки нет")
+    for warning in verification_warnings[:20]:
+        if not isinstance(warning, dict):
+            continue
+        lines.append(f"- `{warning.get('type') or 'warning'}`: {warning.get('message') or warning}")
     lines.extend(["", "## Артефакты", ""])
     for key, value in sorted(artifacts.items()):
         lines.append(f"- `{key}`: `{value}`")
@@ -651,10 +706,11 @@ def run_ozon_inbox_triage(
     artifacts["report"] = str(report_path)
 
     actions_count = int(reviews.get("actions_count") or 0) + len(messenger.get("actions") or [])
+    review_warnings = reviews.get("verification_warnings") if isinstance(reviews.get("verification_warnings"), list) else []
     summary = {
         "run_id": run_id,
         "started_at": started_at.isoformat(timespec="seconds"),
-        "overall_status": "ok" if reviews.get("overall_status") in {"ok", "warning"} and messenger.get("status") == "ok" else "warning",
+        "overall_status": "ok" if reviews.get("overall_status") in {"ok", "warning"} and messenger.get("status") == "ok" and not review_warnings else "warning",
         "mode": "dry_run",
         "marketplace": "ozon",
         "pending_id": f"{run_id}_pending",
@@ -663,6 +719,7 @@ def run_ozon_inbox_triage(
         "product_rating_rows_count": sum(int(row.get("count") or 0) for row in product_rating_rows),
         "low_rating_product_rows_count": _low_rating_product_rows_count(product_rating_rows),
         "actions_count": actions_count,
+        "verification_warnings": review_warnings,
         "artifacts": artifacts,
     }
     write_json(run_dir / "summary.json", summary)
@@ -762,6 +819,66 @@ def _load_inbox_pending(data_dir: Path, source_run_id: str, *, marketplace: str)
     if data.get("marketplace") != marketplace:
         raise RuntimeError(f"Inbox pending marketplace mismatch: {path}")
     return data
+
+
+def _cleanup_inbox_apply_tail(
+    *,
+    data_dir: Path,
+    source_run_id: str,
+    pending: dict[str, Any],
+    reviews_result: dict[str, Any],
+    messenger_result: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    targets: list[tuple[str, str]] = []
+
+    top_pending_id = f"{source_run_id}_pending"
+    if top_pending_id:
+        targets.append(("pending", top_pending_id))
+
+    reviews_pending_id = str(pending.get("reviews_pending_id") or "")
+    if reviews_pending_id:
+        targets.append(("pending", reviews_pending_id))
+
+    approved = reviews_result.get("approved") if isinstance(reviews_result.get("approved"), dict) else {}
+    reviews_approved_id = str(approved.get("approved_id") or "")
+    if reviews_approved_id:
+        targets.append(("approved", reviews_approved_id))
+
+    if isinstance(messenger_result, dict):
+        messenger_approved = messenger_result.get("approved") if isinstance(messenger_result.get("approved"), dict) else {}
+        messenger_approved_id = str(messenger_approved.get("approved_id") or "")
+        if messenger_approved_id:
+            targets.append(("approved", messenger_approved_id))
+
+    closed: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for index, (kind, target_id) in enumerate(targets, 1):
+        if not target_id or (kind, target_id) in seen:
+            continue
+        seen.add((kind, target_id))
+        cleanup_run_id = f"{source_run_id}_cleanup_{index:02d}"
+        try:
+            result = run_approvals_close(
+                data_dir=data_dir,
+                target_id=target_id,
+                kind=kind,
+                closed_by="codex_auto",
+                reason="inbox_apply_verified_cleanup",
+                force=True,
+                run_id=cleanup_run_id,
+            )
+            closed.append({"kind": kind, "id": target_id, "result": result})
+        except Exception as exc:  # noqa: BLE001
+            failed.append({"kind": kind, "id": target_id, "error": _safe_error(exc)})
+
+    return {
+        "status": "ok" if not failed else "warning",
+        "closed_count": len(closed),
+        "failed_count": len(failed),
+        "closed": closed,
+        "failed": failed,
+    }
 
 
 def _prepare_and_apply_reviews(
@@ -988,6 +1105,16 @@ def run_ozon_inbox_apply(
         run_manifest_path=manifest_paths["manifest"],
         checksum=canonical_checksum({"source_run_id": source_run_id, "pending": pending}),
     )
+    if overall_status == "ok":
+        cleanup = _cleanup_inbox_apply_tail(
+            data_dir=data_dir,
+            source_run_id=source_run_id,
+            pending=pending,
+            reviews_result=reviews_result,
+            messenger_result=messenger_result,
+        )
+        summary["cleanup"] = cleanup
+        write_json(run_dir / "summary.json", summary)
     return summary
 
 
@@ -1053,4 +1180,14 @@ def run_wb_inbox_apply(
         run_manifest_path=manifest_paths["manifest"],
         checksum=canonical_checksum({"source_run_id": source_run_id, "pending": pending}),
     )
+    if overall_status == "ok":
+        cleanup = _cleanup_inbox_apply_tail(
+            data_dir=data_dir,
+            source_run_id=source_run_id,
+            pending=pending,
+            reviews_result=reviews_result,
+            messenger_result=None,
+        )
+        summary["cleanup"] = cleanup
+        write_json(run_dir / "summary.json", summary)
     return summary

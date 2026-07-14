@@ -224,6 +224,130 @@ def _media_by_vendor(plan_items: list[dict[str, Any]]) -> dict[str, list[str]]:
     }
 
 
+def run_wb_card_create_verify(
+    *,
+    credentials: AppCredentials,
+    data_dir: Path = Path("data"),
+    plan_run_id: str | None = None,
+    run_id: str | None = None,
+    wait_seconds: int = 0,
+    poll_interval: int = 5,
+) -> dict[str, Any]:
+    """Verify WB card creation from current marketplace state without writes."""
+    if not credentials.wb:
+        raise RuntimeError("Wildberries credentials are required")
+
+    started_at = datetime.now()
+    run_id = run_id or f"wb_card_create_verify_{started_at.strftime('%Y%m%dT%H%M%S')}"
+    run_dir = ensure_dir(data_dir / "runs" / started_at.strftime("%Y-%m-%d") / run_id)
+    plan_dir = _resolve_plan_dir(data_dir, plan_run_id)
+    plan_items = _read_json(plan_dir / "wb_card_create_plan.json")
+    if not isinstance(plan_items, list) or not plan_items:
+        raise RuntimeError(f"Plan has no items: {plan_dir}")
+
+    vendor_codes = [_vendor_code(item) for item in plan_items]
+    if any(not vendor_code for vendor_code in vendor_codes):
+        raise RuntimeError("Plan contains item without vendor code")
+    vendor_code_set = set(vendor_codes)
+    wb = WbContentAdapter(credentials.wb)
+    found = _poll_cards(
+        wb=wb,
+        run_dir=run_dir,
+        vendor_codes=vendor_code_set,
+        wait_seconds=wait_seconds,
+        poll_interval=poll_interval,
+    )
+    trash = wb.find_trash_cards_by_vendor_codes(vendor_code_set)
+    try:
+        error_response = wb.fetch_card_errors(limit=100)
+    except ApiError as exc:
+        error_response = {"error": {"status": exc.status, "message": exc.message[:1000]}}
+    relevant_errors = _extract_relevant_error_batches(error_response, vendor_code_set)
+    write_json(run_dir / "wb_cards_verify.json", found)
+    write_json(run_dir / "wb_trash_cards_verify.json", trash)
+    write_json(run_dir / "wb_card_errors_verify.json", error_response)
+    write_json(run_dir / "wb_card_errors_relevant_verify.json", relevant_errors)
+
+    images_by_vendor = _media_by_vendor(plan_items)
+    results: list[dict[str, Any]] = []
+    for vendor_code in vendor_codes:
+        card = found.get(vendor_code) or {}
+        sizes = card.get("sizes") if isinstance(card.get("sizes"), list) else []
+        barcodes = [
+            str(value).strip()
+            for size in sizes
+            if isinstance(size, dict)
+            for value in (size.get("skus") or [])
+            if str(value).strip()
+        ]
+        photos = card.get("photos") if isinstance(card.get("photos"), list) else []
+        expected_media = bool(images_by_vendor.get(vendor_code))
+        has_relevant_error = any(vendor_code in json.dumps(item, ensure_ascii=False) for item in relevant_errors)
+        nm_id = str(card.get("nmID") or card.get("nmId") or "").strip()
+        checks = {
+            "card_found": bool(card),
+            "vendor_code_matches": str(card.get("vendorCode") or "") == vendor_code,
+            "nm_id_present": bool(nm_id),
+            "barcode_present": bool(barcodes),
+            "not_in_trash": vendor_code not in trash,
+            "media_present": bool(photos) if expected_media else True,
+            "no_relevant_error_batch": not has_relevant_error,
+        }
+        results.append(
+            {
+                "vendorCode": vendor_code,
+                "nmID": nm_id,
+                "status": "ok" if all(checks.values()) else "warning",
+                "checks": checks,
+                "barcode_count": len(barcodes),
+                "photo_count": len(photos),
+            }
+        )
+
+    overall_status = (
+        "ok"
+        if len(results) == len(vendor_codes) and all(item["status"] == "ok" for item in results)
+        else "warning"
+    )
+    summary = {
+        "run_id": run_id,
+        "started_at": started_at.isoformat(timespec="seconds"),
+        "mode": "verify",
+        "overall_status": overall_status,
+        "approved_plan_run_id": plan_dir.name,
+        "expected_rows": len(vendor_codes),
+        "verified_rows": sum(1 for item in results if item["status"] == "ok"),
+        "warning_rows": sum(1 for item in results if item["status"] != "ok"),
+        "verify": {"status": overall_status, "results": results},
+        "artifacts": {
+            "run_dir": str(run_dir),
+            "cards": str(run_dir / "wb_cards_verify.json"),
+            "trash": str(run_dir / "wb_trash_cards_verify.json"),
+            "errors": str(run_dir / "wb_card_errors_verify.json"),
+            "relevant_errors": str(run_dir / "wb_card_errors_relevant_verify.json"),
+            "summary": str(run_dir / "summary.json"),
+        },
+    }
+    write_json(run_dir / "summary.json", summary)
+    manifest = write_summary_run_manifest(
+        data_dir=data_dir,
+        run_dir=run_dir,
+        summary=summary,
+        task="wb-card-create-verify",
+        mode="verify",
+        risk="low",
+        marketplaces=["wb"],
+        inputs={"plan_run_id": plan_dir.name, "wait_seconds": wait_seconds, "poll_interval": poll_interval},
+        source_run_ids=[plan_dir.name],
+        approved_id=plan_dir.name,
+        lifecycle_status="verified" if overall_status == "ok" else "created",
+        closed=overall_status == "ok",
+    )
+    summary["artifacts"]["run_manifest"] = manifest["manifest"]
+    write_json(run_dir / "summary.json", summary)
+    return summary
+
+
 def run_wb_card_create_apply(
     *,
     credentials: AppCredentials,

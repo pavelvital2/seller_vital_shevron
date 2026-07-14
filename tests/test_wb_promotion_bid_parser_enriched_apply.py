@@ -113,7 +113,7 @@ def test_task_registry_contains_wb_promotion_parser_enriched_apply() -> None:
     assert task["requires_confirmation"] is True
     assert task["requires_mapping"] is True
     assert task["source_plan_task"] == "wb-promotion-bid-parser-enriched-plan"
-    assert task["verify_task"] == "wb-promotion-bids-parser-enriched-apply"
+    assert task["verify_task"] == "wb-promotion-bids-parser-enriched-verify"
     assert task["lock_keys"] == ["marketplace:wb", "ads:wb:promotion-bids"]
 
 

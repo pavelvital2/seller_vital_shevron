@@ -314,3 +314,103 @@ def run_ozon_product_remove_apply(
             "info_after": str(run_dir / "ozon_product_info_after.json"),
         },
     }
+
+
+def run_ozon_product_remove_verify(
+    *,
+    credentials: AppCredentials,
+    data_dir: Path = Path("data"),
+    plan_run_id: str | None = None,
+    run_id: str | None = None,
+) -> dict[str, Any]:
+    """Verify Ozon delete/archive state without repeating the write operation."""
+    if not credentials.ozon_seller:
+        raise RuntimeError("Ozon Seller credentials are required")
+
+    started_at = datetime.now()
+    run_id = run_id or f"ozon_product_remove_verify_{started_at.strftime('%Y%m%dT%H%M%S')}"
+    run_dir = ensure_dir(data_dir / "runs" / started_at.strftime("%Y-%m-%d") / run_id)
+    plan_dir = _resolve_plan_dir(data_dir, plan_run_id)
+    plan = _read_json(plan_dir / "ozon_product_remove_plan.json")
+    if not isinstance(plan, dict) or not plan.get("ready"):
+        raise RuntimeError(f"Ozon product remove plan is not ready: {plan_dir}")
+
+    action = _normalize_text(plan.get("action"))
+    offer_id = _normalize_text(plan.get("offer_id"))
+    product_id = _normalize_text(plan.get("product_id"))
+    ozon = OzonSellerAdapter(credentials.ozon_seller)
+    info_items: list[dict[str, Any]] = []
+    attributes: list[dict[str, Any]] = []
+    if product_id:
+        try:
+            info_items = ozon.fetch_product_info([product_id])
+        except ApiError as exc:
+            if exc.status != 404:
+                raise
+    try:
+        attributes = ozon.fetch_product_attributes([offer_id])
+    except ApiError as exc:
+        if exc.status != 404:
+            raise
+    write_json(run_dir / "ozon_product_info_verify.json", info_items)
+    write_json(run_dir / "ozon_product_attributes_verify.json", attributes)
+
+    status_after = _status_block(info_items[0]) if info_items else {}
+    matching_attributes = [
+        item for item in attributes if _normalize_text(item.get("offer_id")) == offer_id
+    ]
+    if action == "delete":
+        checks = {
+            "offer_absent_from_attributes": not matching_attributes,
+            "product_not_created": not bool(status_after.get("is_created")),
+        }
+        verify_reason = "offer_absent_and_product_not_created" if all(checks.values()) else "delete_not_verified"
+    elif action == "archive":
+        checks = {
+            "product_info_found": bool(info_items),
+            "is_archived": bool(status_after.get("is_archived")),
+        }
+        verify_reason = "is_archived_true" if all(checks.values()) else "archive_not_verified"
+    else:
+        raise RuntimeError(f"Unsupported Ozon product remove action: {action}")
+
+    verified = all(checks.values())
+    summary = {
+        "overall_status": "ok" if verified else "warning",
+        "run_id": run_id,
+        "started_at": started_at.isoformat(timespec="seconds"),
+        "mode": "verify",
+        "approved_plan_run_id": plan_dir.name,
+        "action": action,
+        "offer_id": offer_id,
+        "product_id": product_id,
+        "verified": verified,
+        "verify_reason": verify_reason,
+        "checks": checks,
+        "status_after": status_after,
+        "verify": {"status": "ok" if verified else "warning", "checks": checks},
+        "artifacts": {
+            "run_dir": str(run_dir),
+            "product_info": str(run_dir / "ozon_product_info_verify.json"),
+            "attributes": str(run_dir / "ozon_product_attributes_verify.json"),
+            "summary": str(run_dir / "summary.json"),
+        },
+    }
+    write_json(run_dir / "summary.json", summary)
+    manifest = write_summary_run_manifest(
+        data_dir=data_dir,
+        run_dir=run_dir,
+        summary=summary,
+        task="ozon-product-remove-verify",
+        mode="verify",
+        risk="low",
+        marketplaces=["ozon"],
+        inputs={"plan_run_id": plan_dir.name},
+        source_run_ids=[plan_dir.name],
+        approved_id=plan_dir.name,
+        lifecycle_status="verified" if verified else "created",
+        closed=verified,
+    )
+    summary["artifacts"]["run_manifest"] = manifest["manifest"]
+    write_json(run_dir / "summary.json", summary)
+    return summary

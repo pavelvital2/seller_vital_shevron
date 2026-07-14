@@ -158,14 +158,16 @@ audit/HTML. После смены seller SKU запускает нормализ
 }
 ```
 
-На 2026-07-05 v2-поля добавлены совместимо и не блокируют существующие
+На 2026-07-14 v2-поля добавлены совместимо и не блокируют существующие
 команды. `source_plan_task`, `verify_task` и `lock_keys` заполнены для
 основных write-контуров, которые можно запускать через `WorkflowRunner` и
 `JobService`: Ozon actions optimizer, Ozon Elastic, Ozon CPC, WB actions, WB
 promotion bids, WB parser-enriched promotion bids, reviews/questions и
-approved card batch. `tasks policy` должен показывать пробелы только у legacy
-`actions-apply`; этот старый смешанный маршрут не использовать для новых
-кнопок и не продвигать в Telegram.
+approved card batch, card create/remove и seller SKU update. Legacy
+`actions-apply` имеет `enabled=false`: старый смешанный CLI-маршрут сохранен
+для совместимости, но `WorkflowRunner`/`JobService` его не запускают, в новые
+кнопки и Telegram его не добавлять. `tasks policy` для активных задач должен
+быть пустым.
 
 ## Safety-правила
 

@@ -497,6 +497,19 @@ def _run_ozon_lk_fallback(*, run_dir: Path, limit: int) -> tuple[list[dict[str, 
     questions_raw = _safe_read_json(run_dir / "processed" / "ozon_questions.json")
     reviews = [_normalize_ozon_item(item) for item in reviews_raw] if isinstance(reviews_raw, list) else []
     questions = [_normalize_ozon_item(item) for item in questions_raw] if isinstance(questions_raw, list) else []
+    raw_reviews_fetch = _safe_read_json(run_dir / "raw" / "ozon_lk" / "reviews_fetch.json")
+    raw_questions_fetch = _safe_read_json(run_dir / "raw" / "ozon_lk" / "questions_fetch.json")
+    if isinstance(raw_reviews_fetch, dict):
+        not_viewed = (((raw_reviews_fetch.get("counter") or {}).get("json") or {}).get("items") or {}).get("NOT_VIEWED")
+        if not_viewed is not None:
+            summary.setdefault("outputs", {})["review_counter_not_viewed"] = int(not_viewed or 0)
+    if isinstance(raw_questions_fetch, dict):
+        new_questions = (((raw_questions_fetch.get("counter") or {}).get("json") or {}).get("count"))
+        if new_questions is not None:
+            try:
+                summary.setdefault("outputs", {})["question_counter_new"] = int(new_questions or 0)
+            except (TypeError, ValueError):
+                summary.setdefault("outputs", {})["question_counter_new"] = str(new_questions)
     return reviews, questions, summary
 
 
@@ -969,6 +982,21 @@ def run_reviews_questions(
     elif source_errors and not normalized_items:
         overall_status = "blocked"
 
+    verification_warnings: list[dict[str, Any]] = []
+    if marketplace in {"all", "ozon"} and ozon_lk_ok:
+        lk_outputs = sources.get("ozon_lk", {}).get("outputs") if isinstance(sources.get("ozon_lk"), dict) else {}
+        not_viewed = int((lk_outputs or {}).get("review_counter_not_viewed") or 0)
+        if not_viewed > 0 and not any(action.get("platform") == "ozon" and action.get("source_type") == "review" for action in actions):
+            verification_warnings.append(
+                {
+                    "source": "ozon_lk",
+                    "type": "not_viewed_counter_without_actions",
+                    "review_counter_not_viewed": not_viewed,
+                    "message": "Ozon LK counter has NOT_VIEWED reviews, but dry-run produced no Ozon review actions.",
+                }
+            )
+            overall_status = "warning"
+
     summary = {
         "run_id": run_id,
         "started_at": started_at.isoformat(timespec="seconds"),
@@ -979,6 +1007,7 @@ def run_reviews_questions(
         "items_count": len(normalized_items),
         "actions_count": len(actions),
         "sources": sources,
+        "verification_warnings": verification_warnings,
         "artifacts": artifacts,
     }
     summary_path = run_dir / "summary.json"
@@ -1249,6 +1278,160 @@ def _apply_ozon_public_replies(
         write_json(raw_dir / "ozon_apply_result.json", result)
     result["returncode"] = completed.returncode
     return result
+
+
+def _action_identity(action: dict[str, Any]) -> tuple[str, str, str, str]:
+    return (
+        str(action.get("platform") or ""),
+        str(action.get("source_type") or ""),
+        str(action.get("source_id") or ""),
+        str(action.get("action_type") or ""),
+    )
+
+
+def _marketplace_for_actions(actions: list[dict[str, Any]]) -> str:
+    platforms = {str(action.get("platform") or "") for action in actions}
+    platforms.discard("")
+    if platforms == {"ozon"}:
+        return "ozon"
+    if platforms == {"wb"}:
+        return "wb"
+    return "all"
+
+
+def _collect_reviews_questions_verify_state(
+    *,
+    credentials: AppCredentials,
+    run_dir: Path,
+    marketplace: str,
+    limit: int,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    sources: dict[str, Any] = {}
+    items: list[dict[str, Any]] = []
+    if marketplace in {"all", "ozon"}:
+        official_reviews, official_summary = _run_ozon_official_probe(
+            credentials=credentials,
+            run_dir=run_dir,
+            limit=limit,
+        )
+        sources["ozon_api"] = official_summary
+        ozon_reviews, ozon_questions, lk_summary = _run_ozon_lk_fallback(run_dir=run_dir, limit=limit)
+        sources["ozon_lk"] = lk_summary
+        review_list_ok = (official_summary.get("methods") or {}).get("review_list", {}).get("status") == "ok"
+        items.extend(official_reviews if review_list_ok else ozon_reviews)
+        items.extend(ozon_questions)
+    if marketplace in {"all", "wb"}:
+        wb_feedbacks, wb_questions, wb_summary = _run_wb_api(credentials=credentials, run_dir=run_dir, limit=limit)
+        sources["wb_api"] = wb_summary
+        items.extend(wb_feedbacks)
+        items.extend(wb_questions)
+    normalized_items = [{**item, "processing_status": classify_item(item)} for item in items]
+    return build_actions(normalized_items), sources
+
+
+def run_reviews_questions_verify(
+    *,
+    credentials: AppCredentials,
+    approved_path: Path,
+    data_dir: Path = Path("data"),
+    run_id: str | None = None,
+    limit: int = 300,
+) -> dict[str, Any]:
+    started_at = _now()
+    run_id = run_id or f"reviews_questions_verify_{started_at.strftime('%Y%m%dT%H%M%S')}"
+    run_dir = ensure_dir(data_dir / "runs" / started_at.date().isoformat() / run_id)
+    processed_dir = ensure_dir(run_dir / "processed")
+
+    approved_id = approval_identity_from_path(approved_path)
+    approved_plan = _safe_read_json(approved_path)
+    source_run_id = str(approved_plan.get("source_run_id") or "") if isinstance(approved_plan, dict) else ""
+    approved_actions = _approved_actions(approved_path)
+    marketplace = _marketplace_for_actions(approved_actions)
+    effective_limit = max(limit, len(approved_actions) * 2, 100)
+    current_actions, sources = _collect_reviews_questions_verify_state(
+        credentials=credentials,
+        run_dir=run_dir,
+        marketplace=marketplace,
+        limit=effective_limit,
+    )
+
+    current_by_identity = {_action_identity(action): action for action in current_actions}
+    rows: list[dict[str, Any]] = []
+    still_pending = 0
+    for action in approved_actions:
+        identity = _action_identity(action)
+        current = current_by_identity.get(identity)
+        status = "still_pending" if current else "verified_absent_from_pending"
+        if current:
+            still_pending += 1
+        rows.append(
+            {
+                "platform": identity[0],
+                "source_type": identity[1],
+                "source_id": identity[2],
+                "action_type": identity[3],
+                "offer_id": action.get("offer_id") or "",
+                "sku": action.get("sku") or "",
+                "status": status,
+                "current_processing_status": (current or {}).get("processing_status") or "",
+            }
+        )
+
+    source_errors = [
+        source
+        for source in sources.values()
+        if isinstance(source, dict) and source.get("status") in {"error", "missing_credentials"}
+    ]
+    overall_status = "ok"
+    if still_pending:
+        overall_status = "blocked" if still_pending == len(approved_actions) else "warning"
+    elif source_errors:
+        overall_status = "warning"
+
+    write_json(processed_dir / "approved_actions.json", approved_actions)
+    write_json(processed_dir / "current_actions.json", current_actions)
+    _write_csv(
+        processed_dir / "verify_rows.csv",
+        rows,
+        ["platform", "source_type", "source_id", "action_type", "offer_id", "sku", "status", "current_processing_status"],
+    )
+    artifacts = {
+        "run_dir": str(run_dir),
+        "summary": str(run_dir / "summary.json"),
+        "approved_actions": str(processed_dir / "approved_actions.json"),
+        "current_actions": str(processed_dir / "current_actions.json"),
+        "verify_rows": str(processed_dir / "verify_rows.csv"),
+        "run_manifest": str(run_dir / "manifest.json"),
+    }
+    summary = {
+        "run_id": run_id,
+        "started_at": started_at.isoformat(timespec="seconds"),
+        "overall_status": overall_status,
+        "mode": "verify",
+        "approved_id": approved_id,
+        "approved_path": str(approved_path),
+        "source_run_id": source_run_id,
+        "marketplace": marketplace,
+        "approved_actions_count": len(approved_actions),
+        "still_pending_count": still_pending,
+        "verified_absent_count": len(approved_actions) - still_pending,
+        "source_errors_count": len(source_errors),
+        "sources": sources,
+        "artifacts": artifacts,
+    }
+    write_json(run_dir / "summary.json", summary)
+    write_summary_run_manifest(
+        data_dir=data_dir,
+        run_dir=run_dir,
+        summary=summary,
+        task="reviews-questions-verify",
+        mode="verify",
+        risk="low",
+        marketplaces=[marketplace] if marketplace != "all" else ["ozon", "wb"],
+        inputs={"approved_path": str(approved_path), "limit": effective_limit},
+        approved_id=approved_id,
+    )
+    return summary
 
 
 def run_reviews_questions_apply(

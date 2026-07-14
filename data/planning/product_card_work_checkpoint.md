@@ -1,6 +1,6 @@
 # Product Card Work Checkpoint
 
-Дата чекпойнта: 2026-07-08
+Дата чекпойнта: 2026-07-13
 
 ## Назначение
 
@@ -44,10 +44,178 @@ feature/runtime-job-store
 часть карточных паспортов и run artifacts может не попадать в обычный
 tracked-status.
 
-## Короткий текущий статус 2026-07-08
+## Короткий текущий статус 2026-07-13
 
-Это актуальный верхний checkpoint. Исторические разделы ниже оставлены как
-контекст по уже выполненным пачкам.
+Это актуальный верхний checkpoint. Раздел 2026-07-08 ниже оставлен как
+история и не должен использоваться как текущая очередь pending.
+
+2026-07-12 владелец подтвердил `Применяй все 10` по накопленной пачке:
+
+```text
+chev_back_fsb_text0002
+chev_back_fsin_text0002
+chev_back_mvd_text0002
+chev_back_mvd_text0003
+chev_back_mvd_text0006
+chev_back_rg_text0003
+chev_nr_bpla_pict0011
+chev_nr_sht_pict0022
+nash_back_mvd_text0001
+nash_back_mvd_text0002
+```
+
+Выполнено:
+
+- preflight 2026-07-12: Ozon API, Ozon Performance API и WB API `ok`; Ozon
+  LK/CDP browser keepalive вернул `Похоже, нет соединения`, поэтому ЛК Ozon
+  остается отдельным runtime-риском, но карточный apply шел API-маршрутом;
+- dry-run package:
+  `data/runs/2026-07-12/apply_10_approved_cards_20260712T0822`;
+- apply package:
+  `data/runs/2026-07-12/apply_10_approved_cards_20260712T0824`;
+- seller SKU update применен и проверен для `10/10`: Ozon `10/10`, WB
+  existing cards `4/4`;
+- content update отправлен для `10/10`: Ozon `10/10`, WB existing cards
+  `4/4`;
+- повторный verify:
+  `data/runs/2026-07-12/verify_10_approved_cards_20260712T0827`;
+- тесты после исправления apply-кода:
+  `tests/test_wb_card_create_plan.py`,
+  `tests/test_approved_cards_apply_catalog_sync.py`,
+  `tests/test_card_content_update.py` -> `21 passed`.
+
+Хвост batch apply доведен 2026-07-13:
+
+- Ozon recovery по `chev_back_fsb_text0002`, `chev_back_mvd_text0006`,
+  `nash_back_mvd_text0002` выполнен штатно:
+  `data/runs/2026-07-13/ozon_tail_recovery_plan_20260713T1851`,
+  `data/runs/2026-07-13/ozon_tail_recovery_apply_20260713T1853`;
+- повторный verify Ozon/WB:
+  `data/runs/2026-07-13/ozon_tail_recovery_verify_20260713T1854`;
+  Ozon `ok` по всем трем, WB `ok` по `nash_back_mvd_text0002`;
+- WB create по готовой Ozon-only карточке `chev_back_rg_text0003` выполнен:
+  `data/runs/2026-07-13/wb_create_tail_rg_only_plan_20260713T1858`,
+  `data/runs/2026-07-13/wb_create_tail_rg_only_apply_20260713T1859`;
+  WB `nmID=1261548212`, barcode `2053383093488`, media upload `ok`;
+- финальный verify `chev_back_rg_text0003`:
+  `data/runs/2026-07-13/verify_chev_back_rg_text0003_after_wb_create_20260713T1901`;
+  Ozon `ok`, WB `ok`.
+
+Оставшиеся пять `content_applied` карточек закрыты 2026-07-13 после решения
+владельца использовать для WB create те же фото, что уже стоят на Ozon. Перед
+WB create Ozon photos были read-only получены через Ozon Seller API и записаны
+в Layer 3 `media.target_assets` / `media.target_marketplace_photo_set` с
+меткой `owner_media_decision.status=approved_use_ozon_photos_for_wb_create`.
+
+Dry-run:
+
+```text
+data/runs/2026-07-13/wb_create_remaining5_ozon_photos_plan_20260713T1925
+```
+
+Apply:
+
+```text
+data/runs/2026-07-13/wb_create_remaining5_ozon_photos_apply_20260713T1926
+```
+
+Итог apply: `overall_status=ok`, `submitted_items=5`,
+`found_after_apply=5`, `missing_after_apply=0`, `media_upload_attempts=5`,
+`media_upload_errors=0`, `pending_media_uploads=0`,
+`relevant_error_batches=0`.
+
+Созданы WB-карточки:
+
+| internal_sku | WB nmID | barcode |
+| --- | ---: | --- |
+| `chev_back_fsb_text0002` | `1261579149` | `2053383507206` |
+| `chev_back_fsin_text0002` | `1261579150` | `2053383507213` |
+| `chev_back_mvd_text0002` | `1261579151` | `2053383507220` |
+| `chev_back_mvd_text0003` | `1261579152` | `2053383507237` |
+| `chev_back_mvd_text0006` | `1261579153` | `2053383507244` |
+
+Финальный verify:
+
+```text
+data/runs/2026-07-13/verify_remaining5_after_wb_create_20260713T1928
+```
+
+Итог verify: `overall_status=ok`, Ozon `rows=5/status=ok`, WB
+`rows=5/status=ok`. Ozon checks для всех пяти: title/name, description,
+colors, dimensions, hashtags, `23536=false`, package weight, photo count,
+product status/errors. WB checks для всех пяти: title, description,
+dimensions, colors.
+
+После verify выполнена локальная синхронизация слоев и закрытие статусов через
+`card_status_sync`: Layer 2 audit, Layer 3 passport,
+`data/catalog/card_status/latest.json` и SQLite `card_work_items` больше не
+держат эти пять SKU как pending/content-applied.
+
+Полностью закрыты как `owner_approved_applied_verified` /
+`applied_verified` все 10 карточек пачки:
+
+```text
+chev_back_fsb_text0002
+chev_back_fsin_text0002
+chev_back_mvd_text0002
+chev_back_mvd_text0003
+chev_back_mvd_text0006
+chev_back_rg_text0003
+chev_nr_bpla_pict0011
+chev_nr_sht_pict0022
+nash_back_mvd_text0001
+nash_back_mvd_text0002
+```
+
+Текущие счетчики Layer 3 approved passports после синхронизации 2026-07-13:
+
+- всего approved passports: `210`;
+- по верхнему `approval.status`: `209`
+  `owner_approved_applied_verified`, `1` `owner_approved` для особого
+  WB-only/Ozon-removed паспорта `chev_pz_ng_text0074`;
+- по `approval.marketplace_apply.status`: `209` `applied_verified`, `1`
+  `wb_applied_ozon_removed_policy`;
+- актуальный статусный snapshot:
+  `data/catalog/card_status/latest.json`.
+
+Нормализация верхнего `approval.status` выполнена 2026-07-13:
+
+```text
+data/runs/2026-07-13/normalize_card_approval_status_20260713T1952
+```
+
+До нормализации `184` паспорта имели
+`approval.marketplace_apply.status=applied_verified`, но верхний
+`approval.status` оставался старым (`owner_approved`,
+`owner_approved_pending_batch_apply`, `owner_approved_pending_apply` или
+`owner_approved_for_dry_run`). После нормализации все такие паспорта переведены
+в `owner_approved_applied_verified`; особый статус
+`wb_applied_ozon_removed_policy` не тронут. Runtime `card_work_items` по
+последней пачке из 10 SKU переведен из `applied` в `closed`.
+
+Важное исправление кода 2026-07-12:
+
+- `_sync_approved_card_catalog_layers` больше не ставит
+  `marketplace_apply.status=applied_verified` до финальной verify; закрытие в
+  `applied_verified` должно выполняться только через `card_status_sync` после
+  успешной проверки всех обязательных stages.
+- В `wb_card_create_plan` исправлен report-format crash на
+  `missing_characteristics` без `id`.
+
+Следующий безопасный шаг после закрытия пачки 2026-07-13:
+
+1. Не брать повторно 10 закрытых карточек из текущей пачки: они уже применены,
+   проверены и закрыты локально.
+2. Следующую карточную работу начинать с нового приоритетного SKU из
+   актуального `card_content_audit_backlog.csv` или с отдельного owner-approved
+   списка, а не из старого хвоста `content_applied`.
+3. Отдельно восстановить/проверить браузерный ЛК Ozon: preflight показал
+   API ok, но seller.ozon.ru через CDP возвращает страницу
+   `Похоже, нет соединения`.
+
+## Исторический статус 2026-07-08
+
+Раздел ниже оставлен как контекст по уже выполненным пачкам.
 
 Состояние карточного контура:
 
@@ -170,22 +338,154 @@ tracked-status.
      `data/catalog/master_passport/approved/chev_nr_sht_pict0022.json`;
      promotion run:
      `data/runs/2026-07-08/promote_approved_card_passport_20260708T211800/`;
-   - `nash_back_mvd_text0002`:
+   - `nash_back_mvd_text0002`: владелец согласовал с правкой Ozon
+     `Название цвета = нашивка МВД России, на спину, серый`;
+     Layer 2 переведен в `owner_approved_pending_batch_apply`, Layer 3 создан
+     и проверен, marketplace write не выполнялся.
      `data/catalog/card_audits/fresh_triples_20260708/0212_nash_back_mvd_text0002/audit.json`,
-     `data/catalog/card_audits/fresh_triples_20260708/0212_nash_back_mvd_text0002/nash_back_mvd_text0002.html`;
-   - `nash_back_mvd_text0001`:
+     `data/catalog/card_audits/fresh_triples_20260708/0212_nash_back_mvd_text0002/nash_back_mvd_text0002.html`,
+     `data/catalog/master_passport/approved/nash_back_mvd_text0002.json`;
+     promotion run:
+     `data/runs/2026-07-08/promote_approved_card_passport_20260708T215908/`;
+   - `nash_back_mvd_text0001`: владелец согласовал с правками Ozon
+     `Название модели = МВД` и
+     `Название цвета = нашивка МВД России, на спину, чёрно-белый`;
+     Layer 2 переведен в `owner_approved_pending_batch_apply`, Layer 3 создан
+     и проверен, marketplace write не выполнялся.
      `data/catalog/card_audits/fresh_triples_20260708/0211_nash_back_mvd_text0001/audit.json`,
-     `data/catalog/card_audits/fresh_triples_20260708/0211_nash_back_mvd_text0001/nash_back_mvd_text0001.html`.
-   Проверка fresh-аудиторов: JSON валиден, layout validation passed. Для
-   `nash_back_mvd_text0001` HTML использует sidecar
-   `images/contact_sheet.jpg`; коллаж был отправлен владельцу отдельным
-   изображением. Следующее действие - ждать правки/согласование владельца по
-   первому HTML, параллельно владелец проверяет второй и третий.
+     `data/catalog/card_audits/fresh_triples_20260708/0211_nash_back_mvd_text0001/nash_back_mvd_text0001.html`,
+     `data/catalog/master_passport/approved/nash_back_mvd_text0001.json`;
+     promotion run:
+     `data/runs/2026-07-09/promote_approved_card_passport_20260709T070734/`.
+   2026-07-08 владелец указал дефекты первичного HTML
+   `nash_back_mvd_text0001`: в Telegram-документе не было фото, в описании
+   была внутренняя фраза `если владелец подтвердит текущий тип крепления по
+   партии`, аудит был неполным по цвету товара и модели/группировке.
+   Оркестратор исправил Layer 2: HTML стал self-contained с 7 встроенными
+   `data:image` фото, описание очищено, добавлены рекомендации по Ozon/WB
+   цвету, Ozon `Название цвета`, Ozon `Название модели`, grouping
+   `manual_review`, вес пришивной нашивки без липучки исправлен на 10 г.
+   Проверка: JSON валиден; Chrome headless render прошел для mobile
+   `390x844` и desktop `1366x1000`; screenshots:
+   `layout_mobile_fixed.png`, `layout_desktop_fixed.png`.
+   После повторной проверки владелец согласовал карточку с правками по модели
+   и названию цвета; следующий шаг для нее - только будущий approved batch
+   apply через dry-run/plan/apply/verify.
 7. Продолжение должно идти от ответа владельца по конкретному HTML:
    `согласовано` -> внести owner corrections в Layer 2 и создать Layer 3
    passport; `применяй` -> только после Layer 3 через безопасный
    dry-run/plan/apply/verify. Marketplace write только после точного owner
-   approval `применяй` по показанному пакету.
+   approval `применяй` по показанному пакету. Следующая тройка после
+   фильтрации существующих Layer 2/Layer 3 взята из row-level package index:
+   `chev_back_mvd_text0006`, `chev_back_fsb_text0002`,
+   `chev_back_fsin_text0002`.
+8. Следующая тройка fresh-аудитов создана и отправлена владельцу в чат
+   2026-07-08; marketplace write и dry-run apply не выполнялись:
+   - `chev_back_fsin_text0002`:
+     `data/catalog/card_audits/fresh_triples_20260708/0019_chev_back_fsin_text0002/audit.json`,
+     `data/catalog/card_audits/fresh_triples_20260708/0019_chev_back_fsin_text0002/chev_back_fsin_text0002.html`.
+     2026-07-09 владелец согласовал HTML без дополнительных правок; Layer 2
+     переведен в `owner_approved_pending_batch_apply`, создан Layer 3 passport
+     `data/catalog/master_passport/approved/chev_back_fsin_text0002.json`,
+     promotion run:
+     `data/runs/2026-07-09/promote_approved_card_passport_20260709T071148/`.
+     Карточка Ozon-only: текущий Ozon offer_id `back0025`, целевой внутренний
+     артикул продавца `chev_back_fsin_text0002`, WB-карточка отсутствует и
+     остается future create later. Следующий шаг - только будущий approved batch
+     apply через dry-run/plan/apply/verify;
+   - `chev_back_mvd_text0006`:
+     `data/catalog/card_audits/fresh_triples_20260708/0011_chev_back_mvd_text0006/audit.json`,
+     `data/catalog/card_audits/fresh_triples_20260708/0011_chev_back_mvd_text0006/chev_back_mvd_text0006.html`.
+     Оркестратор сделал только техническую упаковку коллажа в `data:image`
+     для Telegram HTML, без изменения содержательных рекомендаций fresh-
+     аудитора. 2026-07-09 владелец согласовал HTML с правкой Ozon
+     `Название цвета = Шеврон МВД России, на спину, чёрно-серый`; Layer 2
+     переведен в `owner_approved_pending_batch_apply`, создан Layer 3 passport
+     `data/catalog/master_passport/approved/chev_back_mvd_text0006.json`,
+     promotion run:
+     `data/runs/2026-07-09/promote_approved_card_passport_20260709T072013/`.
+     Карточка Ozon-only: текущий Ozon offer_id `back0004`, целевой внутренний
+     артикул продавца `chev_back_mvd_text0006`, WB-карточка отсутствует и
+     остается future create later. Следующий шаг - только будущий approved batch
+     apply через dry-run/plan/apply/verify;
+   - `chev_back_fsb_text0002`:
+     `data/catalog/card_audits/fresh_triples_20260708/0018_chev_back_fsb_text0002/audit.json`,
+     `data/catalog/card_audits/fresh_triples_20260708/0018_chev_back_fsb_text0002/chev_back_fsb_text0002.html`.
+     2026-07-09 владелец согласовал HTML с правкой Ozon
+     `Название цвета = Шеврон ФСБ на спину, мох`; Layer 2 переведен в
+     `owner_approved_pending_batch_apply`, создан Layer 3 passport
+     `data/catalog/master_passport/approved/chev_back_fsb_text0002.json`,
+     promotion run:
+     `data/runs/2026-07-09/promote_approved_card_passport_20260709T073615/`.
+     Карточка Ozon-only: текущий Ozon offer_id `back0011`, целевой внутренний
+     артикул продавца `chev_back_fsb_text0002`, WB-карточка отсутствует и
+     остается future create later. Цвет товара сохранен по правилу `мох`:
+     marketplace `зеленый, черный, бежевый`, а `мох` остается в названии цвета.
+     Следующий шаг - только будущий approved batch apply через
+     dry-run/plan/apply/verify.
+9. Следующая тройка fresh-аудитов создана отдельными worker-аудиторами
+   2026-07-09; marketplace write, Layer 3 и dry-run apply не выполнялись.
+   После первой ошибочной выдачи с неверными путями Layer 1 оркестратор
+   перезапустил аудиторов по точным `package_index.json` путям
+   `0020_ozon_back0007`, `0021_ozon_back0008`, `0022_ozon_back0021`.
+   Все три итоговых HTML self-contained и прошли browser/layout validation:
+   - `chev_back_mvd_text0002`:
+     `data/catalog/card_audits/fresh_triples_20260709/0020_chev_back_mvd_text0002/audit.json`,
+     `data/catalog/card_audits/fresh_triples_20260709/0020_chev_back_mvd_text0002/chev_back_mvd_text0002.html`;
+     Ozon-only `back0007`, recommended title
+     `Шеврон на липучке ДПС на спину`, recommended color name
+     `ДПС на спину, черно-серый`, layout `passed`;
+     owner approved 2026-07-09 with corrections: title
+     `Шеврон на липучке ДПС на спину, чёрно-серый`, color name
+     `Шеврон ДПС на спину, чёрно-серый`; Layer 2 status
+     `owner_approved_pending_batch_apply`, Layer 3 passport written to
+     `data/catalog/master_passport/approved/chev_back_mvd_text0002.json`,
+     promotion run
+     `data/runs/2026-07-09/promote_approved_card_passport_20260709T082517/`.
+     Marketplace apply remains `not_applied`; current Ozon offer_id
+     `back0007`, target internal seller SKU `chev_back_mvd_text0002`,
+     WB remains future create later;
+   - `chev_back_mvd_text0003`:
+     `data/catalog/card_audits/fresh_triples_20260709/0021_chev_back_mvd_text0003/audit.json`,
+     `data/catalog/card_audits/fresh_triples_20260709/0021_chev_back_mvd_text0003/chev_back_mvd_text0003.html`;
+     Ozon-only `back0008`, recommended title
+     `Шеврон на липучке Спецназ МВД на спину`, recommended color name
+     `Спецназ МВД на спину, черно-серый`, layout `passed`;
+     owner approved 2026-07-09 with corrections: title
+     `Шеврон на липучке Спецназ МВД на спину, чёрно-серый`
+     (`51` chars, within 60), Ozon hashtags rewritten with `_` separators,
+     color name `Шеврон Спецназ МВД на спину, черно-серый`; Layer 2 status
+     `owner_approved_pending_batch_apply`, Layer 3 passport written to
+     `data/catalog/master_passport/approved/chev_back_mvd_text0003.json`,
+     promotion run
+     `data/runs/2026-07-09/promote_approved_card_passport_20260709T085031/`.
+     Marketplace apply remains `not_applied`; current Ozon offer_id
+     `back0008`, target internal seller SKU `chev_back_mvd_text0003`,
+     WB remains future create later;
+   - `chev_back_rg_text0003`:
+     `data/catalog/card_audits/fresh_triples_20260709/0022_chev_back_rg_text0003/audit.json`,
+     `data/catalog/card_audits/fresh_triples_20260709/0022_chev_back_rg_text0003/chev_back_rg_text0003.html`;
+     Ozon-only `back0021`, recommended title
+     `Шеврон на липучке ОМОН Росгвардия на спину`, recommended color name
+     `ОМОН Росгвардия, на спину, черно-серый`, layout `passed`;
+     owner approved 2026-07-09 with corrections: title
+     `Шеврон на липучке ОМОН на спину, чёрно-серый`
+     (`44` chars, within 60), color name
+     `Шеврон ОМОН, на спину, чёрно-серый` (owner `<b>` tags treated as
+     chat formatting, not marketplace field content), Ozon hashtags expanded
+     to 30 relevant/popular joined tags without spaces or `_`; Layer 2 status
+     `owner_approved_pending_batch_apply`, Layer 3 passport written to
+     `data/catalog/master_passport/approved/chev_back_rg_text0003.json`,
+     promotion run
+     `data/runs/2026-07-09/promote_approved_card_passport_20260709T093057/`.
+     Marketplace apply remains `not_applied`; current Ozon offer_id
+     `back0021`, target internal seller SKU `chev_back_rg_text0003`,
+     WB remains future create later.
+   Оркестратор сделал только техническую JSON-синхронизацию alias-полей
+   `proposed_final_card.color_name` и `target_physical_params.color_name`
+   из уже показанных в HTML/рекомендациях значений для `0020` и `0022`;
+   содержательные рекомендации аудиторов не менялись. Следующее действие -
+   owner review HTML по очереди.
 
 ## Актуальное правило batch apply
 

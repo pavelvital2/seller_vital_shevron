@@ -1,0 +1,24 @@
+{
+  "approval_status_counts": {
+    "owner_approved": 1,
+    "owner_approved_applied_verified": 209
+  },
+  "generated_at": "2026-07-13T19:49:38",
+  "last_normalization": {
+    "normalized_at": "2026-07-13T19:49:38",
+    "run_id": "normalize_card_approval_status_20260713T1952",
+    "special_statuses_preserved": [
+      "wb_applied_ozon_removed_policy"
+    ],
+    "target_rule": "approval.status=owner_approved_applied_verified when approval.marketplace_apply.status=applied_verified",
+    "updated_passports": 184
+  },
+  "marketplace_apply_status_counts": {
+    "applied_verified": 209,
+    "wb_applied_ozon_removed_policy": 1
+  },
+  "not_applied_skus": [
+    "chev_pz_ng_text0074"
+  ],
+  "total_passports": 210
+}

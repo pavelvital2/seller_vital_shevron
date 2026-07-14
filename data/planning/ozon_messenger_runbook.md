@@ -620,6 +620,20 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli \
    прочитанными, выполнить verify и сохранить состояние обработанного хвоста.
    В следующем отчете уже обработанные уведомления и закрытые хвосты не
    показывать как новые задачи.
+7. Если Messenger применяется в составе `/ozon-inbox`, после успешного apply и
+   verify нужно закрыть approval-хвосты через `approvals close`: исходный
+   top-level `ozon_inbox_*_pending`, связанный reviews/questions pending и
+   fresh verify-pending с `actions_count=0`. На 2026-07-13 подтверждено, что
+   отправка сообщений и mark-read могут пройти успешно, но top-level inbox
+   pending остается в `pending_review`, пока его не закрыть явно.
+8. Если после ответа продавца покупатель присылает короткое закрывающее
+   сообщение без нового вопроса, например `Спасибо, но нет` или `Отказ`, не
+   готовить новый текст ответа. После owner approval закрывать такой хвост как
+   `mark_chat_read` без отправки сообщения. Для Customer-чата официальный
+   `/v2/chat/read` может вернуть `403 Premium Plus`; в этом случае использовать
+   LK/CDP fallback: открыть целевой чат в контуре Vital Shevron без ввода
+   текста и verify через `/v3/chat/history`, что последнее Customer-сообщение
+   стало `is_read=true`.
 
 ## Состояние обработанного хвоста
 

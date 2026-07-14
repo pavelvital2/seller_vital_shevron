@@ -189,6 +189,143 @@ def _verify_prices(
     return summary
 
 
+def run_ozon_card_create_verify(
+    *,
+    credentials: AppCredentials,
+    data_dir: Path = Path("data"),
+    plan_run_id: str | None = None,
+    run_id: str | None = None,
+    wait_seconds: int = 0,
+    poll_interval: int = 5,
+) -> dict[str, Any]:
+    """Verify Ozon card creation from current marketplace state without writes."""
+    if not credentials.ozon_seller:
+        raise RuntimeError("Ozon Seller credentials are required")
+
+    started_at = datetime.now()
+    run_id = run_id or f"ozon_card_create_verify_{started_at.strftime('%Y%m%dT%H%M%S')}"
+    run_dir = ensure_dir(data_dir / "runs" / started_at.strftime("%Y-%m-%d") / run_id)
+    plan_dir = _resolve_plan_dir(data_dir, plan_run_id)
+    plan_items = _read_json(plan_dir / "ozon_card_create_plan.json")
+    if not isinstance(plan_items, list) or not plan_items:
+        raise RuntimeError(f"Ozon card create plan has no rows: {plan_dir}")
+
+    payload_items = [item.get("payload") for item in plan_items if isinstance(item.get("payload"), dict)]
+    offer_ids = [
+        _normalize_text(payload.get("offer_id"))
+        for payload in payload_items
+        if _normalize_text(payload.get("offer_id"))
+    ]
+    if not offer_ids or len(offer_ids) != len(payload_items):
+        raise RuntimeError("Ozon card create plan has no valid payload items")
+
+    ozon = OzonSellerAdapter(credentials.ozon_seller)
+    created = _verify_created_cards(
+        ozon=ozon,
+        offer_ids=offer_ids,
+        run_dir=run_dir,
+        wait_seconds=wait_seconds,
+        poll_interval=poll_interval,
+    )
+    product_ids = [
+        _normalize_text(item.get("product_id"))
+        for item in created.get("results") or []
+        if _normalize_text(item.get("product_id"))
+    ]
+    product_info = ozon.fetch_product_info(product_ids) if product_ids else []
+    write_json(run_dir / "ozon_product_info_verify.json", product_info)
+    info_by_product_id = {
+        _normalize_text(item.get("id") or item.get("product_id")): item
+        for item in product_info
+        if _normalize_text(item.get("id") or item.get("product_id"))
+    }
+
+    results: list[dict[str, Any]] = []
+    for item in created.get("results") or []:
+        product_id = _normalize_text(item.get("product_id"))
+        info = info_by_product_id.get(product_id) or {}
+        statuses = info.get("statuses") if isinstance(info.get("statuses"), dict) else {}
+        errors = info.get("errors") if isinstance(info.get("errors"), list) else []
+        checks = {
+            "attributes_found": item.get("status") == "ok",
+            "product_id_present": bool(product_id),
+            "product_info_found": bool(info),
+            "offer_id_matches": _normalize_text(info.get("offer_id")) == _normalize_text(item.get("offer_id")),
+            "is_created": bool(statuses.get("is_created")),
+            "no_product_errors": not errors,
+        }
+        results.append(
+            {
+                "offer_id": _normalize_text(item.get("offer_id")),
+                "product_id": product_id,
+                "sku": _normalize_text(info.get("sku") or item.get("sku")),
+                "status": "ok" if all(checks.values()) else "warning",
+                "checks": checks,
+                "marketplace_status": {
+                    "status": _normalize_text(statuses.get("status")),
+                    "status_failed": _normalize_text(statuses.get("status_failed")),
+                    "status_description": _normalize_text(statuses.get("status_description")),
+                },
+                "error_count": len(errors),
+            }
+        )
+
+    price_payloads = [
+        item.get("price_payload")
+        for item in plan_items
+        if isinstance(item.get("price_payload"), dict)
+        and _normalize_text(item["price_payload"].get("offer_id")) in set(offer_ids)
+    ]
+    price_verify = (
+        _verify_prices(ozon=ozon, price_payloads=price_payloads, run_dir=run_dir)
+        if price_payloads
+        else {"status": "skipped", "rows": 0, "results": []}
+    )
+    if not price_payloads:
+        write_json(run_dir / "ozon_price_verify_summary.json", price_verify)
+    write_json(run_dir / "ozon_card_create_state_verify.json", results)
+    cards_ok = len(results) == len(offer_ids) and all(item["status"] == "ok" for item in results)
+    prices_ok = price_verify.get("status") in {"ok", "skipped"}
+    overall_status = "ok" if cards_ok and prices_ok else "warning"
+    summary = {
+        "run_id": run_id,
+        "started_at": started_at.isoformat(timespec="seconds"),
+        "mode": "verify",
+        "overall_status": overall_status,
+        "approved_plan_run_id": plan_dir.name,
+        "expected_rows": len(offer_ids),
+        "verified_rows": sum(1 for item in results if item["status"] == "ok"),
+        "warning_rows": sum(1 for item in results if item["status"] != "ok"),
+        "price_verify_status": price_verify.get("status"),
+        "verify": {"status": overall_status, "results": results, "price": price_verify},
+        "artifacts": {
+            "run_dir": str(run_dir),
+            "cards": str(run_dir / "ozon_card_create_state_verify.json"),
+            "product_info": str(run_dir / "ozon_product_info_verify.json"),
+            "price_verify": str(run_dir / "ozon_price_verify_summary.json"),
+            "summary": str(run_dir / "summary.json"),
+        },
+    }
+    write_json(run_dir / "summary.json", summary)
+    manifest = write_summary_run_manifest(
+        data_dir=data_dir,
+        run_dir=run_dir,
+        summary=summary,
+        task="ozon-card-create-verify",
+        mode="verify",
+        risk="low",
+        marketplaces=["ozon"],
+        inputs={"plan_run_id": plan_dir.name, "wait_seconds": wait_seconds, "poll_interval": poll_interval},
+        source_run_ids=[plan_dir.name],
+        approved_id=plan_dir.name,
+        lifecycle_status="verified" if overall_status == "ok" else "created",
+        closed=overall_status == "ok",
+    )
+    summary["artifacts"]["run_manifest"] = manifest["manifest"]
+    write_json(run_dir / "summary.json", summary)
+    return summary
+
+
 def _update_passports(
     *,
     data_dir: Path,

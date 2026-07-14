@@ -1,13 +1,15 @@
+import json
 from pathlib import Path
 
 import pytest
 
-from seller_agent.config import AppCredentials
+from seller_agent.config import AppCredentials, OzonSellerCredentials, WbCredentials
 from seller_agent.tasks.registry import get_task_definition
 from seller_agent.tasks.seller_sku_update import (
     _build_wb_vendor_update_variant,
     normalize_seller_sku_operations,
     run_seller_sku_update_apply,
+    run_seller_sku_update_verify,
 )
 
 
@@ -100,9 +102,73 @@ def test_apply_seller_sku_update_requires_owner_confirmation(tmp_path: Path) -> 
         )
 
 
+def test_verify_seller_sku_update_reads_native_ids(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    plan_dir = tmp_path / "runs" / "2026-07-14" / "seller_sku_update_plan_test"
+    plan_dir.mkdir(parents=True)
+    (plan_dir / "seller_sku_update_plan.json").write_text(
+        json.dumps(
+            [
+                {
+                    "internal_sku": "chev_test_0001",
+                    "ready": True,
+                    "ozon": {
+                        "old_offer_id": "old_ozon",
+                        "new_offer_id": "chev_test_0001",
+                        "product_id": "123",
+                    },
+                    "wb": {
+                        "old_vendor_code": "old_wb",
+                        "new_vendor_code": "chev_test_0001",
+                        "nm_id": "456",
+                    },
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    class FakeOzon:
+        def __init__(self, credentials):
+            self.credentials = credentials
+
+        def fetch_product_info(self, product_ids):
+            return [{"id": 123, "offer_id": "chev_test_0001"}]
+
+        def update_offer_ids(self, payload):
+            raise AssertionError("verify must not update offer ids")
+
+    class FakeWb:
+        def __init__(self, credentials):
+            self.credentials = credentials
+
+        def find_cards_by_vendor_codes(self, vendor_codes):
+            return {"chev_test_0001": {"vendorCode": "chev_test_0001", "nmID": 456}}
+
+        def fetch_card_errors(self, limit=100):
+            return {"data": []}
+
+        def update_cards(self, payload):
+            raise AssertionError("verify must not update cards")
+
+    monkeypatch.setattr("seller_agent.tasks.seller_sku_update.OzonSellerAdapter", FakeOzon)
+    monkeypatch.setattr("seller_agent.tasks.seller_sku_update.WbContentAdapter", FakeWb)
+
+    result = run_seller_sku_update_verify(
+        credentials=AppCredentials(OzonSellerCredentials("id", "key"), None, WbCredentials("token")),
+        data_dir=tmp_path,
+        plan_run_id="seller_sku_update_plan_test",
+        run_id="seller_sku_update_verify_test",
+    )
+
+    assert result["overall_status"] == "ok"
+    assert result["ozon_verified_rows"] == 1
+    assert result["wb_verified_rows"] == 1
+
+
 def test_task_registry_contains_seller_sku_update_commands() -> None:
     plan = get_task_definition("plan-seller-sku-update")
     apply = get_task_definition("apply-seller-sku-update")
+    verify = get_task_definition("verify-seller-sku-update")
 
     assert plan["name"] == "seller-sku-update-plan"
     assert plan["mode"] == "dry_run"
@@ -110,3 +176,5 @@ def test_task_registry_contains_seller_sku_update_commands() -> None:
     assert apply["name"] == "seller-sku-update-apply"
     assert apply["mode"] == "apply"
     assert apply["requires_confirmation"] is True
+    assert apply["verify_task"] == "seller-sku-update-verify"
+    assert verify["mode"] == "verify"

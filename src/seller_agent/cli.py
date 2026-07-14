@@ -137,7 +137,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     jobs.add_argument(
         "action",
-        choices=("list", "show", "submit", "run", "run-next", "cancel"),
+        choices=("list", "show", "submit", "run", "run-next", "recover-approvals", "cancel"),
         help="Runtime job action.",
     )
     jobs.add_argument("--runtime-db", default="runtime/runtime.db", help="SQLite runtime DB path.")
@@ -150,6 +150,11 @@ def build_parser() -> argparse.ArgumentParser:
     jobs.add_argument("--status", default=None, help="Optional status filter for jobs list.")
     jobs.add_argument("--limit", type=int, default=20, help="Maximum rows for jobs list.")
     jobs.add_argument("--reason", default="cancelled_by_cli", help="Cancel reason.")
+    jobs.add_argument(
+        "--run-verify",
+        action="store_true",
+        help="For jobs recover-approvals: run safe verify jobs immediately after queueing.",
+    )
 
     tasks = subparsers.add_parser(
         "tasks",
@@ -2127,6 +2132,15 @@ def main(argv: list[str] | None = None) -> int:
                 "job": asdict(runner_result.job) if runner_result.job else None,
                 "artifacts": {"runtime_db": str(runtime_db)},
             }
+        elif args.action == "recover-approvals":
+            statuses = (args.status,) if args.status else ("applying", "applying_unknown")
+            result = service.recover_runtime_approvals(
+                statuses=statuses,
+                limit=args.limit,
+                run_verify=args.run_verify,
+                actor=args.actor,
+            )
+            result["artifacts"] = {"runtime_db": str(runtime_db)}
         else:
             if not args.job_id:
                 parser.error("jobs cancel requires --job-id")

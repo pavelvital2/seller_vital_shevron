@@ -68,6 +68,30 @@ def test_job_store_resource_lease_blocks_until_release_or_expiry(tmp_path: Path)
     assert second.owner_id == "job_2"
 
 
+def test_job_store_acquires_multiple_resource_leases_atomically(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "runtime.db")
+
+    first = store.acquire_resource_leases(
+        resource_keys=("marketplace:ozon", "cards:batch-apply"),
+        owner_id="job_1",
+        ttl_seconds=60,
+    )
+    blocked = store.acquire_resource_leases(
+        resource_keys=("marketplace:ozon", "cards:other"),
+        owner_id="job_2",
+        ttl_seconds=60,
+    )
+
+    assert first is not None
+    assert [lease.resource_key for lease in first] == ["marketplace:ozon", "cards:batch-apply"]
+    assert blocked is None
+    assert store.acquire_resource_lease(resource_key="cards:other", owner_id="job_3", ttl_seconds=60) is not None
+    assert store.release_resource_leases(
+        resource_keys=("marketplace:ozon", "cards:batch-apply"),
+        owner_id="job_1",
+    ) == 2
+
+
 def test_job_store_approval_reserve_is_atomic(tmp_path: Path) -> None:
     store = JobStore(tmp_path / "runtime.db")
     store.create_approval(
@@ -84,6 +108,72 @@ def test_job_store_approval_reserve_is_atomic(tmp_path: Path) -> None:
     assert approval is not None
     assert approval.status == "applying"
     assert approval.owner_job_id == "job_apply_1"
+
+
+def test_job_store_approval_reserve_can_require_checksum(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "runtime.db")
+    store.create_approval(
+        approval_id="approved_reviews_1",
+        source_job_id="job_source",
+        status="approved",
+        checksum="sha256:expected",
+    )
+
+    assert not store.reserve_approval_for_apply(
+        approval_id="approved_reviews_1",
+        owner_job_id="job_apply_1",
+        expected_checksum="sha256:wrong",
+    )
+    assert store.reserve_approval_for_apply(
+        approval_id="approved_reviews_1",
+        owner_job_id="job_apply_2",
+        expected_checksum="sha256:expected",
+    )
+
+    approval = store.get_approval("approved_reviews_1")
+    assert approval is not None
+    assert approval.owner_job_id == "job_apply_2"
+
+
+def test_job_store_ensure_approval_does_not_overwrite_existing_status(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "runtime.db")
+    store.create_approval(
+        approval_id="approved_reviews_1",
+        source_job_id="job_source_1",
+        status="applied",
+        checksum="sha256:old",
+        data={"old": True},
+    )
+
+    ensured = store.ensure_approval(
+        approval_id="approved_reviews_1",
+        source_job_id="job_source_2",
+        status="approved",
+        checksum="sha256:new",
+        data={"new": True},
+    )
+
+    assert ensured.status == "applied"
+    assert ensured.source_job_id == "job_source_1"
+    assert ensured.checksum == "sha256:old"
+    assert ensured.data == {"old": True}
+
+
+def test_job_store_lists_approvals_by_status(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "runtime.db")
+    store.create_approval(
+        approval_id="approval_1",
+        source_job_id="job_source_1",
+        status="applying",
+    )
+    store.create_approval(
+        approval_id="approval_2",
+        source_job_id="job_source_2",
+        status="verified",
+    )
+
+    assert [item.approval_id for item in store.list_approvals(statuses=("applying",))] == ["approval_1"]
+    assert [item.approval_id for item in store.list_approvals(statuses=("verified",))] == ["approval_2"]
 
 
 def test_job_store_upserts_card_work_item_lifecycle(tmp_path: Path) -> None:

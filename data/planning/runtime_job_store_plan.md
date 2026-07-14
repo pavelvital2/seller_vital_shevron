@@ -187,16 +187,77 @@ get_status(job_id) -> JobStatus
   `wb-actions-discount-apply`, `wb-promotion-bids-apply`,
   `wb-promotion-bids-parser-enriched-apply`; все они требуют явный
   `plan_run_id` или `approved_path` и `confirmed_by_user=true`;
+- 2026-07-13 `JobService.run()` начал применять `TaskRegistry.lock_keys` для
+  подтвержденных apply-задач: все resource leases берутся атомарно в SQLite,
+  при занятом ресурсе workflow не стартует, job остается `queued`, а в
+  `job_events` пишется `job_resource_blocked`; после завершения leases
+  освобождаются и фиксируются событиями
+  `job_resource_leases_acquired/released`;
+- 2026-07-13 добавлен первый opt-in слой runtime approval guard: если
+  подтвержденная write/apply job явно содержит `approval_id` или
+  `runtime_approval_id`, `JobService` до старта workflow проверяет
+  опциональный `approval_checksum`, атомарно резервирует approval
+  `approved -> applying`, после успешного workflow переводит approval в
+  `applied`, а после ошибки workflow - в `applying_unknown`; старые callback-и
+  с `plan_run_id`/`approved_path` без `approval_id` пока работают по прежнему
+  маршруту;
+- 2026-07-14 подтвержденные write/apply jobs без явного `approval_id`
+  автоматически получают runtime approval record при `JobService.submit()`:
+  `approval_id` строится из канонического task id и source reference
+  (`approved_path`, `plan_run_id`, `source_run_id`, `pending_id`,
+  `approved_id`, `base_plan_run_id` или `internal_skus`), `approval_checksum`
+  строится из параметров запуска без runtime approval полей, повторный callback
+  по тому же source не перетирает существующий approval и блокируется до
+  marketplace workflow, если approval уже не в статусе `approved`;
+- 2026-07-14 добавлен первый crash recovery verify слой:
+  `JobService.recover_runtime_approvals()` ищет approvals в
+  `applying/applying_unknown`, строит безопасную verify job по сохраненным
+  `apply_params` и `verify_task`, умеет сразу выполнить verify через
+  `--run-verify` и переводит approval в `verified` только при точном
+  `overall_status=ok`; `warning` не закрывает approval. Если `verify_task` сам является
+  apply-задачей, recovery не запускает ее повторно и возвращает
+  `manual_verify_required`. Recovery также не запускает verify для approval
+  в `applying`, пока связанный owner apply-job остается в активном статусе:
+  такая строка получает `apply_job_still_active` и требует повторной проверки
+  после завершения или явной диагностики зависшего job;
+- `WorkflowRunner` получил handler для read-only
+  `card-content-update-verify`, чтобы карточный batch recovery мог выполняться
+  штатным runner-ом;
+- 2026-07-14 добавлены отдельные safe verify routes для Ozon write-контуров:
+  `ozon-elastic-verify`, `ozon-actions-optimizer-verify`,
+  `ozon-cpc-bids-verify`; соответствующие apply tasks теперь указывают на них
+  в `TaskRegistry.verify_task`, поэтому recovery не повторяет apply-route для
+  этих контуров;
+- 2026-07-14 добавлены отдельные safe verify routes для WB promotion:
+  `wb-promotion-bids-verify` и
+  `wb-promotion-bids-parser-enriched-verify`; они читают approved plan,
+  текущие WB campaign bids и сравнивают целевые ставки без повторного
+  `update_bids`, соответствующие apply tasks переключены на эти
+  `verify_task`;
+- 2026-07-14 добавлены отдельные safe verify routes для WB actions и
+  reviews/questions: `wb-actions-discount-verify` сверяет owner-approved
+  plan с текущими WB prices/discounts без повторного upload, а
+  `reviews-questions-verify` делает свежий read-only срез Ozon/WB
+  отзывов/вопросов и проверяет, что approved actions больше не находятся в
+  pending-очереди; `TaskRegistry.verify_task` соответствующих apply routes
+  переключен на эти verify tasks;
+- 2026-07-14 закрыты card recovery gaps: добавлены
+  `ozon-card-create-verify`, `wb-card-create-verify`,
+  `ozon-product-remove-verify` и `seller-sku-update-verify`. Они читают
+  owner-approved plan и фактическое состояние Ozon/WB, но не вызывают
+  import/upload/update/delete/archive. Legacy `actions-apply` помечен
+  `enabled=false`, поэтому `WorkflowRunner` и `JobService` его не запускают;
 - `JobService.cancel(job_id)` отменяет `created/queued/waiting_confirmation`;
 - `JobRunner.run_next()` выполняет первый queued job;
-- CLI-команды `jobs list/show/submit/run/run-next/cancel`;
+- CLI-команды `jobs list/show/submit/run/run-next/recover-approvals/cancel`;
 - тесты `tests/test_job_service.py`.
 
 Еще не сделано:
 
 - Telegram routing через JobService;
 - worker/timer;
-- поддержка dry-run/apply через approvals/resource leases.
+- отдельные безопасные verify handlers для inbox/Messenger cleanup и
+  оставшихся apply-контуров, где verify пока основан на общем dry-run;
 
 CLI:
 
@@ -210,6 +271,12 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   -m seller_agent.cli jobs run-next
+
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli jobs recover-approvals
+
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli jobs recover-approvals --run-verify
 ```
 
 ### Этап 3. TaskRegistry v2 contract
@@ -238,9 +305,10 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 - `source_plan_task`, `verify_task` и `lock_keys` заполнены для основных
   подтверждаемых apply-контуров: Ozon actions optimizer, Ozon Elastic,
   Ozon CPC, WB actions, WB promotion bids, WB parser-enriched promotion bids,
-  reviews/questions и approved card batch;
-- CLI `tasks policy` сейчас оставляет пробелы только у legacy
-  `actions-apply`, который не нужно продвигать в новые кнопки.
+  reviews/questions, approved card batch, card create/remove и seller SKU;
+- legacy `actions-apply` отключен через `enabled=false`; `WorkflowRunner` и
+  `JobService` блокируют disabled-задачи, а `tasks policy` не считает их
+  активным runtime-долгом.
 
 Еще не сделано:
 
@@ -330,14 +398,29 @@ callback dedup через `telegram_updates` остается отдельным
 
 ### Этап 6. Атомарные approvals и resource leases
 
+Статус: начат. Resource leases подключены в `JobService` для apply-задач с
+`TaskRegistry.lock_keys`; approval reserve/checksum подключен для явных
+`approval_id` и для подтвержденных write/apply jobs, где runtime approval
+создается автоматически при постановке job.
+
 До новых write-кнопок:
 
-- approval reserve: `approved -> applying` в одной транзакции;
-- idempotency key;
-- resource lease per marketplace/action;
-- crash state `applying_unknown`;
-- обязательный verify перед повтором после сбоя;
-- закрытие approval после `verified`.
+- approval reserve: `approved -> applying` в одной транзакции - первый слой
+  реализован для явного `approval_id`/`runtime_approval_id` и для auto-created
+  runtime approvals подтвержденных write jobs;
+- idempotency key - пока остается task-level/approval-level, единый контракт
+  еще не введен;
+- resource lease per marketplace/action - первый слой реализован:
+  `JobStore.acquire_resource_leases()` берет набор locks атомарно, а
+  `JobService.run()` не запускает apply workflow при занятом ресурсе;
+- crash state `applying_unknown` - первый слой реализован при ошибке workflow
+  после успешного резервирования approval;
+- обязательный verify перед повтором после сбоя - первый слой реализован:
+  `recover-approvals` запускает только safe verify/read-only/dry-run task и
+  блокирует apply-mode verify как `manual_verify_required`;
+- закрытие approval после `verified` - первый слой реализован для successful
+  recovery verify; финальное `closed` состояние остается следующим lifecycle
+  шагом.
 
 Первый write-контур для переноса: самый простой и контролируемый, например
 одна approved операция с малым числом строк. Массовые карточки, цены, ставки и

@@ -25,6 +25,7 @@ from seller_agent.tasks.reviews_questions import (
     normalize_wb_question,
     run_reviews_questions_apply,
     run_reviews_questions_prepare_approved,
+    run_reviews_questions_verify,
 )
 
 
@@ -577,6 +578,56 @@ def test_apply_reviews_questions_allows_ozon_question_answers(monkeypatch, tmp_p
 
     assert result["overall_status"] == "ok"
     assert result["applied_counts"]["ozon_question_answers"] == 1
+
+
+def test_reviews_questions_verify_checks_approved_actions_absent_from_pending(monkeypatch, tmp_path: Path) -> None:
+    approved_dir = tmp_path / "approved" / "reviews_questions_approved"
+    approved_dir.mkdir(parents=True)
+    approved_path = approved_dir / "approved_apply_plan.json"
+    action = {
+        "platform": "wb",
+        "source_type": "review",
+        "source_id": "feedback-1",
+        "action_type": "public_review_reply",
+        "draft_text": "Спасибо за отзыв!",
+        "approved": True,
+        "state": "approved",
+    }
+    from seller_agent.safety.approvals import action_rows_checksum
+
+    approved_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "approval-package/v1",
+                "status": "approved",
+                "pending_id": "pending-1",
+                "source_run_id": "reviews_questions_test",
+                "actions_checksum": action_rows_checksum([action]),
+                "actions": [action],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        "seller_agent.tasks.reviews_questions._collect_reviews_questions_verify_state",
+        lambda **kwargs: ([], {"wb_api": {"status": "ok"}}),
+    )
+
+    result = run_reviews_questions_verify(
+        credentials=AppCredentials(ozon_seller=None, ozon_performance=None, wb=WbCredentials(token="token")),
+        data_dir=tmp_path,
+        approved_path=approved_path,
+        run_id="reviews_questions_verify_test",
+    )
+
+    assert result["overall_status"] == "ok"
+    assert result["still_pending_count"] == 0
+    verify_rows = (tmp_path / "runs" / datetime.now().date().isoformat() / "reviews_questions_verify_test" / "processed" / "verify_rows.csv").read_text(
+        encoding="utf-8"
+    )
+    assert "verified_absent_from_pending" in verify_rows
 
 
 def test_approved_actions_rejects_checksum_mismatch(tmp_path: Path) -> None:

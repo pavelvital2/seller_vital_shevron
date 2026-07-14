@@ -558,6 +558,82 @@ def _discount_counts(rows_by_nm_id: dict[int, dict[str, Any]], nm_ids: list[int]
     return counts
 
 
+def _current_base_price(row: dict[str, Any]) -> Decimal | None:
+    for key in ("price", "basePrice", "base_price"):
+        value = _decimal(row.get(key))
+        if value is not None:
+            return value
+    sizes = row.get("sizes")
+    if isinstance(sizes, list):
+        for size in sizes:
+            if not isinstance(size, dict):
+                continue
+            for key in ("price", "basePrice", "base_price"):
+                value = _decimal(size.get(key))
+                if value is not None:
+                    return value
+    return None
+
+
+def _verify_current_discount_payload(
+    *,
+    target_payload: dict[str, Any],
+    current_rows: dict[int, dict[str, Any]],
+) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    matched = 0
+    mismatched = 0
+    missing = 0
+    price_unavailable = 0
+    for target in target_payload.get("data") or []:
+        nm_id = int(target["nmID"])
+        target_price = _decimal(target.get("price"))
+        target_discount = int(target["discount"])
+        current = current_rows.get(nm_id) or {}
+        current_discount_raw = current.get("discount")
+        current_discount = int(current_discount_raw) if current_discount_raw not in (None, "") else None
+        current_price = _current_base_price(current)
+        price_matches = True
+        if target_price is not None and current_price is not None:
+            price_matches = current_price == target_price
+        elif target_price is not None and current_price is None:
+            price_unavailable += 1
+        discount_matches = current_discount == target_discount
+        if not current:
+            status = "missing"
+            missing += 1
+        elif discount_matches and price_matches:
+            status = "ok"
+            matched += 1
+        else:
+            status = "mismatch"
+            mismatched += 1
+        rows.append(
+            {
+                "nmID": nm_id,
+                "target_price": str(target.get("price") or ""),
+                "target_discount": target_discount,
+                "current_price": str(current_price) if current_price is not None else "",
+                "current_discount": current_discount if current_discount is not None else "",
+                "discount_matches": discount_matches,
+                "price_matches": price_matches,
+                "status": status,
+            }
+        )
+    overall_status = "ok"
+    if missing or mismatched:
+        overall_status = "blocked" if matched == 0 else "warning"
+    return {
+        "status": overall_status,
+        "expected_rows": len(target_payload.get("data") or []),
+        "matched_rows": matched,
+        "mismatched_rows": mismatched,
+        "missing_rows": missing,
+        "price_unavailable_rows": price_unavailable,
+        "rows": rows,
+    }
+
+
 def _run_staged_discount_flow(
     *,
     credentials: AppCredentials,
@@ -636,6 +712,75 @@ def _run_staged_discount_flow(
         "missing_after_final_nm_ids": sorted(set(target_by_nm_id) - set(final_ok_ids)),
     }
     write_json(processed_dir / "staged_discount_result.json", result)
+    return result
+
+
+def run_wb_actions_discount_verify(
+    *,
+    credentials: AppCredentials,
+    data_dir: Path = Path("data"),
+    plan_run_id: str | None = None,
+    run_id: str | None = None,
+) -> dict[str, Any]:
+    if not credentials.wb:
+        raise RuntimeError("missing WB API token")
+
+    approved_plan_dir = _plan_dir(data_dir, plan_run_id)
+    approved_id = approved_plan_dir.name
+    approved_summary = json.loads((approved_plan_dir / "summary.json").read_text(encoding="utf-8"))
+    scheme = str(approved_summary["summary"]["scheme"])
+    approved_csv = Path(approved_summary["artifacts"]["csv"])
+    if not approved_csv.is_absolute():
+        approved_csv = Path.cwd() / approved_csv
+    target_payload, changed_rows = _payload_from_rows(_read_csv(approved_csv))
+
+    started_at = datetime.now()
+    run_id = run_id or f"wb_actions_discount_verify_{scheme}_{started_at.strftime('%Y%m%dT%H%M%S')}"
+    run_dir = ensure_dir(data_dir / "runs" / started_at.strftime("%Y-%m-%d") / run_id)
+    processed_dir = ensure_dir(run_dir / "processed")
+    raw_dir = ensure_dir(run_dir / "raw")
+
+    nm_ids = [int(row["nmID"]) for row in target_payload.get("data") or []]
+    current_rows = _fetch_current_price_rows(credentials, nm_ids)
+    write_json(raw_dir / "current_prices.json", current_rows)
+    write_json(processed_dir / "target_payload.json", target_payload)
+    _write_csv(changed_rows, processed_dir / "target_changed_rows.csv")
+
+    verify = _verify_current_discount_payload(target_payload=target_payload, current_rows=current_rows)
+    _write_csv(verify["rows"], processed_dir / "verify_rows.csv")
+
+    artifacts = {
+        "run_dir": str(run_dir),
+        "summary": str(run_dir / "summary.json"),
+        "target_payload": str(processed_dir / "target_payload.json"),
+        "target_changed_rows": str(processed_dir / "target_changed_rows.csv"),
+        "current_prices": str(raw_dir / "current_prices.json"),
+        "verify_rows": str(processed_dir / "verify_rows.csv"),
+        "run_manifest": str(run_dir / "manifest.json"),
+    }
+    result = {
+        "run_id": run_id,
+        "started_at": started_at.isoformat(timespec="seconds"),
+        "mode": "verify",
+        "overall_status": verify["status"],
+        "approved_plan_run_id": approved_id,
+        "approved_id": approved_id,
+        "scheme": scheme,
+        "verify": {key: value for key, value in verify.items() if key != "rows"},
+        "artifacts": artifacts,
+    }
+    write_json(run_dir / "summary.json", result)
+    write_summary_run_manifest(
+        data_dir=data_dir,
+        run_dir=run_dir,
+        summary=result,
+        task="wb-actions-discount-verify",
+        mode="verify",
+        risk="low",
+        marketplaces=["wb"],
+        inputs={"plan_run_id": plan_run_id},
+        approved_id=approved_id,
+    )
     return result
 
 

@@ -16,6 +16,15 @@ description: "Use for Ozon Messenger and notification workflows: buyer chats, un
 - Daily Messenger work must not stop at reporting: after approval, send
   approved replies, mark approved notifications read, verify, and save
   non-secret closed/tail state so old items do not reappear as new tasks.
+- When Messenger is applied through `/ozon-inbox`, close approval tails after
+  successful apply and zero-action verify: original inbox pending, linked
+  reviews/questions pending, and fresh verify pending must not remain in
+  `pending_review`.
+- Short closing customer replies after a seller answer, such as "Спасибо, но
+  нет" or "Отказ", should be owner-approved as `mark_chat_read` without sending
+  a new message. If official `/v2/chat/read` returns Premium Plus 403 for a
+  Customer chat, use the documented LK/CDP open-chat fallback and verify
+  `/v3/chat/history` shows no unread Customer message.
 - Separate:
   - buyer questions needing replies;
   - important Ozon marketplace messages to forward to Telegram;

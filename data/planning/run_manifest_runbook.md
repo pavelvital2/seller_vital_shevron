@@ -36,7 +36,7 @@ data/runs/index.jsonl
   "risk": "none|low|normal|high",
   "marketplaces": ["ozon", "wb"],
   "status": "ok|warning|blocked|error",
-  "lifecycle_status": "created|pending_review|approved|applied|verified|failed|closed",
+  "lifecycle_status": "created|pending_review|approved|applied|verified|needs_attention|failed|closed",
   "started_at": "",
   "finished_at": "",
   "inputs": {},
@@ -158,6 +158,8 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 - `approved` - approved-пакет создан, но apply еще не выполнен;
 - `applied` - apply был выполнен, но verify/закрытие не дало финальный статус;
 - `verified` - apply выполнен и подтвержден verify или run lifecycle;
+- `needs_attention` - verify завершен без подтвержденного `ok`, результат
+  требует диагностики или повторной проверки и не считается закрытым;
 - `failed` - связанный apply завершился `blocked/error`;
 - `closed` - пакет закрыт maintenance-маркером и скрывается из обычного
   `approvals status`.
@@ -236,6 +238,8 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli run
 - `pending_review` - dry-run готов к review владельца;
 - `applied` - apply выполнен, но verify не дал финальный `ok`;
 - `verified` - apply выполнен и verify подтвердил результат;
+- `needs_attention` - verify не подтвердил результат; запуск остается
+  открытым до диагностики или успешного повторного verify;
 - `failed` - запуск заблокирован или завершился ошибкой;
 - `closed` - read-only/maintenance запуск завершен и не требует дальнейших
   действий.

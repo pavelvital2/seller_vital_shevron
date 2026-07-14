@@ -287,3 +287,11 @@ tests/test_approved_cards_apply_catalog_sync.py
 не обновлялся: старая Ozon-only строка находится по прежнему `offer_id`,
 старая WB-only строка находится по прежнему `vendorCode`, barcode переносится,
 дубль удаляется, итоговая строка становится `ozon_wb`.
+
+## Runtime recovery verify
+
+TaskRegistry использует отдельную задачу `wb-card-create-verify`. Она по
+исходному `plan_run_id` проверяет наличие карточки по `vendorCode`, `nmID`,
+barcode в `sizes.skus`, фото при наличии media в плане, корзину и релевантные
+ошибки `/content/v2/cards/error/list`. Upload/update/media write endpoints не
+вызываются.

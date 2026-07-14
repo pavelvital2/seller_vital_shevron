@@ -5,7 +5,7 @@ import pytest
 
 from seller_agent.config import AppCredentials, OzonSellerCredentials
 from seller_agent.http import ApiError
-from seller_agent.tasks.ozon_card_create_apply import run_ozon_card_create_apply
+from seller_agent.tasks.ozon_card_create_apply import run_ozon_card_create_apply, run_ozon_card_create_verify
 from seller_agent.tasks.ozon_card_create_plan import _build_ozon_create_payload, run_ozon_card_create_plan
 from seller_agent.tasks.registry import get_task_definition
 
@@ -259,12 +259,85 @@ def test_apply_ozon_card_create_requires_confirmation(tmp_path: Path) -> None:
         )
 
 
+def test_verify_ozon_card_create_reads_current_card_and_price_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan_dir = tmp_path / "runs" / "2026-07-14" / "ozon_card_create_plan_test"
+    plan_dir.mkdir(parents=True)
+    (plan_dir / "ozon_card_create_plan.json").write_text(
+        json.dumps(
+            [
+                {
+                    "ready": True,
+                    "payload": {"offer_id": "chev_test_0001"},
+                    "price_payload": {
+                        "offer_id": "chev_test_0001",
+                        "price": "550.00",
+                        "old_price": "1100.00",
+                        "min_price": "400.00",
+                    },
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    class FakeOzon:
+        def __init__(self, credentials):
+            self.credentials = credentials
+
+        def fetch_product_attributes(self, offer_ids):
+            return [{"offer_id": offer_ids[0], "id": 123, "sku": 456, "name": "Test"}]
+
+        def fetch_product_info(self, product_ids):
+            return [
+                {
+                    "id": 123,
+                    "offer_id": "chev_test_0001",
+                    "sku": 456,
+                    "statuses": {"is_created": True, "status": "price_sent"},
+                    "errors": [],
+                }
+            ]
+
+        def fetch_product_info_prices_by_offer_ids(self, offer_ids):
+            return [
+                {
+                    "offer_id": offer_ids[0],
+                    "price": {"price": "550.00", "old_price": "1100.00", "min_price": "400.00"},
+                }
+            ]
+
+        def import_products(self, payload):
+            raise AssertionError("verify must not import products")
+
+        def import_product_prices(self, payload):
+            raise AssertionError("verify must not import prices")
+
+    monkeypatch.setattr("seller_agent.tasks.ozon_card_create_apply.OzonSellerAdapter", FakeOzon)
+
+    result = run_ozon_card_create_verify(
+        credentials=AppCredentials(OzonSellerCredentials("id", "key"), None, None),
+        data_dir=tmp_path,
+        plan_run_id="ozon_card_create_plan_test",
+        run_id="ozon_card_create_verify_test",
+    )
+
+    assert result["overall_status"] == "ok"
+    assert result["verified_rows"] == 1
+    assert result["price_verify_status"] == "ok"
+
+
 def test_task_registry_contains_ozon_card_create_commands() -> None:
     plan = get_task_definition("plan-ozon-card-create")
     apply = get_task_definition("apply-ozon-card-create")
+    verify = get_task_definition("verify-ozon-card-create")
 
     assert plan["mode"] == "dry_run"
     assert plan["requires_credentials"] is True
     assert apply["mode"] == "apply"
     assert apply["requires_confirmation"] is True
+    assert apply["verify_task"] == "ozon-card-create-verify"
+    assert verify["mode"] == "verify"
     assert "apply_missing_source_plan_task" not in apply["policy_issues"]

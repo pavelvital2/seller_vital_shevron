@@ -64,6 +64,11 @@ data/runs/<date>/<run_id>/summary.json
 Успешный archive считается подтвержденным, если `/v3/product/info/list`
 возвращает `is_archived=true`.
 
+Для crash recovery TaskRegistry использует `ozon-product-remove-verify`:
+для delete он проверяет отсутствие `offer_id` в attributes и
+`statuses.is_created=false`, для archive - `is_archived=true`. Verify не
+повторяет `/v2/products/delete` или `/v1/product/archive`.
+
 ## Подтвержденный кейс
 
 2026-07-04: `chev_pz_ng_text0074` / `Сталкер`, product_id `5330427391`.

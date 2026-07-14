@@ -1,7 +1,12 @@
+import json
 from pathlib import Path
 
 from seller_agent.config import AppCredentials, OzonSellerCredentials
-from seller_agent.tasks.ozon_product_remove import run_ozon_product_remove_apply, run_ozon_product_remove_plan
+from seller_agent.tasks.ozon_product_remove import (
+    run_ozon_product_remove_apply,
+    run_ozon_product_remove_plan,
+    run_ozon_product_remove_verify,
+)
 from seller_agent.tasks.registry import get_task_definition
 
 
@@ -136,10 +141,57 @@ def test_ozon_product_remove_apply_deletes_and_verifies(tmp_path: Path, monkeypa
     assert result["verified"] is True
 
 
+def test_ozon_product_remove_verify_checks_delete_state_without_write(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    plan_dir = tmp_path / "runs" / "2026-07-14" / "ozon_product_remove_plan_test"
+    plan_dir.mkdir(parents=True)
+    (plan_dir / "ozon_product_remove_plan.json").write_text(
+        json.dumps(
+            {
+                "ready": True,
+                "action": "delete",
+                "offer_id": "chev_test_0001",
+                "product_id": "123",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class FakeOzon:
+        def __init__(self, credentials):
+            self.credentials = credentials
+
+        def fetch_product_info(self, product_ids):
+            return []
+
+        def fetch_product_attributes(self, offer_ids):
+            return []
+
+        def delete_products(self, offer_ids):
+            raise AssertionError("verify must not delete products")
+
+        def archive_products(self, product_ids):
+            raise AssertionError("verify must not archive products")
+
+    monkeypatch.setattr("seller_agent.tasks.ozon_product_remove.OzonSellerAdapter", FakeOzon)
+
+    result = run_ozon_product_remove_verify(
+        credentials=_credentials(),
+        data_dir=tmp_path,
+        plan_run_id="ozon_product_remove_plan_test",
+        run_id="ozon_product_remove_verify_test",
+    )
+
+    assert result["overall_status"] == "ok"
+    assert result["verified"] is True
+
+
 def test_ozon_product_remove_tasks_registered() -> None:
     plan = get_task_definition("plan-ozon-product-remove")
     apply = get_task_definition("apply-ozon-product-remove")
+    verify = get_task_definition("verify-ozon-product-remove")
 
     assert plan["mode"] == "dry_run"
     assert apply["mode"] == "apply"
     assert apply["requires_confirmation"] is True
+    assert apply["verify_task"] == "ozon-product-remove-verify"
+    assert verify["mode"] == "verify"

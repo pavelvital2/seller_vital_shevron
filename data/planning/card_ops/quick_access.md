@@ -188,10 +188,28 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   обновляет `card_work_items` в `runtime/runtime.db`;
 - пишет один общий run/report для пачки.
 
+Подтверждено 2026-07-12 на batch apply `apply_10_approved_cards_20260712T0824`:
+локальный catalog-sync не является финальной проверкой и не должен переводить
+паспорт в `applied_verified`. До `card_status_sync` допустимые промежуточные
+состояния - `content_applied` или stage-specific pending. Если `wb_card_create`
+заблокирован, Ozon-only SKU нельзя закрывать как `applied_verified`, даже если
+Ozon content verify уже `ok`: карточка остается pending до отдельного WB create
+review/apply или до owner decision не создавать WB-карточку.
+
 Если одна карточка или отдельная стадия блокируется на dry-run, batch должен
 продолжить по ready карточкам и вынести blocked строки в общий отчет. Для
 больших пачек начинать с 5 SKU; после стабильной серии можно переходить к
 10 SKU.
+
+Подтверждено 2026-07-13 на хвосте `chev_back_rg_text0003`: если
+`apply-wb-card-create` запускается отдельно, вне `apply-approved-cards`, после
+успешного WB create нужно вручную синхронизировать локальные слои тем же
+контуром, который использует batch: обновить `products.*`, `content_master.*`,
+`processed/master_catalog.*`, Layer 3 passport, затем запустить
+`verify-card-content-update` и только после `overall_status=ok` закрывать
+Layer 2/Layer 3 через `card_status_sync`. Без этого созданная WB-карточка
+останется в маркетплейсе, но локальный паспорт может продолжать выглядеть как
+`ozon_only`.
 
 Подтверждено 2026-06-29 на пачке `0009-0014`: перед batch apply нужно
 проверить, что для каждого owner-approved HTML/Layer 2 audit уже есть файл:

@@ -12,6 +12,13 @@ description: "Use for Ozon/Wildberries reviews and questions workflows: read-onl
 - Replies to buyers and marking reviews viewed are write operations.
 - Use the full chain:
   `read-only -> dry-run -> review -> approved -> apply -> verify -> cleanup`.
+- For inbox workflows, cleanup includes closing approval tails with
+  `approvals close` after successful apply and zero-action verify. Do not leave
+  the original inbox pending or fresh verify pending in `pending_review`.
+- For Ozon LK/CDP verify, `actions_count=0` is not enough when
+  `/api/review/counter` still has `NOT_VIEWED > 0`. Increase review-list
+  pagination, collect the tail, get owner approval, apply it, and verify
+  `NOT_VIEWED=0`.
 - For Telegram automation, keep Ozon and WB inboxes separate:
   `/ozon-inbox` and `/wb-inbox`. Do not merge approvals across marketplaces
   unless the owner explicitly asks for one combined package.

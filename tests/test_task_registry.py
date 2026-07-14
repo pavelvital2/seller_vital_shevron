@@ -19,12 +19,27 @@ def test_task_registry_covers_cli_commands() -> None:
 def test_task_registry_contains_safety_metadata_for_write_tasks() -> None:
     registry = default_task_registry()
     write_tasks = [task for task in registry.list() if task.mode == "apply"]
+    enabled_write_tasks = [task for task in write_tasks if task.enabled]
+    legacy = registry.get("actions-apply")
 
     assert write_tasks
     assert all(task.requires_confirmation for task in write_tasks)
     assert all(task.risk in {"low", "high"} for task in write_tasks)
     assert all(task.executor == "script" for task in write_tasks)
-    assert any("apply_missing_source_plan_task" in task.policy_issues() for task in write_tasks)
+    assert all(not task.policy_issues() for task in enabled_write_tasks)
+    assert legacy.enabled is False
+    assert legacy.policy_issues() == []
+
+
+def test_enabled_apply_tasks_use_registered_non_write_verify_tasks() -> None:
+    registry = default_task_registry()
+
+    for task in registry.list(mode="apply"):
+        if not task.enabled:
+            continue
+        verify = registry.get(task.verify_task)
+        assert verify.mode in {"verify", "read_only", "dry_run"}, task.name
+        assert verify.is_write is False, task.name
 
 
 def test_task_registry_filters_and_alias_lookup() -> None:
@@ -61,8 +76,7 @@ def test_cli_tasks_list_and_show(capsys: pytest.CaptureFixture[str]) -> None:
 
     assert main(["tasks", "policy"]) == 0
     policy_output = json.loads(capsys.readouterr().out)
-    assert policy_output["rows"]
-    assert any(row["issue"] == "apply_missing_source_plan_task" for row in policy_output["rows"])
+    assert policy_output["rows"] == []
 
 
 def _parser_commands() -> set[str]:

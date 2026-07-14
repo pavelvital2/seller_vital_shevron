@@ -18,6 +18,7 @@ ManifestLifecycleStatus = Literal[
     "approved",
     "applied",
     "verified",
+    "needs_attention",
     "failed",
     "closed",
 ]

@@ -277,6 +277,141 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   -m seller_agent.cli sessions status --marketplace ozon
 ```
 
+### Внештатная ситуация Ozon web ABT challenge 2026-07-13
+
+Симптом:
+
+- `status-preflight` показывает Ozon Seller API, Ozon Performance API и WB API
+  `ok`;
+- `127.0.0.1:9544` слушает Chrome Vital Shevron, CDP guard подтверждает
+  правильный порт и профиль
+  `.sessions/ozon/chrome-profile`;
+- `ozon_session_keepalive_cdp.js` на dashboard, analytics, products и prices
+  возвращает title `Похоже, нет соединения`, `expectedStoreFound=false`,
+  `needsLogin=false`, `stateExported=false`;
+- `restore-ozon-session --email ...` останавливается до ввода кода на
+  `BLOCKED_BEFORE_LOGIN`, а прямой
+  `ozon_seller_interactive_login.js` без dashboard-precheck останавливается на
+  `BLOCKED_BEFORE_EMAIL`;
+- smoke на свежем временном профиле тоже получает
+  `BLOCKED_BEFORE_EMAIL`, поэтому проблема не в поврежденном Chrome profile.
+
+Подтверждение:
+
+- browser/network smoke по свежему профилю получил `HTTP 403` на
+  `https://seller.ozon.ru/app/registration/signin?__rr=1`;
+- страница показывает Ozon ABT challenge: `Похоже, нет соединения`,
+  рекомендацию выключить VPN/сменить сеть и incident id;
+- `valuesPrinted=false`, cookies/storage state/коды не выводились.
+
+Вывод:
+
+- это блокировка Ozon web/ABT challenge для текущей сети или IP Seller VPS;
+- повторный ввод кода не поможет, пока страница signin не открывается до поля
+  email;
+- перезапуск keeper/timer и смена user-agent не устраняют проблему.
+
+Безопасный порядок действий:
+
+1. Не путать этот случай с падением API: карточные API-операции могут быть
+   доступны, но ЛК Ozon через browser/CDP недоступен.
+2. Проверить контур:
+
+   ```bash
+   loginctl show-user pavel -p Linger -p State -p RuntimePath
+   ss -ltnp | grep 9544
+   PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+     -m seller_agent.cli sessions status --marketplace ozon
+   ```
+
+3. Если CDP/profile правильные, но signin/dashboard дают `HTTP 403` и
+   `Похоже, нет соединения`, не запускать повторные login-коды. Если владелец
+   дал свежие cookies, сначала проверить их на временном профиле через
+   `ozon_import_cookies_check.js --profile ... --state ...`; рабочий профиль
+   перезаписывать только после `COOKIE_IMPORT_SUCCESS` и
+   `expectedStoreFound: true`.
+4. Если свежие cookies тоже не открывают dashboard, нужен другой сетевой
+   маршрут для Ozon web или разблокировка у Ozon.
+5. После появления доступного сетевого маршрута повторить:
+
+   ```bash
+   PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+     -m seller_agent.cli restore-ozon-session --email <email>
+   node scripts/sessions/ozon_session_keepalive_cdp.js
+   PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+     -m seller_agent.cli sessions status --marketplace ozon
+   ```
+
+6. После неудачного restore всегда вернуть systemd units в поднятое состояние:
+
+   ```bash
+   XDG_RUNTIME_DIR=/run/user/1000 \
+   DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
+     systemctl --user start vital-shevron-ozon-keeper.service \
+     vital-shevron-ozon-session-refresh.timer
+   ```
+
+### Проверенное восстановление Ozon cookies 2026-07-13
+
+Ситуация:
+
+- старый Ozon web state показывал `Похоже, нет соединения`/ABT и refresh
+  возвращал `Ozon blocked/no-connection page detected`;
+- владелец предоставил свежий cookie header;
+- значения cookies не выводились и не сохранялись в отчеты.
+
+Безопасный порядок:
+
+1. Скопировать cookie-файл только во временный `tmp/auth` с правами `600`.
+2. Проверить на временном профиле:
+
+   ```bash
+   xvfb-run -a node scripts/sessions/ozon_import_cookies_check.js \
+     --cookie-file tmp/auth/ozon_user_cookies_check.txt \
+     --profile tmp/ozon-cookie-check-profile \
+     --state tmp/ozon-cookie-check-state.json \
+     --expected-store "Vital Shevron" \
+     --headful
+   ```
+
+3. Если результат `COOKIE_IMPORT_SUCCESS`, `expectedStoreFound: true`,
+   `loggedIn: true`, остановить Ozon keeper/timer и импортировать cookies в
+   рабочий profile/state штатным скриптом.
+4. Запустить `vital-shevron-ozon-keeper.service` и
+   `vital-shevron-ozon-session-refresh.timer`.
+5. Очистить старый failed-state refresh service, если он остался от прошлой
+   ошибки, и вручную выполнить один refresh:
+
+   ```bash
+   XDG_RUNTIME_DIR=/run/user/1000 \
+   DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
+     systemctl --user reset-failed vital-shevron-ozon-session-refresh.service
+
+   XDG_RUNTIME_DIR=/run/user/1000 \
+   DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
+     systemctl --user start vital-shevron-ozon-session-refresh.service
+   ```
+
+6. Проверить `mtime` и права
+   `.sessions/ozon/ozon_seller_storage_state.json`, затем выполнить:
+
+   ```bash
+   PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+     -m seller_agent.cli sessions status --marketplace ozon
+   PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+     -m seller_agent.cli status-preflight
+   ```
+
+Проверенный результат 2026-07-13:
+
+- keeper active/running, timer active/waiting и enabled;
+- refresh service завершился `status=0/SUCCESS`;
+- `storage_state` обновился после refresh и имеет права `600`;
+- `sessions_status_20260713T201213`: `overall_status: ok`;
+- `status_preflight_20260713T201219`: `overall_status: ok`;
+- Ozon dashboard, analytics, products и prices открылись без login/ABT,
+  `expectedStoreFound: true`, `stateExported: true`, `valuesPrinted: false`.
+
 ## WB Watchdog
 
 WB watchdog запускается через:

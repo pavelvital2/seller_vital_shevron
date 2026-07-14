@@ -112,6 +112,11 @@ Verify:
 - barcode в `sizes.skus` сохранился;
 - `/content/v2/cards/error/list` не содержит ошибки по этой карточке.
 
+Для crash recovery TaskRegistry использует `seller-sku-update-verify`. Задача
+сверяет новый Ozon `offer_id` по неизменному `product_id` и новый WB
+`vendorCode` по неизменному `nmID`; write endpoints смены артикулов не
+вызываются.
+
 ## После успешной операции
 
 Команда обновляет:

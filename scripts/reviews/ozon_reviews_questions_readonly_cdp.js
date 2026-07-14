@@ -230,7 +230,9 @@ async function fetchReviews(page, companyId, limit) {
   const pages = [];
   const seenNotViewed = new Set();
   let lastReview = null;
-  for (let i = 0; i < 30; i += 1) {
+  const target = Number(counter.json?.items?.NOT_VIEWED || 0);
+  const maxPages = Math.max(30, Math.min(300, Math.ceil((limit + 200) / 5)));
+  for (let i = 0; i < maxPages; i += 1) {
     const body = {
       company_id: companyId,
       company_type: companyType,
@@ -244,7 +246,6 @@ async function fetchReviews(page, companyId, limit) {
       if (item.interaction_status === 'NOT_VIEWED' && item.uuid) seenNotViewed.add(item.uuid);
     }
     lastReview = result.json?.last_review || null;
-    const target = Number(counter.json?.items?.NOT_VIEWED || 0);
     if (!items.length || seenNotViewed.size >= limit || (target > 0 && seenNotViewed.size >= target) || !result.json?.hasNext || !lastReview) break;
   }
 
@@ -379,6 +380,8 @@ async function fetchQuestions(page, companyId, limit) {
       questions_processed: path.relative(projectRoot, questionsProcessedPath),
       reviews_count: normalizedReviews.length,
       questions_count: normalizedQuestions.length,
+      review_counter_not_viewed: Number(reviews.counter?.json?.items?.NOT_VIEWED || 0),
+      question_counter_new: Number(questions.counter?.json?.count || 0),
     };
   } catch (error) {
     result.blocker = error.message || String(error);

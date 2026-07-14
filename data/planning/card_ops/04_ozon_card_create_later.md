@@ -282,6 +282,11 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   если они вернулись API;
 - создан saved run/report без секретов.
 
+Для crash recovery TaskRegistry использует отдельную задачу
+`ozon-card-create-verify`. Она повторно читает карточку, product status/errors
+и цены по исходному `plan_run_id`, но не вызывает `/v3/product/import` и
+`/v5/product/import/prices`.
+
 8. После серии созданий отдельной задачей выполнить полный refresh:
 
 ```bash

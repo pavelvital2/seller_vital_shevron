@@ -10,6 +10,7 @@ from seller_agent.tasks.wb_actions_discount_apply import (
     _requires_staged_discount,
     _split_regular_and_staged_rows,
     run_wb_actions_discount_apply,
+    run_wb_actions_discount_verify,
 )
 
 
@@ -354,3 +355,40 @@ def test_wb_actions_apply_stages_zero_to_fifty_five_discount(tmp_path, monkeypat
     assert upload_calls[0] == ("regular", {"data": []})
     assert upload_calls[1] == ("staged_stage49", {"data": [{"nmID": 101, "price": 1100, "discount": 49}]})
     assert upload_calls[2] == ("staged_stage55", {"data": [{"nmID": 101, "price": 1100, "discount": 55}]})
+
+
+def test_wb_actions_verify_compares_current_discount_without_upload(tmp_path, monkeypatch) -> None:
+    plan_dir = tmp_path / "runs" / "2026-07-14" / "wb_actions_discount_plan_70-55-55_test"
+    plan_dir.mkdir(parents=True)
+    csv_path = plan_dir / "wb-discount-calculation-active-actions-70-55-55.csv"
+    csv_path.write_text(
+        "Артикул WB;Базовая цена;Текущая скидка;Финальная скидка;Дельта, п.п.\n"
+        "101;1100;70;55;-15\n",
+        encoding="utf-8-sig",
+    )
+    (plan_dir / "summary.json").write_text(
+        (
+            '{"run_id":"wb_actions_discount_plan_70-55-55_test",'
+            '"summary":{"scheme":"70-55-55"},'
+            f'"artifacts":{{"csv":"{csv_path}"}}}}'
+        ),
+        encoding="utf-8",
+    )
+    calls: dict[str, object] = {}
+
+    def fake_current_prices(credentials, nm_ids):
+        calls["nm_ids"] = nm_ids
+        return {101: {"nmID": 101, "discount": 55, "sizes": [{"price": 1100}]}}
+
+    monkeypatch.setattr("seller_agent.tasks.wb_actions_discount_apply._fetch_current_price_rows", fake_current_prices)
+
+    result = run_wb_actions_discount_verify(
+        credentials=AppCredentials(ozon_seller=None, ozon_performance=None, wb=WbCredentials(token="token")),
+        data_dir=tmp_path,
+        plan_run_id="wb_actions_discount_plan_70-55-55_test",
+        run_id="wb_actions_discount_verify_test",
+    )
+
+    assert result["overall_status"] == "ok"
+    assert result["verify"]["matched_rows"] == 1
+    assert calls["nm_ids"] == [101]

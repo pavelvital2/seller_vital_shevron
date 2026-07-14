@@ -9,6 +9,7 @@ from seller_agent.tasks.inbox_workflow import (
     _apply_ozon_messenger,
     _build_ozon_report,
     _build_wb_report,
+    _classify_messenger_action,
     _collect_ozon_messenger_actions,
 )
 
@@ -224,3 +225,41 @@ def test_ozon_messenger_collection_paginates_chat_list(
     assert len(result["actions"]) == 1
     assert result["actions"][0]["chat_id"] == "chat-page-2"
     assert result["actions"][0]["action_type"] == "mark_chat_read"
+
+
+def test_customer_tail_closing_after_seller_reply_becomes_mark_read() -> None:
+    action = _classify_messenger_action(
+        chat_id="chat-1",
+        message={
+            "message_id": "m2",
+            "is_read": False,
+            "user": {"type": "Customer"},
+            "data": ["Спасибо, но нет"],
+        },
+        previous_message={
+            "message_id": "m1",
+            "is_read": True,
+            "user": {"type": "Seller"},
+            "data": ["Здравствуйте! Индивидуальные варианты не изготавливаем."],
+        },
+    )
+
+    assert action["action_type"] == "mark_chat_read"
+    assert action["processing_status"] == "customer_tail_closing_no_reply"
+    assert action["draft_reply"] == ""
+
+
+def test_customer_question_still_gets_reply_draft() -> None:
+    action = _classify_messenger_action(
+        chat_id="chat-1",
+        message={
+            "message_id": "m1",
+            "is_read": False,
+            "user": {"type": "Customer"},
+            "data": ["Есть у вас позывной ЛЕОН"],
+        },
+        previous_message=None,
+    )
+
+    assert action["action_type"] == "send_chat_message"
+    assert "наличие" in action["draft_reply"].lower()

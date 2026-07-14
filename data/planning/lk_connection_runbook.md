@@ -58,6 +58,36 @@ xvfb-run -a node scripts/sessions/ozon_import_cookies_check.js \
 - проверка через CDP должна открывать dashboard, analytics, products и prices
   без `registration/signin`.
 
+Проверка автопродления cookies после импорта:
+
+```bash
+XDG_RUNTIME_DIR=/run/user/1000 \
+DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
+  systemctl --user start vital-shevron-ozon-session-refresh.service
+
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  -m seller_agent.cli sessions status --marketplace ozon
+```
+
+Критерии готовности:
+
+- `vital-shevron-ozon-keeper.service` и
+  `vital-shevron-ozon-session-refresh.timer` enabled/active;
+- `.sessions/ozon/ozon_seller_storage_state.json` обновляет `mtime` после
+  refresh и имеет права `600`;
+- `refresh.ok: true`, `state_exported: true`, `values_printed: false`;
+- полный `status-preflight` возвращает `overall_status: ok`.
+
+Проверенное восстановление 2026-07-13 через cookie header:
+
+- сначала cookie-файл проверен на временном профиле через
+  `ozon_import_cookies_check.js --profile ... --state ...`;
+- после подтверждения `COOKIE_IMPORT_SUCCESS` cookies импортированы в рабочий
+  профиль/state;
+- штатный refresh через systemd обновил `storage_state`, после чего
+  `sessions status --marketplace ozon` и `status-preflight` вернули `ok`;
+- значения cookies/storage state в вывод не печатались.
+
 Внештатная ситуация `400 Request Header Or Cookie Too Large`:
 
 - причина: cookie header раздут дублями cookies по доменам после импорта;

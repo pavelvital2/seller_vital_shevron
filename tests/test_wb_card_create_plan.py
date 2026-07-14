@@ -1,6 +1,9 @@
 import json
 from pathlib import Path
 
+from seller_agent.config import AppCredentials, WbCredentials
+from seller_agent.tasks.registry import get_task_definition
+from seller_agent.tasks.wb_card_create_apply import run_wb_card_create_verify
 from seller_agent.tasks.wb_card_create_plan import _build_owner_approved_plan_items, _plain_text
 
 
@@ -79,3 +82,66 @@ def test_build_owner_approved_wb_plan_item_from_layer3_passport(tmp_path: Path) 
     assert variant["sizes"][0]["price"] == 1100
     assert {"id": 14177449, "value": ["черный", "белый"]} in variant["characteristics"]
     assert {"id": 15000001, "value": ["5810999000"]} in variant["characteristics"]
+
+
+def test_verify_wb_card_create_checks_card_barcode_and_media_without_write(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    plan_dir = tmp_path / "runs" / "2026-07-14" / "wb_card_create_plan_test"
+    plan_dir.mkdir(parents=True)
+    (plan_dir / "wb_card_create_plan.json").write_text(
+        json.dumps(
+            [
+                {
+                    "master_sku": "chev_test_0001",
+                    "draft_variant": {"vendorCode": "chev_test_0001"},
+                    "images_from_ozon": ["https://example.test/1.jpg"],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    class FakeWb:
+        def __init__(self, credentials):
+            self.credentials = credentials
+
+        def find_cards_by_vendor_codes(self, vendor_codes):
+            return {
+                "chev_test_0001": {
+                    "vendorCode": "chev_test_0001",
+                    "nmID": 123,
+                    "sizes": [{"skus": ["2047000000000"]}],
+                    "photos": [{"big": "https://example.test/wb.jpg"}],
+                }
+            }
+
+        def find_trash_cards_by_vendor_codes(self, vendor_codes):
+            return {}
+
+        def fetch_card_errors(self, limit=100):
+            return {"data": []}
+
+        def upload_cards(self, payload):
+            raise AssertionError("verify must not upload cards")
+
+        def save_media_links(self, nm_id, urls):
+            raise AssertionError("verify must not upload media")
+
+    monkeypatch.setattr("seller_agent.tasks.wb_card_create_apply.WbContentAdapter", FakeWb)
+
+    result = run_wb_card_create_verify(
+        credentials=AppCredentials(None, None, WbCredentials("token")),
+        data_dir=tmp_path,
+        plan_run_id="wb_card_create_plan_test",
+        run_id="wb_card_create_verify_test",
+    )
+
+    assert result["overall_status"] == "ok"
+    assert result["verified_rows"] == 1
+
+
+def test_wb_card_create_apply_uses_safe_verify_task() -> None:
+    apply = get_task_definition("apply-wb-card-create")
+    verify = get_task_definition("verify-wb-card-create")
+
+    assert apply["verify_task"] == "wb-card-create-verify"
+    assert verify["mode"] == "verify"

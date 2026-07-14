@@ -1074,7 +1074,6 @@ def _sync_approved_card_catalog_layers(*, data_dir: Path, internal_skus: list[st
         wb["barcode"] = value_map.get("wb_barcode", "")
         approval = passport.setdefault("approval", {}).setdefault("marketplace_apply", {})
         approval["catalog_sync_run_id"] = run_id
-        approval["status"] = "applied_verified"
         write_json(passport_path, passport)
         passport_updates += 1
     updates["passports"] = passport_updates

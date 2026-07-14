@@ -460,6 +460,8 @@ Ozon CDP port по умолчанию: `9544`.
 - `data/planning/fresh_agent_handoff_2026-06-13.md` - актуальный handoff.
 - `data/planning/fresh_agent_handoff_2026-06-12.md` - исторический handoff.
 - `data/planning/revision_2026-06-13.md`
+- `data/planning/revision_2026-07-14.md` - ревизия runtime/card/inbox изменений,
+  проверка VPS-сервисов, тестов, секретов и рисков перед checkpoint commit.
 - `data/planning/recommendations_index.md`
 - `data/planning/followups.md` - контрольные follow-up задачи, которые нельзя
   потерять между сессиями агентов.

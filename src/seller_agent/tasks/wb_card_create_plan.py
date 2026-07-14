@@ -790,7 +790,7 @@ def _write_report(
             lines.append(f"- review reason: {item['manual_review_reason']}")
         if item["missing_characteristics"]:
             missing = ", ".join(
-                f"{value['id']} {value['name']}"
+                f"{value.get('id', 'n/a')} {value.get('name', '')}".strip()
                 for value in item["missing_characteristics"][:12]
             )
             lines.append(f"- missing examples: {missing}")

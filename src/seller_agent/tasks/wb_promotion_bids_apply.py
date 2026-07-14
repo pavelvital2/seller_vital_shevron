@@ -429,3 +429,83 @@ def run_wb_promotion_bids_apply(
         checksum=canonical_checksum({"approved_id": approved_id, "summary": summary, "drift": drift}),
     )
     return result
+
+
+def run_wb_promotion_bids_verify(
+    *,
+    credentials: AppCredentials,
+    data_dir: Path = Path("data"),
+    plan_run_id: str | None = None,
+    run_id: str | None = None,
+    allowed_actions: set[str] | None = None,
+) -> dict[str, Any]:
+    if not credentials.wb:
+        raise RuntimeError("missing WB API token")
+
+    allowed_actions = allowed_actions or {"scale_candidate"}
+    approved_plan_dir = _plan_dir(data_dir, plan_run_id)
+    approved_id = approved_plan_dir.name
+    approved_summary = json.loads((approved_plan_dir / "summary.json").read_text(encoding="utf-8"))
+    approved_rows = _read_csv(approved_plan_dir / "wb_promotion_bid_changes.csv")
+    thresholds = _thresholds_from_summary(approved_summary)
+    apply_rows, skipped_rows = _split_apply_rows(
+        approved_rows,
+        allowed_actions=allowed_actions,
+        min_bid=thresholds.min_bid,
+    )
+
+    started_at = datetime.now()
+    run_id = run_id or f"wb_promotion_bids_verify_{started_at.strftime('%Y%m%dT%H%M%S')}"
+    run_dir = ensure_dir(data_dir / "runs" / started_at.strftime("%Y-%m-%d") / run_id)
+    raw_dir = ensure_dir(run_dir / "raw")
+    processed_dir = ensure_dir(run_dir / "processed")
+    _write_csv(apply_rows, processed_dir / "verify_rows.csv")
+    _write_csv(skipped_rows, processed_dir / "skipped_rows.csv")
+
+    wb = WbPromotionAdapter(credentials.wb)
+    advert_ids = sorted({int(str(row["advert_id"])) for row in apply_rows})
+    campaigns = wb.fetch_campaigns(ids=advert_ids, statuses=[4, 9, 11], payment_type="cpc") if advert_ids else []
+    write_json(raw_dir / "campaigns_verify.json", {"adverts": campaigns})
+    verify = _verify_applied_rows(campaigns=campaigns, apply_rows=apply_rows)
+    summary = {
+        "allowed_actions": ",".join(sorted(allowed_actions)),
+        "approved_rows": len(approved_rows),
+        "checked_rows": len(apply_rows),
+        "skipped_rows": len(skipped_rows),
+        "current_bid_sum_checked": _sum_field(apply_rows, "current_bid"),
+        "target_bid_sum_checked": _sum_field(apply_rows, "target_bid"),
+    }
+    result = {
+        "run_id": run_id,
+        "started_at": started_at.isoformat(timespec="seconds"),
+        "mode": "verify",
+        "overall_status": "ok" if verify["status"] == "ok" else "warning",
+        "approved_plan_run_id": approved_id,
+        "approved_id": approved_id,
+        "summary": summary,
+        "verify": verify,
+        "artifacts": {
+            "run_dir": str(run_dir),
+            "summary": str(run_dir / "summary.json"),
+            "verify_rows": str(processed_dir / "verify_rows.csv"),
+            "skipped_rows": str(processed_dir / "skipped_rows.csv"),
+            "campaigns": str(raw_dir / "campaigns_verify.json"),
+            "run_manifest": str(run_dir / "manifest.json"),
+        },
+    }
+    write_json(run_dir / "summary.json", result)
+    manifest_paths = write_summary_run_manifest(
+        data_dir=data_dir,
+        run_dir=run_dir,
+        summary=result,
+        task="wb-promotion-bids-verify",
+        mode="verify",
+        risk="low",
+        marketplaces=["wb"],
+        inputs={"plan_run_id": plan_run_id, "allowed_actions": sorted(allowed_actions)},
+        lifecycle_status="verified" if verify["status"] == "ok" else "needs_attention",
+        closed=verify["status"] == "ok",
+    )
+    result["artifacts"]["run_manifest"] = manifest_paths["manifest"]
+    write_json(run_dir / "summary.json", result)
+    return result

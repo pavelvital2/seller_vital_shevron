@@ -309,6 +309,59 @@ class JobStore:
             data=data or {},
         )
 
+    def acquire_resource_leases(
+        self,
+        *,
+        resource_keys: list[str] | tuple[str, ...],
+        owner_id: str,
+        ttl_seconds: int,
+        data: dict[str, Any] | None = None,
+    ) -> list[ResourceLease] | None:
+        keys = [str(key).strip() for key in resource_keys if str(key).strip()]
+        if not keys:
+            return []
+        if len(set(keys)) != len(keys):
+            raise ValueError("resource_keys must be unique")
+
+        now_dt = datetime.now(timezone.utc)
+        now = _format_dt(now_dt)
+        expires_at = _format_dt(now_dt + timedelta(seconds=ttl_seconds))
+        leases: list[ResourceLease] = []
+        with self._transaction() as connection:
+            placeholders = ",".join("?" for _ in keys)
+            rows = connection.execute(
+                f"SELECT * FROM resource_leases WHERE resource_key IN ({placeholders})",
+                tuple(keys),
+            ).fetchall()
+            for row in rows:
+                if str(row["expires_at"]) > now and row["owner_id"] != owner_id:
+                    return None
+
+            data_json = _json_dumps(data or {})
+            for key in keys:
+                connection.execute(
+                    """
+                    INSERT INTO resource_leases (resource_key, owner_id, acquired_at, expires_at, data_json)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(resource_key) DO UPDATE SET
+                      owner_id = excluded.owner_id,
+                      acquired_at = excluded.acquired_at,
+                      expires_at = excluded.expires_at,
+                      data_json = excluded.data_json
+                    """,
+                    (key, owner_id, now, expires_at, data_json),
+                )
+                leases.append(
+                    ResourceLease(
+                        resource_key=key,
+                        owner_id=owner_id,
+                        acquired_at=now,
+                        expires_at=expires_at,
+                        data=data or {},
+                    )
+                )
+        return leases
+
     def release_resource_lease(self, *, resource_key: str, owner_id: str) -> bool:
         with self._transaction() as connection:
             cursor = connection.execute(
@@ -316,6 +369,18 @@ class JobStore:
                 (resource_key, owner_id),
             )
         return cursor.rowcount == 1
+
+    def release_resource_leases(self, *, resource_keys: list[str] | tuple[str, ...], owner_id: str) -> int:
+        keys = [str(key).strip() for key in resource_keys if str(key).strip()]
+        if not keys:
+            return 0
+        placeholders = ",".join("?" for _ in keys)
+        with self._transaction() as connection:
+            cursor = connection.execute(
+                f"DELETE FROM resource_leases WHERE owner_id = ? AND resource_key IN ({placeholders})",
+                (owner_id, *keys),
+            )
+        return int(cursor.rowcount)
 
     def create_approval(
         self,
@@ -343,16 +408,55 @@ class JobStore:
             raise KeyError(f"Unknown approval after create: {approval_id}")
         return record
 
-    def reserve_approval_for_apply(self, *, approval_id: str, owner_job_id: str) -> bool:
+    def ensure_approval(
+        self,
+        *,
+        approval_id: str,
+        source_job_id: str,
+        status: ApprovalStatus = "pending_review",
+        checksum: str = "",
+        data: dict[str, Any] | None = None,
+    ) -> ApprovalRecord:
         now = _now()
         with self._transaction() as connection:
-            cursor = connection.execute(
+            connection.execute(
                 """
+                INSERT OR IGNORE INTO approvals (
+                  approval_id, source_job_id, status, owner_job_id, checksum,
+                  data_json, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (approval_id, source_job_id, status, "", checksum, _json_dumps(data or {}), now, now),
+            )
+        record = self.get_approval(approval_id)
+        if record is None:
+            raise KeyError(f"Unknown approval after ensure: {approval_id}")
+        return record
+
+    def reserve_approval_for_apply(
+        self,
+        *,
+        approval_id: str,
+        owner_job_id: str,
+        expected_checksum: str = "",
+    ) -> bool:
+        now = _now()
+        checksum_clause = " AND checksum = ?" if expected_checksum else ""
+        values: tuple[Any, ...] = (
+            (owner_job_id, now, approval_id, expected_checksum)
+            if expected_checksum
+            else (owner_job_id, now, approval_id)
+        )
+        with self._transaction() as connection:
+            cursor = connection.execute(
+                f"""
                 UPDATE approvals
                 SET status = 'applying', owner_job_id = ?, updated_at = ?
                 WHERE approval_id = ? AND status = 'approved'
+                {checksum_clause}
                 """,
-                (owner_job_id, now, approval_id),
+                values,
             )
         return cursor.rowcount == 1
 
@@ -373,6 +477,28 @@ class JobStore:
                 (approval_id,),
             ).fetchone()
         return _approval_from_row(row) if row is not None else None
+
+    def list_approvals(
+        self,
+        *,
+        statuses: list[ApprovalStatus] | tuple[ApprovalStatus, ...] | None = None,
+        limit: int = 50,
+    ) -> list[ApprovalRecord]:
+        self.initialize()
+        clauses: list[str] = []
+        values: list[Any] = []
+        if statuses:
+            placeholders = ",".join("?" for _ in statuses)
+            clauses.append(f"status IN ({placeholders})")
+            values.extend(statuses)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        values.append(limit)
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"SELECT * FROM approvals {where} ORDER BY updated_at ASC, approval_id ASC LIMIT ?",
+                tuple(values),
+            ).fetchall()
+        return [_approval_from_row(row) for row in rows]
 
     def upsert_card_work_item(
         self,

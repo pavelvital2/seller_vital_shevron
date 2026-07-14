@@ -499,3 +499,71 @@ def run_ozon_elastic_apply(
         checksum=canonical_checksum({"approved_id": approved_id, "drift": drift}),
     )
     return result
+
+
+def run_ozon_elastic_verify(
+    *,
+    credentials: AppCredentials,
+    data_dir: Path = Path("data"),
+    plan_run_id: str | None = None,
+    run_id: str | None = None,
+) -> dict[str, Any]:
+    if not credentials.ozon_seller:
+        raise RuntimeError("missing Ozon Seller API credentials")
+
+    approved_plan_dir = _plan_dir(data_dir, plan_run_id)
+    approved_id = approved_plan_dir.name
+    approved_summary = json.loads((approved_plan_dir / "summary.json").read_text(encoding="utf-8"))
+    approved_rows = _read_csv(approved_plan_dir / "ozon_elastic_dry_run.csv")
+    activate_rows, deactivate_rows = _action_rows(approved_rows)
+
+    started_at = datetime.now()
+    run_id = run_id or f"ozon_elastic_verify_{started_at.strftime('%Y%m%dT%H%M%S')}"
+    run_dir = ensure_dir(data_dir / "runs" / started_at.strftime("%Y-%m-%d") / run_id)
+    raw_dir = ensure_dir(run_dir / "raw")
+    action_id = str((approved_summary.get("summary") or {}).get("action_id") or "")
+    if not action_id:
+        raise RuntimeError(f"Ozon Elastic approved plan has no action_id: {approved_id}")
+
+    verify = _verify_ozon_elastic(
+        ozon=OzonSellerAdapter(credentials.ozon_seller),
+        action_id=action_id,
+        activate_rows=activate_rows,
+        deactivate_rows=deactivate_rows,
+        raw_dir=ensure_dir(raw_dir / "verify"),
+    )
+    result = {
+        "run_id": run_id,
+        "started_at": started_at.isoformat(timespec="seconds"),
+        "mode": "verify",
+        "overall_status": "ok" if verify["status"] == "ok" else "warning",
+        "approved_plan_run_id": approved_id,
+        "approved_id": approved_id,
+        "verify": verify,
+        "summary": {
+            "action_id": action_id,
+            "activate_rows": len(activate_rows),
+            "deactivate_rows": len(deactivate_rows),
+        },
+        "artifacts": {
+            "run_dir": str(run_dir),
+            "summary": str(run_dir / "summary.json"),
+            "run_manifest": str(run_dir / "manifest.json"),
+        },
+    }
+    write_json(run_dir / "summary.json", result)
+    manifest_paths = write_summary_run_manifest(
+        data_dir=data_dir,
+        run_dir=run_dir,
+        summary=result,
+        task="ozon-elastic-verify",
+        mode="verify",
+        risk="low",
+        marketplaces=["ozon"],
+        inputs={"plan_run_id": plan_run_id},
+        lifecycle_status="verified" if verify["status"] == "ok" else "needs_attention",
+        closed=verify["status"] == "ok",
+    )
+    result["artifacts"]["run_manifest"] = manifest_paths["manifest"]
+    write_json(run_dir / "summary.json", result)
+    return result

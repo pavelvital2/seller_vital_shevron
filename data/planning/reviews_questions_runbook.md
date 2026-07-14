@@ -202,6 +202,27 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 официальный API недоступен по подписке, а проверка выполнена через ЛК/CDP
 fallback.
 
+Для Ozon LK/CDP verify нельзя считать `actions_count=0` достаточным, если
+`/api/review/counter` показывает `NOT_VIEWED > 0`. В таком случае операция не
+закрыта: нужно увеличить глубину пагинации `/api/v4/review/list`, собрать
+оставшиеся `NOT_VIEWED` отзывы, подготовить отдельный owner-review пакет и
+после согласования применить хвост. Подтвержденная причина 2026-07-13: helper
+читал только 30 страниц по 5 отзывов, поэтому после массового apply первые
+150 строк стали `VIEWED/PROCESSED`, а оставшиеся 55 отзывов находились глубже;
+fresh-сбор с расширенной пагинацией нашел 56 отзывов, apply закрыл их до
+`NOT_VIEWED=0`.
+
+Для inbox-цепочки после успешного `apply-ozon-inbox` / `apply-wb-inbox` и
+нулевого verify нужно отдельно проверить и закрыть approval-хвосты через
+`approvals status` и `approvals close`: исходный top-level inbox pending,
+reviews/questions pending, fresh verify-pending с `actions_count=0`, а для
+Ozon Messenger также successfully executed approved-пакет, если он остался в
+`approved`. На 2026-07-13 подтверждено, что apply может корректно отправить
+ответы и создать applied-marker по reviews/questions, но верхний inbox pending
+остается в `pending_review`, а Messenger approved может остаться в `approved`,
+пока их не закрыть явно. Закрывать нужно штатным marker-ом, не удалением
+файлов.
+
 ## Правила черновиков
 
 - Telegram-вывод строить по общему стандарту
