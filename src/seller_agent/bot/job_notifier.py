@@ -72,6 +72,11 @@ def notify_telegram_job_result(
         )
 
     ok = all(result.ok for result in text_results) and all(result.ok for result in document_results)
+    job_store.update_telegram_update_status(
+        update_id=update.update_id,
+        processing_status="completed" if ok else "notification_failed",
+        job_id=job_id,
+    )
     return JobNotificationResult(
         ok=ok,
         job_id=job_id,

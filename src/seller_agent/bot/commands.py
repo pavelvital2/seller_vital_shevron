@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import csv
 from dataclasses import asdict, dataclass, field
+from datetime import date, datetime, timedelta
 import json
 from pathlib import Path
+import re
 from typing import Any
 
 from seller_agent.config import AppCredentials, load_credentials
@@ -20,7 +22,9 @@ from seller_agent.tasks.inbox_workflow import (
     run_wb_inbox_triage,
 )
 from seller_agent.tasks.registry import default_task_registry
+from seller_agent.tasks.ozon_production_work_plan import record_ozon_work_plan_decision
 from seller_agent.tasks.wb_actions_discount_plan import run_wb_actions_discount_plan
+from seller_agent.tasks.wb_production_work_plan import record_wb_work_plan_decision
 
 
 SUPPORTED_COMMANDS = {
@@ -34,14 +38,22 @@ SUPPORTED_COMMANDS = {
     "/reviews",
     "/ozon-inbox",
     "/ozon-actions",
+    "/ozon-stock-supplies",
+    "/ozon-work-plan",
     "/ozon",
+    "/period-report",
+    "/period-report-ozon",
+    "/period-report-wb",
     "/wb",
     "/wb-analytics",
+    "/wb-stock-supplies",
+    "/wb-work-plan",
     "/wb-inbox",
     "/approvals",
     "/catalog",
     "/runs",
     "/wb-actions",
+    "/wb-actions-manual",
 }
 
 TELEGRAM_TITLES = {
@@ -55,14 +67,22 @@ TELEGRAM_TITLES = {
     "/ozon": "Ozon",
     "/ozon-inbox": "Ozon входящие",
     "/ozon-actions": "Ozon все акции",
+    "/ozon-stock-supplies": "Остатки и поставки Ozon",
+    "/ozon-work-plan": "В работу Ozon",
+    "/period-report": "Отчёт за период",
+    "/period-report-ozon": "Ozon: отчёт за период",
+    "/period-report-wb": "Wildberries: отчёт за период",
     "/start": "Главное меню",
     "/wb": "Wildberries",
     "/wb-analytics": "WB аналитика",
+    "/wb-stock-supplies": "Остатки и поставки",
+    "/wb-work-plan": "В работу",
     "/wb-inbox": "WB входящие",
     "/runs": "Запуски",
     "/status": "Статус проекта",
     "/today": "Ежедневный отчет",
     "/wb-actions": "WB акции 70-55-55",
+    "/wb-actions-manual": "Ручная акция",
 }
 
 
@@ -75,6 +95,7 @@ class TelegramCommandResult:
     artifacts: dict[str, str] = field(default_factory=dict)
     reply_markup: dict[str, Any] = field(default_factory=dict)
     blocked_reason: str = ""
+    conversation_state: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -88,9 +109,41 @@ def handle_telegram_command(
     live_status: bool = False,
     runtime_db: Path = DEFAULT_RUNTIME_DB,
     credentials: AppCredentials | None = None,
+    conversation_state: dict[str, Any] | None = None,
 ) -> TelegramCommandResult:
     command, argument = _parse_command(message)
     command = _normalize_button_command(command)
+    active_conversation = conversation_state if isinstance(conversation_state, dict) else {}
+    if (
+        active_conversation.get("stage") in {"ozon_work_capacity_input", "ozon_work_days_input"}
+        and not _is_explicit_command_or_button(message)
+    ):
+        return _ozon_work_plan_value(message, state=active_conversation)
+    if (
+        active_conversation.get("stage") == "ozon_work_clusters_input"
+        and not _is_explicit_command_or_button(message)
+    ):
+        return _ozon_work_plan_clusters(message, state=active_conversation)
+    if (
+        active_conversation.get("stage") == "wb_manual_scheme_input"
+        and not _is_explicit_command_or_button(message)
+    ):
+        return _wb_manual_actions_parameters(message)
+    if (
+        active_conversation.get("stage") in {"wb_work_capacity_input", "wb_work_days_input"}
+        and not _is_explicit_command_or_button(message)
+    ):
+        return _wb_work_plan_value(message, state=active_conversation)
+    if (
+        active_conversation.get("stage") == "wb_work_clusters_input"
+        and not _is_explicit_command_or_button(message)
+    ):
+        return _wb_work_plan_clusters(message, state=active_conversation)
+    if (
+        active_conversation.get("stage") in {"period_report_custom_from", "period_report_custom_to"}
+        and not _is_explicit_command_or_button(message)
+    ):
+        return _period_report_custom_input(message, state=active_conversation)
     if command in {"/start", "/menu"}:
         return _main_menu()
     if command == "/help":
@@ -103,10 +156,26 @@ def handle_telegram_command(
         return _ozon_elastic_plan(data_dir=data_dir, credentials=credentials)
     if command in {"/ozon-actions", "/ozon_actions", "/ozon-all-actions"}:
         return _ozon_actions_plan(data_dir=data_dir, credentials=credentials)
+    if command in {"/ozon-stock-supplies", "/ozon_stock_supplies"}:
+        return _ozon_stock_supplies(data_dir=data_dir, credentials=credentials)
+    if command in {"/ozon-work-plan", "/ozon_work_plan"}:
+        return _ozon_work_plan_start()
     if command in {"/wb-actions", "/wb_actions", "/wb-actions-70-55-55"}:
         return _wb_actions_plan(data_dir=data_dir, credentials=credentials)
+    if command in {"/wb-actions-manual", "/wb_actions_manual"}:
+        return _wb_manual_actions_start()
+    if command in {"/period-report-ozon", "/period_report_ozon"}:
+        return _period_report_start("ozon")
+    if command in {"/period-report-wb", "/period_report_wb"}:
+        return _period_report_start("wb")
+    if command in {"/period-report", "/period_report"}:
+        return _period_report_marketplace_start()
     if command in {"/wb-analytics", "/wb_analytics"}:
         return _wb_analytics(data_dir=data_dir, credentials=credentials)
+    if command in {"/wb-stock-supplies", "/wb_stock_supplies"}:
+        return _wb_stock_supplies(data_dir=data_dir, credentials=credentials)
+    if command in {"/wb-work-plan", "/wb_work_plan"}:
+        return _wb_work_plan_start()
     if command in {"/ozon-inbox", "/ozon_inbox"}:
         return _ozon_inbox_plan(data_dir=data_dir, credentials=credentials)
     if command in {"/wb-inbox", "/wb_inbox"}:
@@ -183,6 +252,38 @@ def handle_telegram_callback(
     credentials: AppCredentials | None = None,
 ) -> TelegramCommandResult:
     data = str(callback_data or "").strip()
+    if data == "mpr_market:o":
+        return _period_report_start("ozon")
+    if data == "mpr_market:w":
+        return _period_report_start("wb")
+    if data.startswith("mpr_type:"):
+        return _period_report_type_callback(data)
+    if data.startswith("mpr_period:"):
+        return _period_report_period_callback(data)
+    if data.startswith("mpr_run:"):
+        return _period_report_run_callback(data, data_dir=data_dir, credentials=credentials)
+    if data == "mpr_cancel":
+        return _period_report_cancel()
+    if data.startswith("ozwp_mode:"):
+        return _ozon_work_plan_mode_callback(data)
+    if data.startswith("ozwp_run:"):
+        return _ozon_work_plan_run_callback(data, data_dir=data_dir, credentials=credentials)
+    if data.startswith("ozwp_approve:"):
+        return _ozon_work_plan_decision_callback(data, data_dir=data_dir, approved=True)
+    if data.startswith("ozwp_reject:"):
+        return _ozon_work_plan_decision_callback(data, data_dir=data_dir, approved=False)
+    if data == "ozwp_cancel":
+        return _ozon_work_plan_cancel()
+    if data.startswith("wbwp_mode:"):
+        return _wb_work_plan_mode_callback(data)
+    if data.startswith("wbwp_run:"):
+        return _wb_work_plan_run_callback(data, data_dir=data_dir, credentials=credentials)
+    if data.startswith("wbwp_approve:"):
+        return _wb_work_plan_decision_callback(data, data_dir=data_dir, approved=True)
+    if data.startswith("wbwp_reject:"):
+        return _wb_work_plan_decision_callback(data, data_dir=data_dir, approved=False)
+    if data == "wbwp_cancel":
+        return _wb_work_plan_cancel()
     if data.startswith("oe_apply:"):
         plan_run_id = data.removeprefix("oe_apply:").strip()
         return _ozon_elastic_apply(plan_run_id=plan_run_id, data_dir=data_dir, credentials=credentials)
@@ -192,6 +293,18 @@ def handle_telegram_callback(
     if data.startswith("wba_apply:"):
         plan_run_id = data.removeprefix("wba_apply:").strip()
         return _wb_actions_apply(plan_run_id=plan_run_id, data_dir=data_dir, credentials=credentials)
+    if data.startswith("wbam_confirm:"):
+        scheme_text = data.removeprefix("wbam_confirm:").strip()
+        return _wb_manual_actions_plan(
+            scheme_text=scheme_text,
+            data_dir=data_dir,
+            credentials=credentials,
+        )
+    if data == "wbam_cancel":
+        return _wb_manual_actions_cancel(stage="parameters")
+    if data.startswith("wbam_reject:"):
+        plan_run_id = data.removeprefix("wbam_reject:").strip()
+        return _wb_manual_actions_reject(plan_run_id)
     if data.startswith("ozin_apply:"):
         source_run_id = data.removeprefix("ozin_apply:").strip()
         return _ozon_inbox_apply(source_run_id=source_run_id, data_dir=data_dir, credentials=credentials)
@@ -223,6 +336,9 @@ MAIN_MENU_KEYBOARD: dict[str, Any] = {
 OZON_MENU_KEYBOARD: dict[str, Any] = {
     "keyboard": [
         [{"text": "Ozon акции"}, {"text": "Ozon эластик"}],
+        [{"text": "Отчёт за период Ozon"}],
+        [{"text": "Остатки и поставки Ozon"}],
+        [{"text": "В работу Ozon"}],
         [{"text": "Ozon входящие"}],
         [{"text": "Назад"}],
     ],
@@ -232,8 +348,11 @@ OZON_MENU_KEYBOARD: dict[str, Any] = {
 
 WB_MENU_KEYBOARD: dict[str, Any] = {
     "keyboard": [
-        [{"text": "WB акции"}],
+        [{"text": "WB акции"}, {"text": "Ручная акция"}],
         [{"text": "WB аналитика"}],
+        [{"text": "Остатки и поставки"}],
+        [{"text": "В работу"}],
+        [{"text": "Отчёт за период WB"}],
         [{"text": "WB входящие"}],
         [{"text": "Назад"}],
     ],
@@ -269,6 +388,9 @@ def _ozon_menu() -> TelegramCommandResult:
             "Итог: выбери операцию Ozon.\n\n"
             "- Ozon акции - сравнение всех акций Ozon.\n"
             "- Ozon эластик - только эластичный бустинг.\n"
+            "- Отчёт за период - краткий, финансовый или полный отчёт Ozon.\n"
+            "- Остатки и поставки - свежий FBO-остаток по складам и активные поставки Ozon.\n"
+            "- В работу - производственный план Ozon по потребности выбранного числа кластеров.\n"
             "- Ozon входящие - отзывы, вопросы, чаты и уведомления."
         ),
         reply_markup=OZON_MENU_KEYBOARD,
@@ -283,7 +405,11 @@ def _wb_menu() -> TelegramCommandResult:
             "Wildberries\n\n"
             "Итог: выбери операцию Wildberries.\n\n"
             "- WB акции - акции и скидки по схеме 70-55-55.\n"
+            "- Ручная акция - расчёт и применение по введённой схеме.\n"
+            "- Отчёт за период - краткий, финансовый или полный отчёт WB.\n"
             "- WB аналитика - видимость, позиции и динамика из Parser Data API.\n"
+            "- Остатки и поставки - свежие остатки по складам, все активные поставки и аномалии WB.\n"
+            "- В работу - производственный план WB по доступному объёму или периоду покрытия.\n"
             "- WB входящие - отзывы, вопросы и уведомления."
         ),
         reply_markup=WB_MENU_KEYBOARD,
@@ -318,8 +444,12 @@ def _help() -> TelegramCommandResult:
             "- `/ozon-actions` строит свежий dry-run Ozon всех акций и показывает отдельную кнопку применения.",
             "- Кнопка применения Ozon всех акций запускает отдельный apply-контур только по конкретному `plan_run_id`.",
             "- `/wb-actions` строит свежий dry-run WB акций по схеме 70-55-55 и показывает кнопку применения.",
+            "- `/wb-actions-manual` запрашивает ручную схему, подтверждает параметры и только затем строит fresh dry-run.",
             "- Кнопка применения WB акций запускает apply только по конкретному показанному `plan_run_id`.",
             "- `/wb-analytics` строит свежую read-only аналитику WB по Parser Data API warehouse.",
+            "- `/wb-stock-supplies` строит свежий read-only отчет по остаткам складов и всем активным FBW-поставкам WB.",
+            "- `/ozon-stock-supplies` строит свежий read-only отчет по FBO-остаткам и активным поставкам Ozon.",
+            "- `/wb-work-plan` формирует Excel в работу по физической мощности или периоду покрытия; поставки WB не создаёт.",
             "- `/ozon-inbox` собирает свежие Ozon отзывы/вопросы/чаты/уведомления и показывает кнопку применения согласованного пакета.",
             "- `/wb-inbox` собирает свежие WB отзывы/вопросы и read-only новости/уведомления WB из ЛК `news-v2`.",
             "- Остальные команды показывают последние runtime-данные и статусы.",
@@ -372,6 +502,631 @@ def _wb_analytics(
         ok=True,
         text=_wb_analytics_chat_text(result.summary),
         artifacts=result.artifacts,
+    )
+
+
+def _wb_stock_supplies(
+    *,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+) -> TelegramCommandResult:
+    result = WorkflowRunner(data_dir=data_dir, credentials=credentials).run_read_only(
+        "wb-stock-supply-monitor"
+    )
+    if result.blocked_reason == "workflow_busy":
+        return TelegramCommandResult(
+            command="/wb-stock-supplies",
+            ok=False,
+            blocked_reason="wb_stock_supply_busy",
+            text=(
+                "Остатки и поставки WB\n\n"
+                "Итог: свежий отчет уже собирается другим процессом.\n\n"
+                f"Причина: `{result.error}`\n\n"
+                "Изменений в WB не выполнял."
+            ),
+        )
+    if not result.ok:
+        return TelegramCommandResult(
+            command="/wb-stock-supplies",
+            ok=False,
+            blocked_reason=result.blocked_reason or "wb_stock_supply_failed",
+            text=(
+                "Остатки и поставки WB\n\n"
+                "Итог: свежий read-only отчет не удалось построить.\n\n"
+                f"Причина: `{result.error or result.status}`\n\n"
+                "Изменений в WB не выполнял."
+            ),
+        )
+    return TelegramCommandResult(
+        command="/wb-stock-supplies",
+        ok=True,
+        text=_wb_stock_supplies_chat_text(result.summary),
+        artifacts=result.artifacts,
+    )
+
+
+def _ozon_stock_supplies(
+    *,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+) -> TelegramCommandResult:
+    result = WorkflowRunner(data_dir=data_dir, credentials=credentials).run_read_only(
+        "ozon-stock-supply-monitor"
+    )
+    if result.blocked_reason == "workflow_busy":
+        return TelegramCommandResult(
+            command="/ozon-stock-supplies",
+            ok=False,
+            blocked_reason="ozon_stock_supply_busy",
+            text=(
+                "Остатки и поставки Ozon\n\n"
+                "Свежий отчет уже собирается другим процессом.\n\n"
+                f"Причина: `{result.error}`\n\n"
+                "Изменений в Ozon не выполнял."
+            ),
+        )
+    if not result.ok:
+        return TelegramCommandResult(
+            command="/ozon-stock-supplies",
+            ok=False,
+            blocked_reason=result.blocked_reason or "ozon_stock_supply_failed",
+            text=(
+                "Остатки и поставки Ozon\n\n"
+                "Свежий read-only отчет не сформирован.\n\n"
+                f"Причина: `{result.error or result.status}`\n\n"
+                "Изменений в Ozon не выполнял."
+            ),
+        )
+    return TelegramCommandResult(
+        command="/ozon-stock-supplies",
+        ok=True,
+        text=_ozon_stock_supplies_chat_text(result.summary),
+        artifacts=result.artifacts,
+    )
+
+
+def _ozon_work_plan_start() -> TelegramCommandResult:
+    return TelegramCommandResult(
+        command="/ozon-work-plan",
+        ok=True,
+        mode="input",
+        text=(
+            "Ozon: в работу\n\n"
+            "Выберите способ расчёта:\n\n"
+            "- по производственной возможности — ввести доступное количество физических изделий;\n"
+            "- по периоду покрытия — ввести количество дней запаса.\n\n"
+            "После этого бот запросит количество кластеров назначения. Поставка в Ozon не создаётся."
+        ),
+        reply_markup={
+            "inline_keyboard": [
+                [{"text": "По объёму производства", "callback_data": "ozwp_mode:c"}],
+                [{"text": "По дням покрытия", "callback_data": "ozwp_mode:d"}],
+                [{"text": "Отменить", "callback_data": "ozwp_cancel"}],
+            ]
+        },
+    )
+
+
+def _ozon_work_plan_mode_callback(data: str) -> TelegramCommandResult:
+    code = data.removeprefix("ozwp_mode:").strip()
+    if code not in {"c", "d"}:
+        return _ozon_work_plan_invalid("Режим расчёта повреждён. Запустите «В работу Ozon» заново.")
+    capacity_mode = code == "c"
+    return TelegramCommandResult(
+        command="/ozon-work-plan",
+        ok=True,
+        mode="input",
+        text=(
+            "Ozon: в работу\n\n"
+            + (
+                "Введите доступное количество физических изделий целым числом.\n\n"
+                "Пример: `1400`. Итоговый объём после округления не превысит это значение."
+                if capacity_mode
+                else "Введите необходимый период покрытия в днях целым числом.\n\n"
+                "Пример: `30`. Потребность будет рассчитана отдельно внутри каждого кластера."
+            )
+        ),
+        reply_markup={"inline_keyboard": [[{"text": "Отменить", "callback_data": "ozwp_cancel"}]]},
+        conversation_state={"stage": "ozon_work_capacity_input" if capacity_mode else "ozon_work_days_input"},
+    )
+
+
+def _ozon_work_plan_value(message: str, *, state: dict[str, Any]) -> TelegramCommandResult:
+    text = str(message or "").strip()
+    stage = str(state.get("stage") or "")
+    code = "c" if stage == "ozon_work_capacity_input" else "d" if stage == "ozon_work_days_input" else ""
+    maximum = 100_000 if code == "c" else 365
+    value = int(text) if text.isdigit() else 0
+    if not code or value <= 0 or value > maximum:
+        unit = "физических изделий" if code == "c" else "дней"
+        return TelegramCommandResult(
+            command="/ozon-work-plan",
+            ok=False,
+            mode="input",
+            blocked_reason="invalid_ozon_work_plan_value",
+            text=(
+                "Ozon: в работу\n\n"
+                f"Введите одно целое положительное число: количество {unit}. Максимум: `{maximum}`.\n\n"
+                "Расчёт не запускался, изменений в Ozon не было."
+            ),
+            reply_markup={"inline_keyboard": [[{"text": "Отменить", "callback_data": "ozwp_cancel"}]]},
+            conversation_state=state,
+        )
+    return TelegramCommandResult(
+        command="/ozon-work-plan",
+        ok=True,
+        mode="input",
+        text=(
+            "Ozon: в работу\n\n"
+            "Введите количество кластеров назначения целым числом от `1` до `20`.\n\n"
+            "Бот рассчитает чистую потребность каждого кластера и выберет указанное количество направлений "
+            "по убыванию дефицита."
+        ),
+        reply_markup={"inline_keyboard": [[{"text": "Отменить", "callback_data": "ozwp_cancel"}]]},
+        conversation_state={"stage": "ozon_work_clusters_input", "mode_code": code, "value": value},
+    )
+
+
+def _ozon_work_plan_clusters(message: str, *, state: dict[str, Any]) -> TelegramCommandResult:
+    text = str(message or "").strip()
+    cluster_count = int(text) if text.isdigit() else 0
+    code = str(state.get("mode_code") or "")
+    value = _int_value(state.get("value"))
+    if code not in {"c", "d"} or value <= 0:
+        return _ozon_work_plan_invalid("Параметры расчёта потеряны. Запустите «В работу Ozon» заново.")
+    if cluster_count <= 0 or cluster_count > 20:
+        return TelegramCommandResult(
+            command="/ozon-work-plan",
+            ok=False,
+            mode="input",
+            blocked_reason="invalid_ozon_work_plan_cluster_count",
+            text=(
+                "Ozon: в работу\n\n"
+                "Введите количество кластеров целым числом от `1` до `20`.\n\n"
+                "Расчёт не запускался, изменений в Ozon не было."
+            ),
+            reply_markup={"inline_keyboard": [[{"text": "Отменить", "callback_data": "ozwp_cancel"}]]},
+            conversation_state=state,
+        )
+    mode_label = "по производственной возможности" if code == "c" else "по периоду покрытия"
+    value_label = f"{value} физических изделий" if code == "c" else f"{value} дней"
+    detail = (
+        "Цель покрытия: 30 дней; общий физический объём после округления не будет превышен."
+        if code == "c"
+        else "Количество будет рассчитано автоматически и округлено по кратности типа изделия."
+    )
+    return TelegramCommandResult(
+        command="/ozon-work-plan",
+        ok=True,
+        mode="review",
+        text=(
+            "Ozon: в работу\n\n"
+            "Проверьте параметры:\n\n"
+            f"- режим: `{mode_label}`;\n"
+            f"- значение: `{value_label}`;\n"
+            f"- кластеров назначения: `{cluster_count}`;\n"
+            "- спрос: последние `90` полных дней с повышенным весом последних `30` дней;\n"
+            "- потребность: отдельно для каждой пары товар × кластер;\n"
+            "- вычитаются только свободный остаток и confirmed inbound этого же кластера;\n"
+            f"- {detail}\n\n"
+            "Подтверждение сформирует только Excel и read-only отчёт. Поставка в Ozon не создаётся."
+        ),
+        reply_markup={
+            "inline_keyboard": [
+                [{"text": "Сформировать файл", "callback_data": f"ozwp_run:{code}:{value}:{cluster_count}"}],
+                [{"text": "Отменить", "callback_data": "ozwp_cancel"}],
+            ]
+        },
+    )
+
+
+def _ozon_work_plan_run_callback(
+    data: str,
+    *,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+) -> TelegramCommandResult:
+    parts = data.split(":")
+    if len(parts) != 4 or parts[1] not in {"c", "d"} or not parts[2].isdigit() or not parts[3].isdigit():
+        return _ozon_work_plan_invalid("Параметры подтверждения повреждены. Запустите «В работу Ozon» заново.")
+    code = parts[1]
+    value = int(parts[2])
+    cluster_count = int(parts[3])
+    maximum = 100_000 if code == "c" else 365
+    if value <= 0 or value > maximum or cluster_count <= 0 or cluster_count > 20:
+        return _ozon_work_plan_invalid("Введённые значения вышли за допустимые границы.")
+    calculation_mode = "capacity" if code == "c" else "coverage_days"
+    result = WorkflowRunner(data_dir=data_dir, credentials=credentials).run_read_only(
+        "ozon-production-work-plan",
+        inputs={"mode": calculation_mode, "value": value, "cluster_count": cluster_count},
+    )
+    if not result.ok:
+        return TelegramCommandResult(
+            command="/ozon-work-plan",
+            ok=False,
+            blocked_reason=result.blocked_reason or "ozon_work_plan_failed",
+            text=(
+                "Ozon: в работу\n\n"
+                "Файл не сформирован.\n\n"
+                f"Причина: `{result.error or result.status}`\n\n"
+                "Производство и поставка Ozon не запускались."
+            ),
+        )
+    summary = result.summary
+    metrics = summary.get("metrics") if isinstance(summary.get("metrics"), dict) else {}
+    cluster_totals = summary.get("cluster_totals") if isinstance(summary.get("cluster_totals"), list) else []
+    warnings = summary.get("warnings") if isinstance(summary.get("warnings"), list) else []
+    run_id = str(summary.get("run_id") or "")
+    lines = [
+        "Ozon: в работу",
+        "",
+        "Excel сформирован. Производство и поставка Ozon не запускались.",
+        "",
+        f"- товарных единиц Ozon: `{_int(metrics.get('marketplace_units'))}`;",
+        f"- физических изделий: `{_int(metrics.get('physical_pieces'))}`;",
+        f"- артикулов: `{_int(metrics.get('articles'))}`;",
+        f"- выбрано кластеров: `{_int(metrics.get('selected_clusters'))}`;",
+        f"- строк контроля: `{_int(metrics.get('control_rows'))}`.",
+    ]
+    if calculation_mode == "capacity":
+        lines.append(f"- не распределено мощности: `{_int(metrics.get('unused_capacity_physical'))}` физических изделий.")
+    if cluster_totals:
+        lines.extend(["", "По кластерам:"])
+        for row in cluster_totals:
+            if not isinstance(row, dict):
+                continue
+            lines.append(
+                f"- #{_int(row.get('priority'))} {row.get('cluster')}: "
+                f"`{_int(row.get('marketplace_units'))}` ед. Ozon / "
+                f"`{_int(row.get('physical_pieces'))}` физических изделий."
+            )
+    if warnings:
+        lines.extend(["", "Ограничения:"])
+        lines.extend(f"- {warning}" for warning in warnings[:5])
+    lines.extend(["", f"Run ID: `{run_id}`", "", "Проверьте приложенный Excel, затем утвердите или отклоните план."])
+    return TelegramCommandResult(
+        command="/ozon-work-plan",
+        ok=True,
+        mode="review",
+        text="\n".join(lines),
+        artifacts=result.artifacts,
+        reply_markup={
+            "inline_keyboard": [
+                [{"text": "Утвердить в работу", "callback_data": f"ozwp_approve:{run_id}"}],
+                [{"text": "Отклонить", "callback_data": f"ozwp_reject:{run_id}"}],
+            ]
+        },
+    )
+
+
+def _ozon_work_plan_decision_callback(data: str, *, data_dir: Path, approved: bool) -> TelegramCommandResult:
+    prefix = "ozwp_approve:" if approved else "ozwp_reject:"
+    plan_run_id = data.removeprefix(prefix).strip()
+    try:
+        decision = record_ozon_work_plan_decision(
+            data_dir=data_dir,
+            plan_run_id=plan_run_id,
+            approved=approved,
+        )
+    except Exception as exc:  # noqa: BLE001 - Telegram receives a sanitized local decision error.
+        return TelegramCommandResult(
+            command="/ozon-work-plan",
+            ok=False,
+            blocked_reason="ozon_work_plan_decision_failed",
+            text=(
+                "Ozon: в работу\n\n"
+                "Решение не сохранено.\n\n"
+                f"Причина: `{_safe_error(exc)}`\n\n"
+                "Производство и поставка Ozon не запускались."
+            ),
+        )
+    status_text = "утверждён в работу" if approved else "отклонён"
+    return TelegramCommandResult(
+        command="/ozon-work-plan",
+        ok=True,
+        mode="approved" if approved else "cancelled",
+        text=(
+            "Ozon: в работу\n\n"
+            f"План `{decision['plan_run_id']}` {status_text}.\n\n"
+            "Решение сохранено локально. Поставка в Ozon автоматически не создавалась."
+        ),
+        reply_markup=OZON_MENU_KEYBOARD,
+    )
+
+
+def _ozon_work_plan_cancel() -> TelegramCommandResult:
+    return TelegramCommandResult(
+        command="/ozon-work-plan",
+        ok=True,
+        mode="cancelled",
+        text="Ozon: в работу\n\nРасчёт отменён. Данные не запрашивались, производство и поставка Ozon не запускались.",
+        reply_markup=OZON_MENU_KEYBOARD,
+    )
+
+
+def _ozon_work_plan_invalid(reason: str) -> TelegramCommandResult:
+    return TelegramCommandResult(
+        command="/ozon-work-plan",
+        ok=False,
+        blocked_reason="invalid_ozon_work_plan_parameters",
+        text=f"Ozon: в работу\n\n{reason}\n\nПроизводство и поставка Ozon не запускались.",
+    )
+
+
+def _wb_work_plan_start() -> TelegramCommandResult:
+    return TelegramCommandResult(
+        command="/wb-work-plan",
+        ok=True,
+        mode="input",
+        text=(
+            "WB: в работу\n\n"
+            "Выберите способ расчёта:\n\n"
+            "- по производственной возможности — ввести доступное количество физических изделий;\n"
+            "- по периоду покрытия — ввести количество дней запаса.\n\n"
+            "После этого бот запросит количество кластеров назначения от 1 до 6. "
+            "Распределение выполняется автоматически по локальной потребности. Поставка в WB не создаётся."
+        ),
+        reply_markup={
+            "inline_keyboard": [
+                [{"text": "По объёму производства", "callback_data": "wbwp_mode:c"}],
+                [{"text": "По дням покрытия", "callback_data": "wbwp_mode:d"}],
+                [{"text": "Отменить", "callback_data": "wbwp_cancel"}],
+            ]
+        },
+    )
+
+
+def _wb_work_plan_mode_callback(data: str) -> TelegramCommandResult:
+    code = data.removeprefix("wbwp_mode:").strip()
+    if code not in {"c", "d"}:
+        return _wb_work_plan_invalid("Режим расчёта повреждён. Запустите «В работу» заново.")
+    capacity_mode = code == "c"
+    return TelegramCommandResult(
+        command="/wb-work-plan",
+        ok=True,
+        mode="input",
+        text=(
+            "WB: в работу\n\n"
+            + (
+                "Введите доступное количество физических изделий целым числом.\n\n"
+                "Пример: `1000`. Бот распределит объём по артикулам и регионам, не превышая его."
+                if capacity_mode
+                else "Введите необходимый период покрытия в днях целым числом.\n\n"
+                "Пример: `30`. Бот рассчитает потребность по среднесуточным продажам."
+            )
+        ),
+        reply_markup={"inline_keyboard": [[{"text": "Отменить", "callback_data": "wbwp_cancel"}]]},
+        conversation_state={"stage": "wb_work_capacity_input" if capacity_mode else "wb_work_days_input"},
+    )
+
+
+def _wb_work_plan_value(message: str, *, state: dict[str, Any]) -> TelegramCommandResult:
+    text = str(message or "").strip()
+    stage = str(state.get("stage") or "")
+    code = "c" if stage == "wb_work_capacity_input" else "d" if stage == "wb_work_days_input" else ""
+    maximum = 100_000 if code == "c" else 365
+    value = int(text) if text.isdigit() else 0
+    if not code or value <= 0 or value > maximum:
+        unit = "физических изделий" if code == "c" else "дней"
+        return TelegramCommandResult(
+            command="/wb-work-plan",
+            ok=False,
+            mode="input",
+            blocked_reason="invalid_wb_work_plan_value",
+            text=(
+                "WB: в работу\n\n"
+                f"Введите одно целое положительное число: количество {unit}. Максимум: `{maximum}`.\n\n"
+                "Расчёт не запускался, изменений в WB не было."
+            ),
+            reply_markup={"inline_keyboard": [[{"text": "Отменить", "callback_data": "wbwp_cancel"}]]},
+            conversation_state=state,
+        )
+    return TelegramCommandResult(
+        command="/wb-work-plan",
+        ok=True,
+        mode="input",
+        text=(
+            "WB: в работу\n\n"
+            "Введите количество кластеров назначения целым числом от `1` до `6`.\n\n"
+            "Бот выберет кластеры по убыванию подтверждённой локальной потребности."
+        ),
+        reply_markup={"inline_keyboard": [[{"text": "Отменить", "callback_data": "wbwp_cancel"}]]},
+        conversation_state={"stage": "wb_work_clusters_input", "mode_code": code, "value": value},
+    )
+
+
+def _wb_work_plan_clusters(message: str, *, state: dict[str, Any]) -> TelegramCommandResult:
+    text = str(message or "").strip()
+    code = str(state.get("mode_code") or "")
+    value = _int_value(state.get("value"))
+    cluster_count = int(text) if text.isdigit() else 0
+    if code not in {"c", "d"} or value <= 0 or not 1 <= cluster_count <= 6:
+        return TelegramCommandResult(
+            command="/wb-work-plan",
+            ok=False,
+            mode="input",
+            blocked_reason="invalid_wb_work_plan_cluster_count",
+            text=(
+                "WB: в работу\n\n"
+                "Введите целое число кластеров назначения от `1` до `6`.\n\n"
+                "Расчёт не запускался, изменений в WB не было."
+            ),
+            reply_markup={"inline_keyboard": [[{"text": "Отменить", "callback_data": "wbwp_cancel"}]]},
+            conversation_state=state,
+        )
+    mode_label = "по производственной возможности" if code == "c" else "по периоду покрытия"
+    value_label = f"{value} физических изделий" if code == "c" else f"{value} дней"
+    detail = (
+        "Цель покрытия: 30 дней; общий физический объём после округления не будет превышен."
+        if code == "c"
+        else "Количество будет рассчитано автоматически и округлено по кратности типа изделия."
+    )
+    return TelegramCommandResult(
+        command="/wb-work-plan",
+        ok=True,
+        mode="review",
+        text=(
+            "WB: в работу\n\n"
+            "Проверьте параметры:\n\n"
+            f"- режим: `{mode_label}`;\n"
+            f"- значение: `{value_label}`;\n"
+            f"- кластеров назначения: `{cluster_count}`;\n"
+            "- спрос: последние `90` полных дней с повышенным весом последних `30` дней;\n"
+            "- приоритет: по суммарной положительной потребности каждого кластера;\n"
+            "- расчёт каждой позиции: спрос в кластере минус остаток этой позиции в том же кластере "
+            "минус подтверждённые поставки этой позиции в тот же кластер;\n"
+            f"- {detail}\n\n"
+            "Подтверждение сформирует только Excel и read-only отчёт. Поставка в WB не создаётся."
+        ),
+        reply_markup={
+            "inline_keyboard": [
+                [
+                    {
+                        "text": "Сформировать файл",
+                        "callback_data": f"wbwp_run:{code}:{value}:{cluster_count}",
+                    }
+                ],
+                [{"text": "Отменить", "callback_data": "wbwp_cancel"}],
+            ]
+        },
+    )
+
+
+def _wb_work_plan_run_callback(
+    data: str,
+    *,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+) -> TelegramCommandResult:
+    parts = data.split(":")
+    if (
+        len(parts) != 4
+        or parts[1] not in {"c", "d"}
+        or not parts[2].isdigit()
+        or not parts[3].isdigit()
+    ):
+        return _wb_work_plan_invalid("Параметры подтверждения повреждены. Запустите «В работу» заново.")
+    code = parts[1]
+    value = int(parts[2])
+    cluster_count = int(parts[3])
+    maximum = 100_000 if code == "c" else 365
+    if value <= 0 or value > maximum or not 1 <= cluster_count <= 6:
+        return _wb_work_plan_invalid("Введённое значение вышло за допустимые границы.")
+    calculation_mode = "capacity" if code == "c" else "coverage_days"
+    result = WorkflowRunner(data_dir=data_dir, credentials=credentials).run_read_only(
+        "wb-production-work-plan",
+        inputs={"mode": calculation_mode, "value": value, "cluster_count": cluster_count},
+    )
+    if not result.ok:
+        return TelegramCommandResult(
+            command="/wb-work-plan",
+            ok=False,
+            blocked_reason=result.blocked_reason or "wb_work_plan_failed",
+            text=(
+                "WB: в работу\n\n"
+                "Файл не сформирован.\n\n"
+                f"Причина: `{result.error or result.status}`\n\n"
+                "Производство и поставка WB не запускались."
+            ),
+        )
+    summary = result.summary
+    metrics = summary.get("metrics") if isinstance(summary.get("metrics"), dict) else {}
+    region_totals = summary.get("region_totals") if isinstance(summary.get("region_totals"), list) else []
+    warnings = summary.get("warnings") if isinstance(summary.get("warnings"), list) else []
+    run_id = str(summary.get("run_id") or "")
+    lines = [
+        "WB: в работу",
+        "",
+        "Excel сформирован. Производство и поставка WB не запускались.",
+        "",
+        f"- товарных единиц WB: `{_int(metrics.get('marketplace_units'))}`;",
+        f"- физических изделий: `{_int(metrics.get('physical_pieces'))}`;",
+        f"- артикулов: `{_int(metrics.get('articles'))}`;",
+        f"- выбранных кластеров назначения: `{_int(metrics.get('selected_clusters'))}`;",
+        f"- строк контроля: `{_int(metrics.get('control_rows'))}`.",
+    ]
+    if calculation_mode == "capacity":
+        lines.append(f"- не распределено мощности: `{_int(metrics.get('unused_capacity_physical'))}` физических изделий.")
+    if region_totals:
+        lines.extend(["", "По регионам:"])
+        for row in region_totals:
+            if not isinstance(row, dict):
+                continue
+            lines.append(
+                f"- #{_int(row.get('priority'))} {row.get('region')}: "
+                f"`{_int(row.get('marketplace_units'))}` ед. WB / "
+                f"`{_int(row.get('physical_pieces'))}` физических изделий."
+            )
+    if warnings:
+        lines.extend(["", "Ограничения:"])
+        lines.extend(f"- {warning}" for warning in warnings[:5])
+    lines.extend(["", f"Run ID: `{run_id}`", "", "Проверьте приложенный Excel, затем утвердите или отклоните план."])
+    return TelegramCommandResult(
+        command="/wb-work-plan",
+        ok=True,
+        mode="review",
+        text="\n".join(lines),
+        artifacts=result.artifacts,
+        reply_markup={
+            "inline_keyboard": [
+                [{"text": "Утвердить в работу", "callback_data": f"wbwp_approve:{run_id}"}],
+                [{"text": "Отклонить", "callback_data": f"wbwp_reject:{run_id}"}],
+            ]
+        },
+    )
+
+
+def _wb_work_plan_decision_callback(data: str, *, data_dir: Path, approved: bool) -> TelegramCommandResult:
+    prefix = "wbwp_approve:" if approved else "wbwp_reject:"
+    plan_run_id = data.removeprefix(prefix).strip()
+    try:
+        decision = record_wb_work_plan_decision(
+            data_dir=data_dir,
+            plan_run_id=plan_run_id,
+            approved=approved,
+        )
+    except Exception as exc:  # noqa: BLE001 - Telegram receives a sanitized local decision error.
+        return TelegramCommandResult(
+            command="/wb-work-plan",
+            ok=False,
+            blocked_reason="wb_work_plan_decision_failed",
+            text=(
+                "WB: в работу\n\n"
+                "Решение не сохранено.\n\n"
+                f"Причина: `{_safe_error(exc)}`\n\n"
+                "Производство и поставка WB не запускались."
+            ),
+        )
+    status_text = "утверждён в работу" if approved else "отклонён"
+    return TelegramCommandResult(
+        command="/wb-work-plan",
+        ok=True,
+        mode="approved" if approved else "cancelled",
+        text=(
+            "WB: в работу\n\n"
+            f"План `{decision['plan_run_id']}` {status_text}.\n\n"
+            "Решение сохранено локально. Поставка в WB автоматически не создавалась."
+        ),
+        reply_markup=WB_MENU_KEYBOARD,
+    )
+
+
+def _wb_work_plan_cancel() -> TelegramCommandResult:
+    return TelegramCommandResult(
+        command="/wb-work-plan",
+        ok=True,
+        mode="cancelled",
+        text="WB: в работу\n\nРасчёт отменён. Данные не запрашивались, производство и поставка WB не запускались.",
+        reply_markup=WB_MENU_KEYBOARD,
+    )
+
+
+def _wb_work_plan_invalid(reason: str) -> TelegramCommandResult:
+    return TelegramCommandResult(
+        command="/wb-work-plan",
+        ok=False,
+        blocked_reason="invalid_wb_work_plan_parameters",
+        text=f"WB: в работу\n\n{reason}\n\nПроизводство и поставка WB не запускались.",
     )
 
 
@@ -625,20 +1380,453 @@ def _wb_actions_plan(
     data_dir: Path,
     credentials: AppCredentials | None,
 ) -> TelegramCommandResult:
+    return _wb_actions_plan_for_scheme(
+        scheme_text="70-55-55",
+        data_dir=data_dir,
+        credentials=credentials,
+        manual=False,
+    )
+
+
+def _period_report_start(marketplace: str) -> TelegramCommandResult:
+    market_code = "o" if marketplace == "ozon" else "w"
+    title = "Ozon" if marketplace == "ozon" else "Wildberries"
+    return TelegramCommandResult(
+        command=f"/period-report-{marketplace}",
+        ok=True,
+        mode="input",
+        text=(
+            f"{title}: отчёт за период\n\n"
+            "Выберите вид отчёта:\n\n"
+            "- Краткий - основные показатели, выкупы в товарах и физических изделиях.\n"
+            "- Финансовый - выплаты и расходы по статьям.\n"
+            "- Полный - сводка, финансы, товары и динамика по дням.\n\n"
+            "Данные только читаются. Изменений в кабинете не будет."
+        ),
+        reply_markup={
+            "inline_keyboard": [
+                [
+                    {"text": "Краткий", "callback_data": f"mpr_type:{market_code}:s"},
+                    {"text": "Финансовый", "callback_data": f"mpr_type:{market_code}:f"},
+                ],
+                [{"text": "Полный отчёт", "callback_data": f"mpr_type:{market_code}:a"}],
+                [{"text": "Отменить", "callback_data": "mpr_cancel"}],
+            ]
+        },
+    )
+
+
+def _period_report_marketplace_start() -> TelegramCommandResult:
+    return TelegramCommandResult(
+        command="/period-report",
+        ok=True,
+        mode="input",
+        text="Отчёт за период\n\nВыберите маркетплейс:",
+        reply_markup={
+            "inline_keyboard": [
+                [
+                    {"text": "Ozon", "callback_data": "mpr_market:o"},
+                    {"text": "Wildberries", "callback_data": "mpr_market:w"},
+                ],
+                [{"text": "Отменить", "callback_data": "mpr_cancel"}],
+            ]
+        },
+    )
+
+
+def _period_report_type_callback(data: str) -> TelegramCommandResult:
+    parts = data.split(":")
+    if len(parts) != 3 or parts[1] not in {"o", "w"} or parts[2] not in {"s", "f", "a"}:
+        return _period_report_invalid("Некорректно выбран вид отчёта.")
+    market_code, report_code = parts[1], parts[2]
+    title = "Ozon" if market_code == "o" else "Wildberries"
+    report_label = _period_report_label(report_code)
+    return TelegramCommandResult(
+        command="/period-report",
+        ok=True,
+        mode="input",
+        text=f"{title}: {report_label.lower()} отчёт\n\nВыберите период:",
+        reply_markup={
+            "inline_keyboard": [
+                [
+                    {"text": "Вчера", "callback_data": f"mpr_period:{market_code}:{report_code}:y"},
+                    {"text": "7 дней", "callback_data": f"mpr_period:{market_code}:{report_code}:7"},
+                    {"text": "30 дней", "callback_data": f"mpr_period:{market_code}:{report_code}:30"},
+                ],
+                [
+                    {"text": "Текущий месяц", "callback_data": f"mpr_period:{market_code}:{report_code}:m"},
+                    {"text": "Прошлый месяц", "callback_data": f"mpr_period:{market_code}:{report_code}:p"},
+                ],
+                [{"text": "Свой период", "callback_data": f"mpr_period:{market_code}:{report_code}:c"}],
+                [{"text": "Отменить", "callback_data": "mpr_cancel"}],
+            ]
+        },
+    )
+
+
+def _period_report_period_callback(data: str) -> TelegramCommandResult:
+    parts = data.split(":")
+    if len(parts) != 4 or parts[1] not in {"o", "w"} or parts[2] not in {"s", "f", "a"}:
+        return _period_report_invalid("Некорректно выбран период.")
+    market_code, report_code, period_code = parts[1], parts[2], parts[3]
+    if period_code == "c":
+        return TelegramCommandResult(
+            command="/period-report",
+            ok=True,
+            mode="input",
+            text=(
+                "Свой период\n\n"
+                "Введите дату начала в формате `ДД.ММ.ГГГГ` или `ГГГГ-ММ-ДД`."
+            ),
+            reply_markup={"inline_keyboard": [[{"text": "Отменить", "callback_data": "mpr_cancel"}]]},
+            conversation_state={
+                "stage": "period_report_custom_from",
+                "market_code": market_code,
+                "report_code": report_code,
+            },
+        )
+    period = _period_report_dates(period_code)
+    if period is None:
+        return _period_report_invalid("Некорректно выбран период.")
+    return _period_report_confirmation(
+        market_code=market_code,
+        report_code=report_code,
+        date_from=period[0],
+        date_to=period[1],
+    )
+
+
+def _period_report_custom_input(message: str, *, state: dict[str, Any]) -> TelegramCommandResult:
+    value = _parse_owner_date(message)
+    market_code = str(state.get("market_code") or "")
+    report_code = str(state.get("report_code") or "")
+    if market_code not in {"o", "w"} or report_code not in {"s", "f", "a"}:
+        return _period_report_invalid("Состояние выбора периода потеряно. Запустите отчёт заново.")
+    if value is None:
+        return TelegramCommandResult(
+            command="/period-report",
+            ok=False,
+            mode="input",
+            blocked_reason="invalid_period_report_date",
+            text="Дата не распознана. Введите её как `ДД.ММ.ГГГГ` или `ГГГГ-ММ-ДД`.",
+            reply_markup={"inline_keyboard": [[{"text": "Отменить", "callback_data": "mpr_cancel"}]]},
+            conversation_state=state,
+        )
+    if value > date.today():
+        return TelegramCommandResult(
+            command="/period-report",
+            ok=False,
+            mode="input",
+            blocked_reason="future_period_report_date",
+            text="Будущую дату выбрать нельзя. Введите дату не позднее сегодняшней.",
+            reply_markup={"inline_keyboard": [[{"text": "Отменить", "callback_data": "mpr_cancel"}]]},
+            conversation_state=state,
+        )
+    if state.get("stage") == "period_report_custom_from":
+        return TelegramCommandResult(
+            command="/period-report",
+            ok=True,
+            mode="input",
+            text=(
+                f"Дата начала: `{value.strftime('%d.%m.%Y')}`.\n\n"
+                "Введите дату окончания в формате `ДД.ММ.ГГГГ` или `ГГГГ-ММ-ДД`."
+            ),
+            reply_markup={"inline_keyboard": [[{"text": "Отменить", "callback_data": "mpr_cancel"}]]},
+            conversation_state={
+                "stage": "period_report_custom_to",
+                "market_code": market_code,
+                "report_code": report_code,
+                "date_from": value.isoformat(),
+            },
+        )
+    date_from = _parse_owner_date(str(state.get("date_from") or ""))
+    if date_from is None or value < date_from:
+        return TelegramCommandResult(
+            command="/period-report",
+            ok=False,
+            mode="input",
+            blocked_reason="invalid_period_report_range",
+            text="Дата окончания не может быть раньше даты начала. Введите дату окончания ещё раз.",
+            reply_markup={"inline_keyboard": [[{"text": "Отменить", "callback_data": "mpr_cancel"}]]},
+            conversation_state=state,
+        )
+    return _period_report_confirmation(
+        market_code=market_code,
+        report_code=report_code,
+        date_from=date_from,
+        date_to=value,
+    )
+
+
+def _period_report_confirmation(
+    *,
+    market_code: str,
+    report_code: str,
+    date_from: date,
+    date_to: date,
+) -> TelegramCommandResult:
+    marketplace = "Ozon" if market_code == "o" else "Wildberries"
+    return TelegramCommandResult(
+        command="/period-report",
+        ok=True,
+        mode="review",
+        text=(
+            "Проверьте параметры отчёта:\n\n"
+            f"- маркетплейс: `{marketplace}`;\n"
+            f"- вид: `{_period_report_label(report_code)}`;\n"
+            f"- период: `{date_from.strftime('%d.%m.%Y')} - {date_to.strftime('%d.%m.%Y')}`.\n\n"
+            "После подтверждения бот прочитает данные маркетплейса и сформирует отчёт. "
+            "Изменений в кабинете не будет."
+        ),
+        reply_markup={
+            "inline_keyboard": [
+                [{
+                    "text": "Сформировать отчёт",
+                    "callback_data": f"mpr_run:{market_code}:{report_code}:{date_from.isoformat()}:{date_to.isoformat()}",
+                }],
+                [{"text": "Отменить", "callback_data": "mpr_cancel"}],
+            ]
+        },
+    )
+
+
+def _period_report_run_callback(
+    data: str,
+    *,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+) -> TelegramCommandResult:
+    parts = data.split(":")
+    if len(parts) != 5 or parts[1] not in {"o", "w"} or parts[2] not in {"s", "f", "a"}:
+        return _period_report_invalid("Параметры подтверждения повреждены. Запустите отчёт заново.")
+    market_code, report_code = parts[1], parts[2]
+    date_from = _parse_owner_date(parts[3])
+    date_to = _parse_owner_date(parts[4])
+    if date_from is None or date_to is None or date_from > date_to or date_to > date.today():
+        return _period_report_invalid("Период подтверждения некорректен. Запустите отчёт заново.")
+    marketplace = "ozon" if market_code == "o" else "wb"
+    report_type = {"s": "short", "f": "financial", "a": "full"}[report_code]
+    result = WorkflowRunner(data_dir=data_dir, credentials=credentials).run_read_only(
+        "marketplace-period-report",
+        inputs={
+            "marketplace": marketplace,
+            "report_type": report_type,
+            "date_from": date_from.isoformat(),
+            "date_to": date_to.isoformat(),
+        },
+    )
+    title = "Ozon" if marketplace == "ozon" else "Wildberries"
+    if not result.ok:
+        return TelegramCommandResult(
+            command="/period-report",
+            ok=False,
+            blocked_reason=result.blocked_reason or "period_report_failed",
+            text=(
+                f"{title}: отчёт за период\n\n"
+                "Отчёт не сформирован.\n\n"
+                f"Причина: `{result.error or result.status}`\n\n"
+                "Изменений в кабинете не выполнялось."
+            ),
+        )
+    metrics = result.summary.get("metrics") if isinstance(result.summary.get("metrics"), dict) else {}
+    warnings = result.summary.get("warnings") if isinstance(result.summary.get("warnings"), list) else []
+    lines = [
+        f"{title}: отчёт за период",
+        "",
+        f"Период: `{date_from.strftime('%d.%m.%Y')} - {date_to.strftime('%d.%m.%Y')}`.",
+        f"Вид: `{_period_report_label(report_code)}`.",
+        "",
+        "Основные показатели:",
+        f"- заказы: `{_int(metrics.get('orders'))}` товаров на `{_money(metrics.get('order_amount'))}`;",
+        f"- выкупы: `{_int(metrics.get('buyout_units'))}` товаров / `{_int(metrics.get('physical_pieces'))}` физических изделий;",
+        f"- возвраты: `{_int(metrics.get('returns'))}`, отмены: `{_int(metrics.get('cancellations'))}`;",
+        f"- продажи до расходов: `{_money(metrics.get('gross'))}`;",
+        f"- расходы: `{_money(metrics.get('expenses'))}`;",
+        f"- к выплате после расходов: `{_money(metrics.get('net'))}`;",
+        f"- на одно физическое изделие: `{_money(metrics.get('net_per_piece'))}`.",
+    ]
+    if warnings:
+        lines.extend(["", "Ограничения:"])
+        lines.extend(f"- {warning}" for warning in warnings[:5])
+    lines.extend(["", f"Run ID: `{result.summary.get('run_id') or 'н/д'}`", "", "Полный файл отчёта приложен. Изменений в кабинете не выполнялось."])
+    return TelegramCommandResult(
+        command="/period-report",
+        ok=True,
+        text="\n".join(lines),
+        artifacts=result.artifacts,
+    )
+
+
+def _period_report_dates(code: str) -> tuple[date, date] | None:
+    today = date.today()
+    if code == "y":
+        yesterday = today - timedelta(days=1)
+        return yesterday, yesterday
+    if code == "7":
+        return today - timedelta(days=6), today
+    if code == "30":
+        return today - timedelta(days=29), today
+    if code == "m":
+        return today.replace(day=1), today
+    if code == "p":
+        previous_end = today.replace(day=1) - timedelta(days=1)
+        return previous_end.replace(day=1), previous_end
+    return None
+
+
+def _parse_owner_date(value: str) -> date | None:
+    text = str(value or "").strip()
+    for pattern in ("%Y-%m-%d", "%d.%m.%Y"):
+        try:
+            return datetime.strptime(text, pattern).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _period_report_label(code: str) -> str:
+    return {"s": "Краткий", "f": "Финансовый", "a": "Полный отчёт"}.get(code, "Отчёт")
+
+
+def _period_report_cancel() -> TelegramCommandResult:
+    return TelegramCommandResult(
+        command="/period-report",
+        ok=True,
+        text="Отчёт за период отменён. Данные не запрашивались, изменений в кабинетах не было.",
+    )
+
+
+def _period_report_invalid(reason: str) -> TelegramCommandResult:
+    return TelegramCommandResult(
+        command="/period-report",
+        ok=False,
+        blocked_reason="invalid_period_report_parameters",
+        text=f"Отчёт за период\n\n{reason}\n\nИзменений в кабинетах не выполнялось.",
+    )
+
+
+def _wb_manual_actions_start() -> TelegramCommandResult:
+    return TelegramCommandResult(
+        command="/wb-actions-manual",
+        ok=True,
+        mode="input",
+        text=(
+            "Ручная акция\n\n"
+            "Введите три целых значения от 0 до 99 одной строкой в таком порядке:\n\n"
+            "`порог  скидка_после_порога  скидка_вне_акций`\n\n"
+            "Пример: `57 55 55`\n\n"
+            "После проверки бот отдельно покажет параметры для подтверждения. "
+            "Расчёт и изменение скидок сейчас не выполняются."
+        ),
+        reply_markup={
+            "inline_keyboard": [[{"text": "Отменить", "callback_data": "wbam_cancel"}]]
+        },
+        conversation_state={"stage": "wb_manual_scheme_input"},
+    )
+
+
+def _wb_manual_actions_parameters(message: str) -> TelegramCommandResult:
+    parsed = _parse_wb_manual_parameters(message)
+    if parsed is None:
+        return TelegramCommandResult(
+            command="/wb-actions-manual",
+            ok=False,
+            mode="input",
+            blocked_reason="invalid_wb_manual_parameters",
+            text=(
+                "Ручная акция\n\n"
+                "Параметры не распознаны. Введите ровно три целых значения от 0 до 99:\n\n"
+                "`порог  скидка_после_порога  скидка_вне_акций`\n\n"
+                "Пример: `57 55 55`\n\n"
+                "Изменений в WB не выполнял."
+            ),
+            reply_markup={
+                "inline_keyboard": [[{"text": "Отменить", "callback_data": "wbam_cancel"}]]
+            },
+            conversation_state={"stage": "wb_manual_scheme_input"},
+        )
+
+    threshold, fallback_over_threshold, fallback_no_promo = parsed
+    internal_scheme = f"{threshold}-{fallback_no_promo}-{fallback_over_threshold}"
+    return TelegramCommandResult(
+        command="/wb-actions-manual",
+        ok=True,
+        mode="review",
+        text=(
+            "Ручная акция\n\n"
+            "Проверьте параметры:\n\n"
+            f"- порог акции: `{threshold}%`;\n"
+            f"- скидка после превышения порога: `{fallback_over_threshold}%`;\n"
+            f"- скидка для товаров вне активных акций: `{fallback_no_promo}%`.\n\n"
+            "Подтверждение запустит только свежий расчёт. Скидки в WB на этом этапе не изменятся."
+        ),
+        reply_markup={
+            "inline_keyboard": [
+                [
+                    {
+                        "text": "Подтвердить параметры",
+                        "callback_data": f"wbam_confirm:{internal_scheme}",
+                    }
+                ],
+                [{"text": "Отменить", "callback_data": "wbam_cancel"}],
+            ]
+        },
+    )
+
+
+def _wb_manual_actions_plan(
+    *,
+    scheme_text: str,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+) -> TelegramCommandResult:
+    if _parse_internal_wb_scheme(scheme_text) is None:
+        return TelegramCommandResult(
+            command="/wb-actions-manual",
+            ok=False,
+            mode="dry_run",
+            blocked_reason="invalid_wb_manual_scheme",
+            text=(
+                "Ручная акция\n\n"
+                "Расчёт заблокирован: параметры подтверждения некорректны.\n\n"
+                "Изменений в WB не выполнял. Запустите «Ручную акцию» заново."
+            ),
+        )
+    return _wb_actions_plan_for_scheme(
+        scheme_text=scheme_text,
+        data_dir=data_dir,
+        credentials=credentials,
+        manual=True,
+    )
+
+
+def _wb_actions_plan_for_scheme(
+    *,
+    scheme_text: str,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+    manual: bool,
+) -> TelegramCommandResult:
+    scheme = _parse_internal_wb_scheme(scheme_text)
+    if scheme is None:
+        raise ValueError("Invalid WB actions scheme")
+    threshold, fallback_no_promo, fallback_over_threshold = scheme
+    title = "Ручная акция" if manual else "WB акции 70-55-55"
+    command = "/wb-actions-manual" if manual else "/wb-actions"
     try:
         result = run_wb_actions_discount_plan(
             credentials=credentials or load_credentials(),
             data_dir=data_dir,
-            scheme_text="70-55-55",
+            scheme_text=scheme_text,
         )
     except Exception as exc:  # noqa: BLE001 - Telegram must return a safe failure.
         return TelegramCommandResult(
-            command="/wb-actions",
+            command=command,
             ok=False,
             mode="dry_run",
             blocked_reason="wb_actions_plan_failed",
             text=(
-                "WB акции 70-55-55\n\n"
+                f"{title}\n\n"
                 "Итог: свежий dry-run не удалось построить.\n\n"
                 f"Причина: `{_safe_error(exc)}`\n\n"
                 "Изменений в Ozon/WB не выполнял."
@@ -648,49 +1836,77 @@ def _wb_actions_plan(
     summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
     run_id = str(result.get("run_id") or "")
     changed_rows = int(summary.get("changed_rows") or summary.get("to_change") or 0)
-    reason_counts = _wb_actions_reason_counts(_safe_artifacts(result).get("csv"))
-    changed_reasons = reason_counts.get("changed", {})
-    nochange_reasons = reason_counts.get("nochange", {})
-    threshold_reason = f"скидка до порога > 70% -> 55%"
-    promo_reason = "скидка до порога <= 70%"
-    no_promo_reason = "товара нет в активных акциях -> 55%"
+    report_stats = _wb_actions_report_stats(_safe_artifacts(result).get("csv"))
+
+    eligible_after = _wb_report_stat(report_stats, "eligible_after")
+    current_participating = _wb_report_stat(report_stats, "current_participating")
+    current_not_participating = _wb_report_stat(report_stats, "current_not_participating")
+    offered_in_active_promos = _wb_report_stat(report_stats, "offered_in_active_promos")
+    excluded_after = _wb_report_stat(report_stats, "excluded_after")
+    not_participating_after = _wb_report_stat(report_stats, "not_participating_after")
+    newly_participating_after = _wb_report_stat(report_stats, "newly_participating_after")
+    target_distribution = report_stats.get("target_discount_distribution", {})
+    upload_distribution = report_stats.get("upload_discount_distribution", {})
+    step_limited = _wb_report_stat(report_stats, "step_limited")
 
     lines = [
-        "WB акции 70-55-55",
+        title,
         "",
-        "Итог: свежий dry-run построен. Скидки в WB не загружались.",
-        f"Run ID: `{run_id or 'н/д'}`",
-        f"Схема: `{summary.get('scheme') or '70-55-55'}`",
+        "Свежий расчёт готов. Скидки в WB пока не изменены.",
         "",
-        "Сводка:",
-        f"- всего товаров в ценах WB: `{_int(summary.get('total_goods'))}`",
-        f"- в активных акциях: `{_int(summary.get('in_promos'))}`",
-        f"- вне активных акций: `{_int(summary.get('outside_promos'))}`",
-        f"- в нескольких акциях: `{_int(summary.get('multiple_promos'))}`",
-        f"- изменить скидку: `{_int(changed_rows)}`",
-        f"- из них пошагово до цели: `{_int(summary.get('step_limited'))}`",
-        f"- повысить скидку: `{_int(summary.get('increase'))}`",
-        f"- снизить скидку: `{_int(summary.get('decrease'))}`",
-        f"- не менять: `{_int(summary.get('no_change'))}`",
+        "Параметры:",
+        f"- порог акции: `{threshold}%`;",
+        f"- скидка после превышения порога: `{fallback_over_threshold}%`;",
+        f"- скидка для товаров вне активных акций: `{fallback_no_promo}%`.",
         "",
-        "Бизнес-причины изменения скидки:",
-        f"- превышение порога 70%, привести к fallback 55%: `{_int(changed_reasons.get(threshold_reason, 0))}`",
-        f"- участие в акции с меньшей требуемой скидкой: `{_int(changed_reasons.get(promo_reason, 0))}`",
-        f"- отсутствие в активных акциях: `{_int(changed_reasons.get(no_promo_reason, 0))}` строк к изменению",
-        f"- вне активных акций без изменения: `{_int(nochange_reasons.get(no_promo_reason, 0))}`",
+        "Сейчас:",
+        f"- всего товаров в магазине: `{_int(summary.get('total_goods'))}`",
+        f"- подходят под доступные активные акции: `{_int(offered_in_active_promos)}`",
+        f"- участвуют в акциях: `{_int(current_participating)}`",
+        f"- не участвуют в акциях: `{_int(current_not_participating)}`",
+        f"- проходят заданный порог {threshold}%: `{_int(eligible_after)}`",
         "",
-        "Акции:",
-        f"- активные: `{_int(summary.get('active_promos'))}`",
-        f"- будущие: `{_int(summary.get('future_promos'))}`",
+        "После применения целевых параметров:",
+        f"- останутся или будут участвовать в акциях: `{_int(eligible_after)}`",
+        f"- исключатся из текущих акций: `{_int(excluded_after)}`",
+        f"- начнут участвовать: `{_int(newly_participating_after)}`",
+        f"- не будут участвовать в акциях: `{_int(not_participating_after)}`",
+        f"- скидка изменится: `{_int(changed_rows)}`",
+        f"- скидка останется без изменения: `{_int(summary.get('no_change'))}`",
         "",
-        "Что дальше:",
+        "Итоговые скидки:",
+        *_wb_discount_distribution_lines(target_distribution),
+        "",
     ]
+    if step_limited:
+        lines.extend(
+            [
+                "После ближайшего безопасного upload:",
+                f"- не достигнут цели за один шаг: `{_int(step_limited)}` товаров;",
+                *_wb_discount_distribution_lines(upload_distribution),
+                "",
+            ]
+        )
+    else:
+        lines.extend(["Все целевые скидки достигаются за один upload.", ""])
+
+    lines.extend(
+        [
+            "Дополнительно:",
+            f"- товаров в нескольких активных акциях: `{_int(summary.get('multiple_promos'))}`",
+            f"- активных акций: `{_int(summary.get('active_promos'))}`",
+            f"- будущих акций: `{_int(summary.get('future_promos'))}`",
+            f"- Run ID: `{run_id or 'н/д'}`",
+            "",
+            "Решение:",
+        ]
+    )
     if changed_rows:
         lines.extend(
             [
                 "Нажатие кнопки ниже является явным подтверждением владельца для этого dry-run.",
                 "Перед записью apply сам выполнит fresh preflight, fresh dry-run, partial drift-check и verify.",
-                "Изменение скидки за один upload ограничено шагом `35 п.п.`; если цель дальше, следующий `/wb-actions` продолжит доведение.",
+                "За один upload снижение итоговой цены ограничено `33%`, а изменение скидки - `35 п.п.`; если цель дальше, потребуется следующий подтверждённый запуск.",
                 "Если часть строк изменилась, будут применены только неизменившиеся строки; изменившиеся останутся на новый review.",
             ]
         )
@@ -698,15 +1914,9 @@ def _wb_actions_plan(
         lines.append("Изменений к применению нет, кнопку apply не показываю.")
 
     artifacts = _safe_artifacts(result)
-    if artifacts:
-        lines.extend(["", "Файлы:"])
-        if artifacts.get("report"):
-            lines.append(f"- отчет: `{artifacts['report']}`")
-        if artifacts.get("xlsx"):
-            lines.append(f"- Excel: `{artifacts['xlsx']}`")
-        if artifacts.get("csv"):
-            lines.append(f"- CSV: `{artifacts['csv']}`")
-    lines.extend(["", "Изменений в Ozon/WB не выполнял."])
+    if artifacts.get("report"):
+        lines.extend(["", "Полный отчёт приложен к сообщению."])
+    lines.extend(["", "Изменений в WB не выполнял."])
 
     reply_markup: dict[str, Any] = {}
     if changed_rows and run_id:
@@ -714,14 +1924,19 @@ def _wb_actions_plan(
             "inline_keyboard": [
                 [
                     {
-                        "text": "✅ Применить WB 70-55-55",
+                        "text": "Применить скидки" if manual else "✅ Применить WB 70-55-55",
                         "callback_data": f"wba_apply:{run_id}",
                     }
-                ]
+                ],
+                *(
+                    [[{"text": "Отклонить", "callback_data": f"wbam_reject:{run_id}"}]]
+                    if manual
+                    else []
+                ),
             ]
         }
     return TelegramCommandResult(
-        command="/wb-actions",
+        command=command,
         ok=True,
         mode="dry_run",
         text="\n".join(lines),
@@ -794,6 +2009,7 @@ def _wb_actions_apply(
         f"- напрямую: `{_int(applied.get('regular_payload_rows_count'))}`",
         f"- через карантинный fallback: `{_int(applied.get('staged_payload_rows_count'))}`",
         f"- лимит шага скидки: `{_int(result.get('discount_step_limit_pp')) or 35} п.п.`",
+        f"- лимит снижения итоговой цены: `{_int(result.get('quarantine_safe_price_drop_percent')) or 33}%`",
         f"- upload ID: `{applied.get('upload_id') or 'н/д'}`",
         f"- пропущено из-за drift: `{_int(drift.get('skipped_due_to_drift_count'))}` строк / `{_int(drift.get('skipped_due_to_drift_product_count'))}` товаров",
         "",
@@ -1320,7 +2536,7 @@ def _daily_report_chat_text(result: dict[str, Any]) -> str:
         "",
         "Заказы / выкупы / расходы:",
         f"- Ozon: заказы `{_int(ozon_orders_day.get('ordered_units'))}` шт. / `{_money(ozon_orders_day.get('revenue'))}`; выкупы `{_int(ozon_buyouts.get('buyout_units'))}` шт. / `{_money(ozon_buyouts.get('buyout_amount'))}`; расходы `{_money(ozon_expenses.get('total_expenses'))}`.",
-        f"- WB: заказы `{_int(wb_orders_day.get('active_orders'))}` шт. / `{_money(wb_orders_day.get('amount'))}`; выкупы `{_int(wb_sales_day.get('sales_rows'))}` шт. / `{_money(wb_sales_day.get('sales_amount'))}`; расходы `{_money(wb_expenses.get('total_expenses'))}`.",
+        f"- WB: заказы `{_int(wb_orders_day.get('total_orders', wb_orders_day.get('active_orders')))}` шт. / `{_money(wb_orders_day.get('amount'))}`; выкупы `{_int(wb_sales_day.get('sales_rows'))}` шт. / `{_money(wb_sales_day.get('sales_amount'))}`; расходы `{_money(wb_expenses.get('total_expenses'))}`.",
         "",
         "Отзывы и вопросы:",
         f"- Ozon требуют внимания: отзывы `{_int(ozon_comm.get('unanswered_feedbacks'))}`, вопросы `{_int(ozon_comm.get('unanswered_questions'))}`.",
@@ -1398,6 +2614,134 @@ def _wb_analytics_chat_text(result: dict[str, Any]) -> str:
         if artifacts.get("summary"):
             lines.append(f"- summary: `{artifacts['summary']}`")
     lines.extend(["", "Изменений в WB не выполнял."])
+    return "\n".join(lines)
+
+
+def _ozon_stock_supplies_chat_text(result: dict[str, Any]) -> str:
+    metrics = _dict_value(result, "metrics")
+    general = _dict_value(metrics, "general_fbo")
+    warehouses = _dict_value(metrics, "warehouses")
+    supplies = _dict_value(metrics, "supplies")
+    reconciliation = _dict_value(metrics, "reconciliation")
+    lines = [
+        "Остатки и поставки Ozon",
+        "",
+        f"Итог: свежий read-only отчет построен, статус `{result.get('overall_status') or 'н/д'}`.",
+        f"Run ID: `{result.get('run_id') or 'н/д'}`",
+        "",
+        "FBO-остатки:",
+        f"- общий present: `{_int(general.get('present'))}` товаров / `{_int(general.get('physical_present'))}` физических изделий;",
+        f"- свободно по складам: `{_int(warehouses.get('free_to_sell'))}` товаров / `{_int(warehouses.get('physical_free_to_sell'))}` физических изделий;",
+        f"- зарезервировано: `{_int(general.get('reserved'))}`;",
+        f"- обещано по складскому отчету: `{_int(warehouses.get('promised'))}`;",
+        f"- складов: `{_int(metrics.get('warehouse_count'))}`;",
+        f"- расхождение general/warehouse: `{_int(reconciliation.get('difference'))}`.",
+        "",
+        "Активные заявки и поставки:",
+        f"- заявок: `{_int(supplies.get('orders'))}`, поставок: `{_int(supplies.get('supplies'))}`;",
+        f"- состав активного контура: `{_int(supplies.get('quantity'))}` товаров / `{_int(supplies.get('physical_quantity'))}` физических изделий;",
+        f"- подтвержденный inbound: `{_int(supplies.get('confirmed_inbound_quantity'))}` товаров / `{_int(supplies.get('confirmed_inbound_physical'))}` физических изделий;",
+        f"- виртуальных заявок-дублей исключено: `{_int(supplies.get('virtual_orders'))}`.",
+    ]
+    active = result.get("active_supplies") if isinstance(result.get("active_supplies"), list) else []
+    if active:
+        lines.extend(["", "По поставкам:"])
+        for row in active[:10]:
+            lines.append(
+                f"- `{row.get('order_number') or row.get('order_id') or 'н/д'}`: "
+                f"{row.get('state_label') or row.get('state') or 'статус не указан'}, "
+                f"{row.get('storage_warehouse') or 'склад не указан'}, `{_int(row.get('quantity'))}` ед."
+            )
+        if len(active) > 10:
+            lines.append(f"- ... еще `{len(active) - 10}` поставок в полном отчете")
+    warnings = result.get("warnings") if isinstance(result.get("warnings"), list) else []
+    if warnings:
+        lines.extend(["", "Ограничения данных:"])
+        lines.extend(f"- {warning}" for warning in warnings[:5])
+    lines.extend(
+        [
+            "",
+            "Важно: общий и складской остатки не складываются; активные поставки также показаны отдельно.",
+            "Изменений в Ozon не выполнял.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _wb_stock_supplies_chat_text(result: dict[str, Any]) -> str:
+    metrics = _dict_value(result, "metrics")
+    stocks = _dict_value(metrics, "stocks")
+    supplies = _dict_value(metrics, "supplies")
+    by_status = _dict_value(supplies, "by_status")
+    lines = [
+        "Остатки и поставки WB",
+        "",
+        f"Итог: свежий read-only отчет построен, статус `{result.get('overall_status') or 'н/д'}`.",
+        f"Run ID: `{result.get('run_id') or 'н/д'}`",
+        "",
+        "Остатки на складах:",
+        f"- доступно: `{_int(stocks.get('quantity'))}` товарных единиц / `{_int(stocks.get('physical_quantity'))}` физических изделий;",
+        f"- в пути к покупателю: `{_int(stocks.get('in_way_to_client'))}`;",
+        f"- поле inWayFromClient: `{_int(stocks.get('in_way_from_client'))}`; это не считается возвратами без сверки;",
+        f"- складов в отчете: `{_int(metrics.get('warehouse_count'))}`.",
+        "",
+        "Активные поставки:",
+        f"- всего: `{_int(supplies.get('count'))}` поставок, `{_int(supplies.get('quantity'))}` товарных единиц / `{_int(supplies.get('physical_quantity'))}` физических изделий;",
+    ]
+    for status_id in (1, 2, 3, 6, 4):
+        row = _dict_value(by_status, str(status_id))
+        lines.append(
+            f"- {row.get('status') or f'Статус {status_id}'}: поставок `{_int(row.get('count'))}` / "
+            f"`{_int(row.get('quantity'))}` ед."
+        )
+
+    active = result.get("active_supplies") if isinstance(result.get("active_supplies"), list) else []
+    if active:
+        lines.extend(["", "По поставкам:"])
+        for row in active[:10]:
+            lines.append(
+                f"- `{row.get('supply_id') or 'н/д'}`: {row.get('warehouse_name') or 'склад не указан'}, "
+                f"{row.get('status') or 'статус не указан'}, `{_int(row.get('quantity'))}` ед., "
+                f"дата `{row.get('supply_date') or 'не указана'}`"
+            )
+        if len(active) > 10:
+            lines.append(f"- ... еще `{len(active) - 10}` поставок в полном отчете")
+
+    anomalies = result.get("anomalies") if isinstance(result.get("anomalies"), list) else []
+    lines.extend(["", "Требует внимания:"])
+    if anomalies:
+        lines.extend(f"- {row.get('message') or 'Предупреждение без описания'}" for row in anomalies[:4])
+        if len(anomalies) > 4:
+            lines.append(f"- ... еще `{len(anomalies) - 4}` предупреждений в отчете")
+    else:
+        lines.append("- резких аномалий по доступным снимкам не обнаружено")
+
+    warnings = result.get("warnings") if isinstance(result.get("warnings"), list) else []
+    quality_warnings = [
+        str(item)
+        for item in warnings
+        if str(item).strip() and "предупреждений по состояниям" not in str(item)
+    ]
+    if quality_warnings:
+        lines.extend(["", "Ограничения данных:"])
+        lines.extend(f"- {item}" for item in quality_warnings[:4])
+
+    artifacts = _safe_artifacts(result)
+    if artifacts:
+        lines.extend(["", "Файлы:"])
+        if artifacts.get("report"):
+            lines.append(f"- отчет: `{artifacts['report']}`")
+        if artifacts.get("warehouses_csv"):
+            lines.append(f"- склады: `{artifacts['warehouses_csv']}`")
+        if artifacts.get("supplies_csv"):
+            lines.append(f"- поставки: `{artifacts['supplies_csv']}`")
+    lines.extend(
+        [
+            "",
+            "Важно: активные поставки не прибавляются к доступному остатку, чтобы не задвоить товар.",
+            "Изменений в WB не выполнял.",
+        ]
+    )
     return "\n".join(lines)
 
 
@@ -1971,26 +3315,105 @@ def _safe_artifacts(run: dict[str, Any]) -> dict[str, str]:
     return safe
 
 
-def _wb_actions_reason_counts(csv_path: str | None) -> dict[str, dict[str, int]]:
-    result = {"changed": {}, "nochange": {}}
+def _wb_actions_report_stats(csv_path: str | None) -> dict[str, Any]:
     if not csv_path:
-        return result
+        return {"available": False}
     path = Path(csv_path)
     try:
         with path.open(encoding="utf-8-sig", newline="") as handle:
             rows = list(csv.DictReader(handle, delimiter=";"))
     except (OSError, csv.Error):
-        return result
+        return {"available": False}
+    required_columns = {
+        "Акций",
+        "Статусы в файлах акций",
+        "Причина",
+        "Финальная скидка",
+        "Скидка к загрузке",
+        "Осталось до целевой, п.п.",
+    }
+    if not rows or not required_columns.issubset(rows[0]):
+        return {"available": False}
+
+    target_distribution: dict[int, int] = {}
+    upload_distribution: dict[int, int] = {}
+    offered_in_active_promos = 0
+    current_participating = 0
+    eligible_after = 0
+    excluded_after = 0
+    newly_participating_after = 0
+    step_limited = 0
+
     for row in rows:
-        action = str(row.get("Действие") or "")
         reason = str(row.get("Причина") or "")
-        if not reason:
+        eligible = reason.startswith("скидка до порога <=")
+        participating = _wb_status_is_participating(str(row.get("Статусы в файлах акций") or ""))
+        if _int_value(row.get("Акций")) > 0:
+            offered_in_active_promos += 1
+        if participating:
+            current_participating += 1
+        if eligible:
+            eligible_after += 1
+            if not participating:
+                newly_participating_after += 1
+        elif participating:
+            excluded_after += 1
+
+        target_discount = _int_value(row.get("Финальная скидка"))
+        upload_discount = _int_value(row.get("Скидка к загрузке"))
+        target_distribution[target_discount] = target_distribution.get(target_discount, 0) + 1
+        upload_distribution[upload_discount] = upload_distribution.get(upload_discount, 0) + 1
+        if _int_value(row.get("Осталось до целевой, п.п.")) != 0:
+            step_limited += 1
+
+    total = len(rows)
+    return {
+        "available": True,
+        "total": total,
+        "offered_in_active_promos": offered_in_active_promos,
+        "current_participating": current_participating,
+        "current_not_participating": total - current_participating,
+        "eligible_after": eligible_after,
+        "excluded_after": excluded_after,
+        "newly_participating_after": newly_participating_after,
+        "not_participating_after": total - eligible_after,
+        "step_limited": step_limited,
+        "target_discount_distribution": target_distribution,
+        "upload_discount_distribution": upload_distribution,
+    }
+
+
+def _wb_status_is_participating(value: str) -> bool:
+    statuses = {item.strip().lower() for item in re.split(r"[,;]", value) if item.strip()}
+    return bool(statuses & {"да", "yes", "true", "1"})
+
+
+def _int_value(value: Any) -> int:
+    try:
+        return int(float(str(value or "0").replace(" ", "").replace(",", ".")))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _wb_report_stat(stats: dict[str, Any], key: str) -> int | None:
+    if not stats.get("available"):
+        return None
+    value = stats.get(key)
+    return int(value) if isinstance(value, int) else None
+
+
+def _wb_discount_distribution_lines(distribution: Any) -> list[str]:
+    if not isinstance(distribution, dict) or not distribution:
+        return ["- нет данных"]
+    rows: list[tuple[int, int]] = []
+    for discount, count in distribution.items():
+        try:
+            rows.append((int(discount), int(count)))
+        except (TypeError, ValueError):
             continue
-        bucket = "nochange" if action == "не менять" else "changed" if action else ""
-        if not bucket:
-            continue
-        result[bucket][reason] = result[bucket].get(reason, 0) + 1
-    return result
+    if not rows:
+        return ["- нет данных"]
+    return [f"- скидка {discount}%: `{count}` товаров" for discount, count in sorted(rows, reverse=True)]
 
 
 def _wb_latest_history_data(verify: dict[str, Any]) -> dict[str, Any]:
@@ -2239,6 +3662,62 @@ def _valid_wb_actions_plan_id(value: str) -> bool:
     return all(char.isalnum() or char in {"_", "-"} for char in text)
 
 
+def _parse_wb_manual_parameters(value: str) -> tuple[int, int, int] | None:
+    parts = [part for part in re.split(r"[\s,;/|:\-–—]+", str(value or "").strip()) if part]
+    if len(parts) != 3 or not all(part.isdigit() for part in parts):
+        return None
+    values = tuple(int(part) for part in parts)
+    if any(item < 0 or item > 99 for item in values):
+        return None
+    return values
+
+
+def _parse_internal_wb_scheme(value: str) -> tuple[int, int, int] | None:
+    match = re.fullmatch(r"(\d{1,2})-(\d{1,2})-(\d{1,2})", str(value or "").strip())
+    if not match:
+        return None
+    values = tuple(int(part) for part in match.groups())
+    if any(item < 0 or item > 99 for item in values):
+        return None
+    return values
+
+
+def _wb_manual_actions_cancel(*, stage: str) -> TelegramCommandResult:
+    detail = "Ввод параметров отменён." if stage == "parameters" else "Операция отменена."
+    return TelegramCommandResult(
+        command="/wb-actions-manual",
+        ok=True,
+        mode="cancelled",
+        text=f"Ручная акция\n\n{detail} Изменений в WB не выполнял.",
+        reply_markup=WB_MENU_KEYBOARD,
+    )
+
+
+def _wb_manual_actions_reject(plan_run_id: str) -> TelegramCommandResult:
+    if not _valid_wb_actions_plan_id(plan_run_id):
+        return TelegramCommandResult(
+            command="/wb-actions-manual",
+            ok=False,
+            mode="cancelled",
+            blocked_reason="invalid_plan_run_id",
+            text=(
+                "Ручная акция\n\n"
+                "Отклонение не принято: некорректный идентификатор расчёта.\n\n"
+                "Изменений в WB не выполнял."
+            ),
+        )
+    return TelegramCommandResult(
+        command="/wb-actions-manual",
+        ok=True,
+        mode="cancelled",
+        text=(
+            "Ручная акция\n\n"
+            f"Расчёт `{plan_run_id}` отклонён. Скидки в WB не изменены."
+        ),
+        reply_markup=WB_MENU_KEYBOARD,
+    )
+
+
 def _clean_job_id(value: str) -> str:
     text = str(value or "").strip().strip("`")
     if not text.startswith("job_"):
@@ -2284,17 +3763,45 @@ def _normalize_button_command(command: str) -> str:
         "озон эластик": "/elastic",
         "ozon входящие": "/ozon-inbox",
         "озон входящие": "/ozon-inbox",
+        "остатки и поставки ozon": "/ozon-stock-supplies",
+        "ozon остатки и поставки": "/ozon-stock-supplies",
+        "озон остатки и поставки": "/ozon-stock-supplies",
+        "остатки ozon": "/ozon-stock-supplies",
+        "в работу ozon": "/ozon-work-plan",
+        "ozon в работу": "/ozon-work-plan",
+        "озон в работу": "/ozon-work-plan",
+        "отчет за период ozon": "/period-report-ozon",
+        "ozon отчет за период": "/period-report-ozon",
         "wb акции": "/wb-actions",
         "вб акции": "/wb-actions",
         "wildberries акции": "/wb-actions",
+        "ручная акция": "/wb-actions-manual",
+        "wb ручная акция": "/wb-actions-manual",
         "wb аналитика": "/wb-analytics",
         "вб аналитика": "/wb-analytics",
         "wildberries аналитика": "/wb-analytics",
+        "остатки и поставки": "/wb-stock-supplies",
+        "wb остатки и поставки": "/wb-stock-supplies",
+        "вб остатки и поставки": "/wb-stock-supplies",
+        "в работу": "/wb-work-plan",
+        "wb в работу": "/wb-work-plan",
+        "вб в работу": "/wb-work-plan",
         "wb входящие": "/wb-inbox",
         "вб входящие": "/wb-inbox",
         "wildberries входящие": "/wb-inbox",
+        "отчет за период wb": "/period-report-wb",
+        "wb отчет за период": "/period-report-wb",
+        "отчет за период": "/period-report",
     }
     return aliases.get(text, command)
+
+
+def _is_explicit_command_or_button(message: str) -> bool:
+    text = str(message or "").strip()
+    if text.startswith("/"):
+        return True
+    normalized = _normalize_button_command(text)
+    return normalized != text and normalized.startswith("/")
 
 
 def _parse_command(message: str) -> tuple[str, str]:

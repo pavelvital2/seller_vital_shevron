@@ -254,6 +254,7 @@ approved card batch, card create/remove и seller SKU update. Legacy
 - `card-content-audit-packages`;
 - `status-preflight`;
 - `daily-morning-report`;
+- `wb-stock-supply-monitor`;
 - `plan-supply-workbooks`;
 - `send-telegram-report`;
 - `ozon-messenger-workflow`;
@@ -355,6 +356,39 @@ approved card batch, card create/remove и seller SKU update. Legacy
 - runbook: `data/planning/catalog_mapping_runbook.md`;
 - назначение: построить review-план внутренних `internal_sku` для
   `ozon_only`/`wb_only` товаров без изменения артикулов продавца на Ozon/WB.
+
+## Ozon/WB stock and production tasks
+
+`ozon-stock-supply-monitor`:
+
+- command: `ozon-stock-supply-monitor`;
+- mode: `read_only`, risk: `low`, marketplace: `ozon`;
+- Telegram: `/ozon-stock-supplies`, кнопка `Остатки и поставки Ozon`;
+- формирует fresh общий/складской FBO-разрез и активные supply-order с
+  физическими изделиями, ничего в Ozon не меняет;
+- runbook: `data/planning/supply_planning_runbook.md`.
+
+`ozon-production-work-plan`:
+
+- command: `ozon-production-work-plan`;
+- mode: `read_only`, risk: `low`, marketplace: `ozon`;
+- параметры: `mode=capacity|coverage_days`, положительный integer `value`,
+  `cluster_count=1..20`;
+- Telegram: `/ozon-work-plan`, кнопка `В работу Ozon`;
+- выбирает кластеры по чистой кластерной потребности и формирует Excel;
+  поставку Ozon не создает;
+- runbook: `data/planning/supply_planning_runbook.md`.
+
+`wb-production-work-plan`:
+
+- command: `wb-production-work-plan`;
+- mode: `read_only`, risk: `low`, marketplace: `wb`;
+- параметры: `mode=capacity|coverage_days`, положительный integer `value`,
+  `cluster_count=1..6`;
+- Telegram: `/wb-work-plan`, кнопка `В работу` в WB-меню;
+- ранжирует кластеры по чистой локальной потребности, формирует owner-facing
+  Excel и локальный review status, поставку WB не создает;
+- runbook: `data/planning/supply_planning_runbook.md`.
 
 ## Следующий шаг
 

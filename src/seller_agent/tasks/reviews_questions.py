@@ -237,7 +237,7 @@ def _rating_sort_key(value: str) -> tuple[int, str]:
 def _has_problem_text(text: str) -> bool:
     return bool(
         re.search(
-            r"не подош|маленьк|слом|брак|плохо|ужас|вернул|не соответствует|нет в комплект|обман|разочар|так себе|кривоват|криво",
+            r"не подош|маленьк|слом|брак|плохо|ужас|вернул|не соответствует|нет в комплект|обман|разочар|так себе|кривоват|криво|размер не тот|не .*как на фото|жаль.*(?:цвет|оливков)",
             text,
             flags=re.IGNORECASE,
         )
@@ -298,7 +298,35 @@ def draft_review_reply(item: dict[str, Any]) -> str:
     has_media = bool(item.get("has_media"))
     photos_count = _int_value(item.get("photos_count"))
     videos_count = _int_value(item.get("videos_count"))
+    lower = text.lower()
 
+    if rating in {1, 2, 3} and not text:
+        return (
+            "Спасибо за оценку. Нам жаль, что товар не оправдал ожиданий. "
+            "Если вы уточните, что именно вас не устроило, мы учтем замечание."
+        )
+    if re.search(r"долго (?:ждать|ехал|достав)", lower):
+        return (
+            "Спасибо за обратную связь. Сожалеем, что доставка заняла больше времени, чем вы ожидали. "
+            "Срок доставки рассчитывает и показывает маркетплейс."
+        )
+    if re.search(r"размер не тот|размер не подош|не подош.*размер", lower):
+        return (
+            "Спасибо за обратную связь. Сожалеем, что размер не подошел. "
+            "Проверим соответствие размеров в карточке фактическому изделию."
+        )
+    if re.search(r"жаль.*(?:оливков|цвет)|не .*как на фото", lower):
+        return (
+            "Спасибо за отзыв и замечание по цвету. "
+            "Проверим, насколько точно фотографии карточки передают оттенок изделия."
+        )
+    if re.search(r"липуч.*не .*прилип|вырезан неаккурат|кривоват|криво|детализац|брак|слом", lower):
+        return (
+            "Здравствуйте! Спасибо за обратную связь. Нам жаль, что качество изделия вас не устроило. "
+            "Проверим эту позицию и текущую партию с учетом вашего замечания."
+        )
+    if re.search(r"не подош", lower):
+        return "Спасибо за обратную связь. Жаль, что изделие вам не подошло. Учтем ваше замечание."
     if rating in {1, 2, 3} or _has_problem_text(text):
         return (
             "Здравствуйте! Спасибо за обратную связь. Нам жаль, что товар не подошел. "
@@ -314,7 +342,9 @@ def draft_review_reply(item: dict[str, Any]) -> str:
         ]
         return variants[_stable_variant(item, len(variants))]
     if text:
-        lower = text.lower()
+        if has_media:
+            media_word = "фото и видео" if photos_count and videos_count else "видео" if videos_count else "фото"
+            return f"Спасибо за отзыв и {media_word}! Рады, что {word} вам {liked}."
         if "красив" in lower:
             return "Спасибо за отзыв! Рады, что вам понравилось исполнение и внешний вид изделия."
         if "хорош" in lower or "качеств" in lower:
@@ -335,6 +365,40 @@ def draft_review_reply(item: dict[str, Any]) -> str:
     return variants[_stable_variant(item, len(variants))]
 
 
+def _passport_product_size(item: dict[str, Any]) -> str:
+    identity_values = {
+        str(item.get("offer_id") or "").strip(),
+        str(item.get("sku") or "").strip(),
+    }
+    identity_values.discard("")
+    internal_skus = set(identity_values)
+    mapping = _safe_read_json(PROJECT_ROOT / "data" / "catalog" / "unified" / "products.json")
+    rows = mapping if isinstance(mapping, list) else mapping.get("products", []) if isinstance(mapping, dict) else []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        row_ids = {
+            str(row.get("internal_sku") or "").strip(),
+            str(row.get("ozon_offer_id") or "").strip(),
+            str(row.get("ozon_sku") or "").strip(),
+            str(row.get("wb_vendor_code") or "").strip(),
+            str(row.get("wb_nm_id") or "").strip(),
+        }
+        if identity_values.intersection(row_ids):
+            internal_sku = str(row.get("internal_sku") or "").strip()
+            if internal_sku:
+                internal_skus.add(internal_sku)
+    for internal_sku in internal_skus:
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+", internal_sku):
+            continue
+        passport = _safe_read_json(PROJECT_ROOT / "data" / "catalog" / "master_passport" / "approved" / f"{internal_sku}.json")
+        physical = passport.get("physical") if isinstance(passport, dict) and isinstance(passport.get("physical"), dict) else {}
+        product_size = str(physical.get("product_size_mm") or "").strip()
+        if product_size:
+            return product_size
+    return ""
+
+
 def draft_question_reply(item: dict[str, Any]) -> str:
     title = str(item.get("product_title") or "")
     text = str(item.get("text") or "").strip()
@@ -342,11 +406,38 @@ def draft_question_reply(item: dict[str, Any]) -> str:
 
     if re.search(r"налич|сколько|количеств|остат|шт|штук|парт", text, re.IGNORECASE):
         return ""
+    if re.search(r"лев(?:ую|ой)|прав(?:ую|ой)|какую сторону", text, re.IGNORECASE):
+        return (
+            "Здравствуйте! Этот нагрудный шеврон можно разместить с любой стороны - "
+            "ориентируйтесь на расположение ответной части липучки на форме или экипировке."
+        )
+    if re.search(r"что будет.*нос|закон|правомер|можно ли нос", text, re.IGNORECASE):
+        return (
+            "Здравствуйте! Технически шеврон можно закрепить на рюкзаке при наличии ответной части липучки. "
+            "Мы не консультируем по правовым последствиям использования ведомственной символики, "
+            "поэтому перед ношением рекомендуем проверить требования законодательства."
+        )
+    if re.search(r"вместо|убрать|изменить надпись|индивидуальн|свой дизайн|на заказ", text, re.IGNORECASE):
+        return (
+            "Здравствуйте! К сожалению, индивидуальные изменения надписи и дизайна не выполняем. "
+            "В карточке доступен только показанный вариант изделия."
+        )
+    if re.search(r"размер", text, re.IGNORECASE):
+        product_size = _passport_product_size(item)
+        if product_size:
+            sizes = re.findall(r"\d+\s*[*xхX]\s*\d+\s*мм", product_size, flags=re.IGNORECASE)
+            if len(sizes) >= 2 and "комплект" in title.lower():
+                return (
+                    f"Здравствуйте! В комплекте два шеврона: нагрудный размером {sizes[0]} "
+                    f"и шеврон на кепку размером {sizes[1]}."
+                )
+            return f"Здравствуйте! Размер изделия: {product_size}."
+        return ""
     if re.search(r"позывн", text, re.IGNORECASE):
         return ""
     if "липуч" in all_text or "велкро" in all_text:
         return (
-            "Здравствуйте! Да, товар на липучке, если это указано в названии карточки. "
+            "Здравствуйте! Да, шеврон крепится на липучку. "
             "Жесткая часть липучки находится на обратной стороне изделия."
         )
     return ""

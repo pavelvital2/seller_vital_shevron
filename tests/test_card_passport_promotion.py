@@ -5,6 +5,7 @@ from seller_agent.tasks.approved_cards_apply import _run_post_apply_content_veri
 from seller_agent.tasks.card_passport_promotion import (
     ensure_approved_passports_for_batch,
     run_promote_approved_card_passport,
+    validate_wb_departmental_media_policy,
 )
 
 
@@ -82,6 +83,329 @@ def test_promote_approved_card_passport_writes_layer3_passport(tmp_path: Path) -
     assert passport["media"]["target_assets"][0]["url"] == "https://example.test/ozon-1.jpg"
     assert passport["seo"]["ozon_hashtags"] == ["#шеврон", "#шеврон_на_липучке"]
     assert passport["seo"]["wb_tags"] == ["шеврон", "шеврон на липучке"]
+
+
+def test_promote_supports_wb_camel_case_identity_contract(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    audit = _minimal_owner_approved_audit("chev_kit2_nr_rg_pict0006")
+    audit["identity"]["wb"] = {
+        "vendorCode": "rosgkit20009",
+        "nmID": 707892601,
+        "imtID": 723653877,
+    }
+    audit_path = data_dir / "catalog" / "card_audits" / "batch" / "card" / "audit.json"
+    _write_json(audit_path, audit)
+
+    result = run_promote_approved_card_passport(
+        data_dir=data_dir,
+        audit_paths=[audit_path],
+        run_id="promote_wb_camel_case_identity_test",
+        write=True,
+    )
+
+    assert result["overall_status"] == "ok"
+    passport_path = data_dir / "catalog" / "master_passport" / "approved" / "chev_kit2_nr_rg_pict0006.json"
+    passport = json.loads(passport_path.read_text(encoding="utf-8"))
+    assert passport["identity"]["wb_vendor_code"] == "rosgkit20009"
+    assert passport["identity"]["wb_nm_id"] == "707892601"
+
+
+def test_promote_preserves_hashtag_list_and_ozon_create_intent(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    audit = _minimal_owner_approved_audit("chev_kp_prikol_text0014")
+    audit["proposed_final_card"]["ozon_hashtags"] = [
+        "#шеврон_прикол",
+        "#прикольная_нашивка",
+    ]
+    audit["proposed_final_card"]["future_ozon_create"] = {
+        "status": "owner_approved_for_passport_and_future_apply"
+    }
+    audit["seo"] = {
+        "target_query_clusters": [
+            {"query": "шеврон прикол"},
+            {"query": "шеврон на липучке"},
+        ],
+        "confirmed_query_rows": [{"query": "шеврон прикол"}],
+    }
+    audit_path = data_dir / "catalog" / "card_audits" / "batch" / "card" / "audit.json"
+    _write_json(audit_path, audit)
+
+    result = run_promote_approved_card_passport(
+        data_dir=data_dir,
+        audit_paths=[audit_path],
+        run_id="promote_ozon_create_test",
+        write=True,
+    )
+
+    assert result["overall_status"] == "ok"
+    passport_path = data_dir / "catalog" / "master_passport" / "approved" / "chev_kp_prikol_text0014.json"
+    passport = json.loads(passport_path.read_text(encoding="utf-8"))
+    assert passport["seo"]["ozon_hashtags"] == ["#шеврон_прикол", "#прикольная_нашивка"]
+    assert passport["seo"]["search_queries"] == ["шеврон прикол", "шеврон на липучке"]
+    assert "ozon_card_create" in passport["safety"]["dangerous_actions"]
+
+
+def test_promote_preserves_separate_ozon_and_wb_photo_sets(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    audit = _minimal_owner_approved_audit("chev_kit2_nr_mvd_pict0004")
+    audit["media"] = {
+        "target_marketplace_photo_set": [
+            {"position": 1, "source": "WB 1", "source_url": "https://example.test/wb1.webp"}
+        ],
+        "target_ozon_photo_set": [
+            {"position": 1, "source": "Ozon 1", "source_url": "https://example.test/ozon1.jpg"},
+            {"position": 2, "source": "Ozon 2", "source_url": "https://example.test/ozon2.jpg"},
+        ],
+        "target_wb_photo_set": [
+            {"position": 1, "source": "WB 1", "source_url": "https://example.test/wb1.webp"}
+        ],
+    }
+    audit["proposed_final_card"]["target_physical_params"] = {
+        "product_size_mm": "75*100 мм",
+        "ozon_package_mm": "100*100*20 мм",
+        "wb_package_cm": "10*10*2 см",
+        "weight_g": 20,
+        "item_weight_g": 10,
+        "pack_qty": 2,
+    }
+    audit_path = data_dir / "catalog" / "card_audits" / "batch" / "card" / "audit.json"
+    _write_json(audit_path, audit)
+
+    result = run_promote_approved_card_passport(
+        data_dir=data_dir,
+        audit_paths=[audit_path],
+        run_id="promote_separate_media_test",
+        write=True,
+    )
+
+    assert result["overall_status"] == "ok"
+    passport_path = data_dir / "catalog" / "master_passport" / "approved" / "chev_kit2_nr_mvd_pict0004.json"
+    passport = json.loads(passport_path.read_text(encoding="utf-8"))
+    assert len(passport["media"]["target_ozon_photo_set"]) == 2
+    assert len(passport["media"]["target_wb_photo_set"]) == 1
+    assert passport["media"]["target_wb_photo_set"][0]["source"] == "WB 1"
+    assert passport["physical"]["item_weight_g"] == 10
+    assert passport["physical"]["package_weight_g"] == 20
+
+
+def test_wb_departmental_media_policy_allows_neutral_wearing_slide() -> None:
+    passport = {
+        "media": {
+            "target_wb_photo_set": [
+                {"position": 1, "source": "WB 1"},
+                {"position": 5, "source": "Ozon 5", "role": "варианты ношения"},
+            ],
+            "wb_departmental_symbol_policy": {
+                "media_apply_status": "allowed_verified",
+                "rule": "Symbol-bearing WB images are protected; neutral images may transfer.",
+            },
+        }
+    }
+
+    result = validate_wb_departmental_media_policy(passport)
+
+    assert result["status"] == "ok"
+    assert result["media_apply_status"] == "allowed_verified"
+
+
+def test_wb_departmental_media_policy_blocks_unprotected_symbol_assets() -> None:
+    passport = {
+        "media": {
+            "target_wb_photo_set": [{"position": 1, "source": "WB 1"}],
+            "wb_departmental_symbol_policy": {
+                "media_apply_status": "blocked_pending_watermarked_assets",
+                "rule": "Symbol-bearing WB images require watermark or retouch.",
+            },
+        }
+    }
+
+    result = validate_wb_departmental_media_policy(passport)
+
+    assert result["status"] == "blocked"
+    assert result["errors"] == ["wb_media_update_blocked_pending_watermarked_assets"]
+
+
+def test_promote_normalizes_description_alias_and_item_weight_each(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    audit = _minimal_owner_approved_audit("chev_kit2_nr_rg_pict0007")
+    proposed = audit["proposed_final_card"]
+    canonical_description = proposed["canonical_description"]
+    proposed["ozon_description"] = "same_as_canonical_description"
+    proposed["wb_description"] = "same_as_canonical_description"
+    proposed["target_physical_params"] = {
+        "product_size_mm_each": "75*100",
+        "package_size_mm": "100*100*20",
+        "wb_package_cm": "10*10*2",
+        "item_weight_g_each": 10,
+        "package_weight_g": 20,
+        "pack_qty": 2,
+    }
+    audit_path = data_dir / "catalog" / "card_audits" / "batch" / "card" / "audit.json"
+    _write_json(audit_path, audit)
+
+    result = run_promote_approved_card_passport(
+        data_dir=data_dir,
+        audit_paths=[audit_path],
+        run_id="promote_description_alias_test",
+        write=True,
+    )
+
+    assert result["overall_status"] == "ok"
+    passport_path = data_dir / "catalog" / "master_passport" / "approved" / "chev_kit2_nr_rg_pict0007.json"
+    passport = json.loads(passport_path.read_text(encoding="utf-8"))
+    assert passport["content"]["ozon_description"] == canonical_description
+    assert passport["content"]["wb_description"] == canonical_description
+    assert passport["physical"]["item_weight_g"] == 10
+    assert passport["physical"]["package_weight_g"] == 20
+
+
+def test_promote_supports_fresh_auditor_physical_contract(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    audit = _minimal_owner_approved_audit("chev_kit2_nr_mvd_pict0006")
+    proposed = audit["proposed_final_card"]
+    proposed.pop("target_physical_params")
+    proposed.pop("color")
+    proposed.pop("color_name")
+    proposed.pop("material")
+    proposed.pop("composition")
+    proposed.pop("ozon_model_name")
+    proposed["physical"] = {
+        "product_size_mm": "75*100 мм",
+        "physical_item_count": 2,
+        "item_weight_g": 10,
+        "package_weight_g": 20,
+        "material": "Габардин",
+        "composition": ["полиэстер", "нейлон"],
+        "colors": ["оливковый", "чёрный"],
+        "color_name": "Полиция МВД ГИБДД/ДПС, олива",
+    }
+    proposed["ozon_attributes"] = {
+        "package_dimensions_mm": "100*100*20 мм",
+        "package_weight_g": 20,
+        "quantity_in_package": 2,
+        "units_per_product": 2,
+        "model": "МВД",
+        "hashtags": ["#комплект_шевронов_мвд", "#шеврон_на_липучке_мвд"],
+    }
+    proposed["ozon_hashtags"] = "30 релевантных хештегов из proposed_final_card.ozon_attributes.hashtags"
+    proposed["wb_attributes"] = {"package_dimensions_cm": "10*10*2 см"}
+    audit["media"]["target_ozon_photo_set"] = [1, 2]
+    audit["media"]["target_wb_photo_set"] = [1]
+    audit_path = data_dir / "catalog" / "card_audits" / "batch" / "card" / "audit.json"
+    _write_json(audit_path, audit)
+
+    result = run_promote_approved_card_passport(
+        data_dir=data_dir,
+        audit_paths=[audit_path],
+        run_id="promote_fresh_contract_test",
+        write=True,
+    )
+
+    assert result["overall_status"] == "ok"
+    passport_path = data_dir / "catalog" / "master_passport" / "approved" / "chev_kit2_nr_mvd_pict0006.json"
+    passport = json.loads(passport_path.read_text(encoding="utf-8"))
+    assert passport["physical"]["product_size_mm"] == "75*100 мм"
+    assert passport["physical"]["package_dimensions_ozon_mm"] == "100*100*20 мм"
+    assert passport["physical"]["package_dimensions_wb_cm"] == "10*10*2 см"
+    assert passport["physical"]["package_weight_g"] == 20
+    assert passport["physical"]["pack_qty"] == 2
+    ozon_attributes = {row["field"]: row["value"] for row in passport["ozon"]["attributes"]}
+    assert ozon_attributes["Цвет товара"] == "оливковый, чёрный"
+    assert ozon_attributes["Название цвета"] == "Полиция МВД ГИБДД/ДПС, олива"
+    assert passport["seo"]["ozon_hashtags"] == [
+        "#комплект_шевронов_мвд",
+        "#шеврон_на_липучке_мвд",
+    ]
+    assert passport["grouping"]["target_group_key"] == "МВД"
+    assert passport["media"]["target_ozon_photo_set"] == [
+        {"position": 1, "source": "OZON 1"},
+        {"position": 2, "source": "OZON 2"},
+    ]
+    assert passport["media"]["target_wb_photo_set"] == [{"position": 1, "source": "WB 1"}]
+
+
+def test_promote_supports_physical_parameters_contract(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    audit = _minimal_owner_approved_audit("chev_kit2_nr_mvd_pict0005")
+    proposed = audit["proposed_final_card"]
+    proposed.pop("target_physical_params")
+    proposed.pop("material")
+    proposed.pop("composition")
+    proposed.pop("ozon_model_name")
+    proposed["physical_parameters"] = {
+        "product_size_mm": "75*100 мм каждый",
+        "pack_qty": 2,
+        "item_weight_g": 10,
+        "package_weight_g": 20,
+        "package_size_ozon_mm": "100*100*20 мм",
+        "package_size_wb_cm": "10*10*2 см",
+        "material": "Габардин",
+        "composition": "полиэстер, нейлон",
+    }
+    proposed["ozon_attributes"] = {"9048_model": "МВД"}
+    audit_path = data_dir / "catalog" / "card_audits" / "batch" / "card" / "audit.json"
+    _write_json(audit_path, audit)
+
+    result = run_promote_approved_card_passport(
+        data_dir=data_dir,
+        audit_paths=[audit_path],
+        run_id="promote_physical_parameters_test",
+        write=True,
+    )
+
+    assert result["overall_status"] == "ok"
+    passport_path = data_dir / "catalog" / "master_passport" / "approved" / "chev_kit2_nr_mvd_pict0005.json"
+    passport = json.loads(passport_path.read_text(encoding="utf-8"))
+    assert passport["physical"]["product_size_mm"] == "75*100 мм"
+    assert passport["physical"]["package_dimensions_ozon_mm"] == "100*100*20 мм"
+    assert passport["physical"]["package_dimensions_wb_cm"] == "10*10*2 см"
+    assert passport["physical"]["item_weight_g"] == 10
+    assert passport["physical"]["package_weight_g"] == 20
+    assert passport["physical"]["pack_qty"] == 2
+    assert passport["materials"]["material"] == "Габардин"
+    assert passport["materials"]["composition"] == ["полиэстер", "нейлон"]
+    assert passport["grouping"]["target_group_key"] == "МВД"
+
+
+def test_promote_supports_each_size_and_wb_dimensions_contract(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    audit = _minimal_owner_approved_audit("chev_kit2_nr_rg_pict0003")
+    proposed = audit["proposed_final_card"]
+    proposed.pop("target_physical_params")
+    proposed["physical"] = {
+        "product_size_mm_each": "75*100",
+        "physical_item_count": 2,
+        "item_weight_g": 10,
+        "package_weight_g": 20,
+        "package_size_mm": "100*100*20",
+    }
+    proposed["wb_characteristics"] = {
+        "dimensions_cm": {
+            "length": 10,
+            "width": 10,
+            "height": 2,
+            "weight_brutto_kg": 0.02,
+        }
+    }
+    audit_path = data_dir / "catalog" / "card_audits" / "batch" / "card" / "audit.json"
+    _write_json(audit_path, audit)
+
+    result = run_promote_approved_card_passport(
+        data_dir=data_dir,
+        audit_paths=[audit_path],
+        run_id="promote_each_size_wb_dimensions_test",
+        write=True,
+    )
+
+    assert result["overall_status"] == "ok"
+    passport_path = data_dir / "catalog" / "master_passport" / "approved" / "chev_kit2_nr_rg_pict0003.json"
+    passport = json.loads(passport_path.read_text(encoding="utf-8"))
+    assert passport["physical"]["product_size_mm"] == "75*100 мм"
+    assert passport["physical"]["package_dimensions_ozon_mm"] == "100*100*20 мм"
+    assert passport["physical"]["package_dimensions_wb_cm"] == "10*10*2 см"
+    assert passport["physical"]["item_weight_g"] == 10
+    assert passport["physical"]["package_weight_g"] == 20
+    assert passport["physical"]["pack_qty"] == 2
 
 
 def test_ensure_approved_passports_for_batch_promotes_missing_only(tmp_path: Path) -> None:

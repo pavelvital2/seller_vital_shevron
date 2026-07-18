@@ -128,26 +128,34 @@ def test_sync_approved_card_catalog_layers_updates_legacy_master_and_removes_wb_
     assert passport["approval"]["marketplace_apply"]["catalog_sync_run_id"] == "run_1"
 
 
-def test_passport_wants_ozon_create_for_wb_only_owner_approved_passport(tmp_path: Path) -> None:
+def test_passport_wants_ozon_create_only_with_explicit_owner_approved_action(tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     sku = "chev_kit2_pz_ng_text0001"
-    _write_json(
-        data_dir / "catalog" / "master_passport" / "approved" / f"{sku}.json",
-        {
-            "identity": {
-                "internal_sku": sku,
-                "ozon_offer_id": "",
-                "ozon_product_id": "",
-                "wb_vendor_code": sku,
-                "wb_nm_id": "123456789",
-            }
+    passport_path = data_dir / "catalog" / "master_passport" / "approved" / f"{sku}.json"
+    passport = {
+        "identity": {
+            "internal_sku": sku,
+            "ozon_offer_id": "",
+            "ozon_product_id": "",
+            "wb_vendor_code": sku,
+            "wb_nm_id": "123456789",
         },
-    )
+        "safety": {
+            "dangerous_actions": [
+                "card_content_update",
+                "seller_sku_update",
+            ]
+        },
+    }
+    _write_json(passport_path, passport)
+
+    assert _passport_wants_ozon_create(data_dir, sku) is False
+
+    passport["safety"]["dangerous_actions"].append("ozon_card_create")
+    _write_json(passport_path, passport)
 
     assert _passport_wants_ozon_create(data_dir, sku) is True
 
-    passport_path = data_dir / "catalog" / "master_passport" / "approved" / f"{sku}.json"
-    passport = json.loads(passport_path.read_text(encoding="utf-8"))
     passport["identity"]["ozon_offer_id"] = sku
     _write_json(passport_path, passport)
 

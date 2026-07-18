@@ -10,6 +10,7 @@ from seller_agent.bot.dispatcher import dispatch_callback, dispatch_message
 from seller_agent.bot.job_notifier import notify_telegram_job_result
 from seller_agent.bot.runtime_jobs import dispatch_runtime_job_message
 from seller_agent.bot.telegram_runner import (
+    TelegramRunnerError,
     load_telegram_bot_token,
     poll_loop,
     poll_once,
@@ -84,6 +85,389 @@ def test_bot_marketplace_buttons_show_submenus() -> None:
     assert wb.command == "/wb"
     assert wb.reply_markup["keyboard"][0][0]["text"] == "WB акции"
     assert wb.reply_markup["keyboard"][1][0]["text"] == "WB аналитика"
+    assert ozon.reply_markup["keyboard"][1][0]["text"] == "Отчёт за период Ozon"
+    assert ozon.reply_markup["keyboard"][2][0]["text"] == "Остатки и поставки Ozon"
+    assert ozon.reply_markup["keyboard"][3][0]["text"] == "В работу Ozon"
+    assert wb.reply_markup["keyboard"][2][0]["text"] == "Остатки и поставки"
+    assert wb.reply_markup["keyboard"][3][0]["text"] == "В работу"
+    assert wb.reply_markup["keyboard"][4][0]["text"] == "Отчёт за период WB"
+
+
+def test_bot_wb_work_plan_collects_value_and_confirms_parameters() -> None:
+    start = dispatch_message("В работу")
+    assert start.ok is True
+    assert start.command == "/wb-work-plan"
+    assert start.reply_markup["inline_keyboard"][0][0]["callback_data"] == "wbwp_mode:c"
+
+    capacity = dispatch_callback("wbwp_mode:c")
+    assert capacity.conversation_state["stage"] == "wb_work_capacity_input"
+    clusters = dispatch_message("1000", conversation_state=capacity.conversation_state)
+    assert clusters.conversation_state == {
+        "stage": "wb_work_clusters_input",
+        "mode_code": "c",
+        "value": 1000,
+    }
+    confirmation = dispatch_message("4", conversation_state=clusters.conversation_state)
+    assert "1000 физических изделий" in confirmation.text
+    assert "кластеров назначения: `4`" in confirmation.text
+    assert confirmation.reply_markup["inline_keyboard"][0][0]["callback_data"] == "wbwp_run:c:1000:4"
+
+    days = dispatch_callback("wbwp_mode:d")
+    assert days.conversation_state["stage"] == "wb_work_days_input"
+    days_clusters = dispatch_message("30", conversation_state=days.conversation_state)
+    days_confirmation = dispatch_message("6", conversation_state=days_clusters.conversation_state)
+    assert "30 дней" in days_confirmation.text
+    assert days_confirmation.reply_markup["inline_keyboard"][0][0]["callback_data"] == "wbwp_run:d:30:6"
+
+
+def test_bot_ozon_work_plan_collects_value_clusters_and_confirms_parameters() -> None:
+    start = dispatch_message("В работу Ozon")
+    assert start.ok is True
+    assert start.command == "/ozon-work-plan"
+    assert start.reply_markup["inline_keyboard"][0][0]["callback_data"] == "ozwp_mode:c"
+
+    capacity = dispatch_callback("ozwp_mode:c")
+    assert capacity.conversation_state["stage"] == "ozon_work_capacity_input"
+    clusters = dispatch_message("1400", conversation_state=capacity.conversation_state)
+    assert clusters.conversation_state == {
+        "stage": "ozon_work_clusters_input",
+        "mode_code": "c",
+        "value": 1400,
+    }
+    confirmation = dispatch_message("5", conversation_state=clusters.conversation_state)
+    assert "1400 физических изделий" in confirmation.text
+    assert "кластеров назначения: `5`" in confirmation.text
+    assert confirmation.reply_markup["inline_keyboard"][0][0]["callback_data"] == "ozwp_run:c:1400:5"
+
+
+def test_bot_ozon_work_plan_confirmation_runs_cluster_local_read_only_workflow(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from seller_agent.bot import commands
+    from seller_agent.core.workflow_runner import WorkflowRunResult
+
+    calls: list[tuple[str, dict]] = []
+
+    class FakeWorkflowRunner:
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+        def run_read_only(self, task: str, *, inputs: dict) -> WorkflowRunResult:
+            calls.append((task, inputs))
+            return WorkflowRunResult(
+                task=task,
+                command=task,
+                title="Ozon production plan",
+                ok=True,
+                status="warning",
+                mode="read_only",
+                risk="low",
+                summary={
+                    "run_id": "ozon_production_work_plan_test",
+                    "metrics": {
+                        "marketplace_units": 90,
+                        "physical_pieces": 100,
+                        "articles": 10,
+                        "selected_clusters": 3,
+                        "control_rows": 1,
+                        "unused_capacity_physical": 0,
+                    },
+                    "cluster_totals": [
+                        {"priority": 1, "cluster": "Ростов", "marketplace_units": 40, "physical_pieces": 50}
+                    ],
+                    "warnings": ["Одна строка требует проверки."],
+                },
+                artifacts={"report": str(tmp_path / "plan.xlsx")},
+            )
+
+    monkeypatch.setattr(commands, "WorkflowRunner", FakeWorkflowRunner)
+    result = dispatch_callback("ozwp_run:c:100:3", data_dir=tmp_path)
+
+    assert result.ok is True
+    assert "физических изделий: `100`" in result.text
+    assert "Утвердить в работу" == result.reply_markup["inline_keyboard"][0][0]["text"]
+    assert calls == [
+        ("ozon-production-work-plan", {"mode": "capacity", "value": 100, "cluster_count": 3})
+    ]
+
+
+def test_bot_wb_work_plan_confirmation_runs_read_only_workflow(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from seller_agent.bot import commands
+    from seller_agent.core.workflow_runner import WorkflowRunResult
+
+    calls: list[tuple[str, dict]] = []
+
+    class FakeWorkflowRunner:
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+        def run_read_only(self, task: str, *, inputs: dict) -> WorkflowRunResult:
+            calls.append((task, inputs))
+            return WorkflowRunResult(
+                task=task,
+                command=task,
+                title="WB production plan",
+                ok=True,
+                status="warning",
+                mode="read_only",
+                risk="low",
+                summary={
+                    "run_id": "wb_production_work_plan_test",
+                    "metrics": {
+                        "marketplace_units": 80,
+                        "physical_pieces": 100,
+                        "articles": 10,
+                        "regions": 3,
+                        "selected_clusters": 3,
+                        "control_rows": 1,
+                        "unused_capacity_physical": 0,
+                    },
+                    "region_totals": [
+                        {"priority": 1, "region": "Центральный", "marketplace_units": 40, "physical_pieces": 50}
+                    ],
+                    "warnings": ["Одна строка требует проверки."],
+                },
+                artifacts={"report": str(tmp_path / "plan.xlsx")},
+            )
+
+    monkeypatch.setattr(commands, "WorkflowRunner", FakeWorkflowRunner)
+    result = dispatch_callback("wbwp_run:c:100:3", data_dir=tmp_path)
+
+    assert result.ok is True
+    assert "физических изделий: `100`" in result.text
+    assert "Утвердить в работу" == result.reply_markup["inline_keyboard"][0][0]["text"]
+    assert calls == [
+        ("wb-production-work-plan", {"mode": "capacity", "value": 100, "cluster_count": 3})
+    ]
+
+
+def test_bot_wb_stock_supplies_builds_fresh_report(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from seller_agent.bot import commands
+    from seller_agent.core.workflow_runner import WorkflowRunResult
+
+    calls: list[dict] = []
+    summary = {
+        "run_id": "wb_stock_supply_monitor_test",
+        "overall_status": "warning",
+        "metrics": {
+            "stocks": {
+                "quantity": 500,
+                "physical_quantity": 560,
+                "in_way_to_client": 3,
+                "in_way_from_client": 401,
+            },
+            "supplies": {
+                "count": 4,
+                "quantity": 884,
+                "physical_quantity": 950,
+                "by_status": {
+                    "1": {"status": "Не запланировано", "count": 0, "quantity": 0},
+                    "2": {"status": "Запланировано", "count": 0, "quantity": 0},
+                    "3": {"status": "Отгрузка разрешена", "count": 3, "quantity": 566},
+                    "4": {"status": "Идет приемка", "count": 1, "quantity": 318},
+                    "6": {"status": "Выгружено на воротах", "count": 0, "quantity": 0},
+                },
+            },
+            "warehouse_count": 5,
+        },
+        "active_supplies": [
+            {
+                "supply_id": "40816383",
+                "warehouse_name": "Склад Шушары",
+                "status": "Отгрузка разрешена",
+                "quantity": 136,
+                "supply_date": "2026-07-20",
+            }
+        ],
+        "anomalies": [
+            {
+                "message": "Электросталь: поле inWayFromClient требует сверки и не является подтвержденным возвратом."
+            }
+        ],
+        "artifacts": {"report": str(tmp_path / "report.md")},
+    }
+
+    class FakeWorkflowRunner:
+        def __init__(self, **kwargs: object) -> None:
+            calls.append({"init": kwargs})
+
+        def run_read_only(self, task_name: str, *, inputs: dict | None = None) -> WorkflowRunResult:
+            calls.append({"task_name": task_name, "inputs": inputs})
+            return WorkflowRunResult(
+                task="wb-stock-supply-monitor",
+                command="wb-stock-supply-monitor",
+                title="WB stock and supply monitor",
+                ok=True,
+                status="warning",
+                mode="read_only",
+                risk="low",
+                summary=summary,
+                artifacts=summary["artifacts"],
+            )
+
+    monkeypatch.setattr(commands, "WorkflowRunner", FakeWorkflowRunner)
+    result = dispatch_message("Остатки и поставки", data_dir=tmp_path)
+
+    assert result.ok is True
+    assert result.command == "/wb-stock-supplies"
+    assert "Отгрузка разрешена: поставок `3` / `566` ед." in result.text
+    assert "Идет приемка: поставок `1` / `318` ед." in result.text
+    assert "активные поставки не прибавляются" in result.text
+    assert calls[1] == {"task_name": "wb-stock-supply-monitor", "inputs": None}
+
+
+def test_bot_ozon_stock_supplies_builds_fresh_report(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from seller_agent.bot import commands
+    from seller_agent.core.workflow_runner import WorkflowRunResult
+
+    calls: list[dict] = []
+    summary = {
+        "run_id": "ozon_stock_supply_monitor_test",
+        "overall_status": "warning",
+        "metrics": {
+            "general_fbo": {"present": 500, "physical_present": 560, "reserved": 10},
+            "warehouses": {"free_to_sell": 490, "physical_free_to_sell": 550, "promised": 20},
+            "supplies": {
+                "orders": 2,
+                "supplies": 3,
+                "quantity": 100,
+                "physical_quantity": 130,
+                "confirmed_inbound_quantity": 80,
+                "confirmed_inbound_physical": 110,
+                "virtual_orders": 1,
+            },
+            "warehouse_count": 5,
+            "reconciliation": {"difference": 0},
+        },
+        "active_supplies": [
+            {
+                "order_number": "10001",
+                "state_label": "В пути",
+                "storage_warehouse": "ТВЕРЬ_РФЦ",
+                "quantity": 80,
+            }
+        ],
+        "warnings": ["Источники расходятся на 10 ед."],
+        "artifacts": {"report": str(tmp_path / "ozon_report.md")},
+    }
+
+    class FakeWorkflowRunner:
+        def __init__(self, **kwargs: object) -> None:
+            calls.append({"init": kwargs})
+
+        def run_read_only(self, task_name: str, *, inputs: dict | None = None) -> WorkflowRunResult:
+            calls.append({"task_name": task_name, "inputs": inputs})
+            return WorkflowRunResult(
+                task="ozon-stock-supply-monitor",
+                command="ozon-stock-supply-monitor",
+                title="Ozon stock and supply monitor",
+                ok=True,
+                status="warning",
+                mode="read_only",
+                risk="low",
+                summary=summary,
+                artifacts=summary["artifacts"],
+            )
+
+    monkeypatch.setattr(commands, "WorkflowRunner", FakeWorkflowRunner)
+    result = dispatch_message("Остатки и поставки Ozon", data_dir=tmp_path)
+
+    assert result.ok is True
+    assert result.command == "/ozon-stock-supplies"
+    assert "общий present: `500`" in result.text
+    assert "подтвержденный inbound: `80`" in result.text
+    assert "общий и складской остатки не складываются" in result.text
+    assert calls[1] == {"task_name": "ozon-stock-supply-monitor", "inputs": None}
+
+
+def test_period_report_button_flow_and_custom_dates() -> None:
+    start = dispatch_message("Отчёт за период Ozon")
+    assert start.ok is True
+    assert start.reply_markup["inline_keyboard"][0][0]["callback_data"] == "mpr_type:o:s"
+
+    report_type = dispatch_callback("mpr_type:o:f")
+    assert "Выберите период" in report_type.text
+    custom = dispatch_callback("mpr_period:o:f:c")
+    assert custom.conversation_state["stage"] == "period_report_custom_from"
+
+    date_from = dispatch_message("01.07.2026", conversation_state=custom.conversation_state)
+    assert date_from.conversation_state["stage"] == "period_report_custom_to"
+    confirmation = dispatch_message("16.07.2026", conversation_state=date_from.conversation_state)
+    callback = confirmation.reply_markup["inline_keyboard"][0][0]["callback_data"]
+    assert callback == "mpr_run:o:f:2026-07-01:2026-07-16"
+    assert "Финансовый" in confirmation.text
+
+
+def test_period_report_confirmation_runs_read_only_workflow(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from seller_agent.bot import commands
+    from seller_agent.core.workflow_runner import WorkflowRunResult
+
+    calls: list[tuple[str, dict]] = []
+
+    class FakeWorkflowRunner:
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+        def run_read_only(self, task: str, *, inputs: dict) -> WorkflowRunResult:
+            calls.append((task, inputs))
+            return WorkflowRunResult(
+                task=task,
+                command=task,
+                title="Period report",
+                ok=True,
+                status="ok",
+                mode="read_only",
+                risk="low",
+                summary={
+                    "run_id": "marketplace_period_report_wb_test",
+                    "metrics": {
+                        "orders": 10,
+                        "order_amount": 4000,
+                        "buyout_units": 8,
+                        "physical_pieces": 12,
+                        "returns": 1,
+                        "cancellations": 2,
+                        "gross": 3500,
+                        "expenses": 1000,
+                        "net": 2500,
+                        "net_per_piece": 208.33,
+                    },
+                    "warnings": [],
+                },
+                artifacts={"report": str(tmp_path / "report.md")},
+            )
+
+    monkeypatch.setattr(commands, "WorkflowRunner", FakeWorkflowRunner)
+    result = dispatch_callback("mpr_run:w:a:2026-07-01:2026-07-16", data_dir=tmp_path)
+
+    assert result.ok is True
+    assert "12` физических изделий" in result.text
+    assert "2 500" in result.text
+    assert result.artifacts["report"].endswith("report.md")
+    assert calls == [
+        (
+            "marketplace-period-report",
+            {
+                "marketplace": "wb",
+                "report_type": "full",
+                "date_from": "2026-07-01",
+                "date_to": "2026-07-16",
+            },
+        )
+    ]
 
 
 def test_bot_wb_analytics_builds_fresh_report(
@@ -787,11 +1171,61 @@ def test_bot_wb_actions_builds_plan_and_apply_button(
     csv_path = run_dir / "wb-discount-calculation-active-actions-70-55-55.csv"
     run_dir.mkdir(parents=True)
     with csv_path.open("w", encoding="utf-8-sig", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=["Действие", "Причина"], delimiter=";")
+        fieldnames = [
+            "Акций",
+            "Статусы в файлах акций",
+            "Финальная скидка",
+            "Скидка к загрузке",
+            "Осталось до целевой, п.п.",
+            "Действие",
+            "Причина",
+        ]
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter=";")
         writer.writeheader()
-        writer.writerow({"Действие": "снизить скидку", "Причина": "скидка до порога <= 70%"})
-        writer.writerow({"Действие": "снизить скидку", "Причина": "скидка до порога > 70% -> 55%"})
-        writer.writerow({"Действие": "не менять", "Причина": "товара нет в активных акциях -> 55%"})
+        writer.writerow(
+            {
+                "Акций": "2",
+                "Статусы в файлах акций": "Да, Нет",
+                "Финальная скидка": "60",
+                "Скидка к загрузке": "60",
+                "Осталось до целевой, п.п.": "0",
+                "Действие": "не менять",
+                "Причина": "скидка до порога <= 70%",
+            }
+        )
+        writer.writerow(
+            {
+                "Акций": "1",
+                "Статусы в файлах акций": "Да",
+                "Финальная скидка": "55",
+                "Скидка к загрузке": "55",
+                "Осталось до целевой, п.п.": "0",
+                "Действие": "снизить скидку",
+                "Причина": "скидка до порога > 70% -> 55%",
+            }
+        )
+        writer.writerow(
+            {
+                "Акций": "0",
+                "Статусы в файлах акций": "",
+                "Финальная скидка": "55",
+                "Скидка к загрузке": "55",
+                "Осталось до целевой, п.п.": "0",
+                "Действие": "снизить скидку",
+                "Причина": "товара нет в активных акциях -> 55%",
+            }
+        )
+        writer.writerow(
+            {
+                "Акций": "1",
+                "Статусы в файлах акций": "Нет",
+                "Финальная скидка": "55",
+                "Скидка к загрузке": "55",
+                "Осталось до целевой, п.п.": "0",
+                "Действие": "снизить скидку",
+                "Причина": "скидка до порога > 70% -> 55%",
+            }
+        )
 
     def fake_plan(**kwargs: object) -> dict:
         assert kwargs["data_dir"] == tmp_path
@@ -800,15 +1234,15 @@ def test_bot_wb_actions_builds_plan_and_apply_button(
             "run_id": "wb_actions_discount_plan_70-55-55_test",
             "summary": {
                 "scheme": "70-55-55",
-                "total_goods": 10,
-                "in_promos": 8,
-                "outside_promos": 2,
-                "multiple_promos": 4,
-                "changed_rows": 2,
-                "to_change": 2,
+                "total_goods": 4,
+                "in_promos": 3,
+                "outside_promos": 1,
+                "multiple_promos": 1,
+                "changed_rows": 3,
+                "to_change": 3,
                 "increase": 0,
-                "decrease": 2,
-                "no_change": 8,
+                "decrease": 3,
+                "no_change": 1,
                 "active_promos": 3,
                 "future_promos": 1,
             },
@@ -826,8 +1260,15 @@ def test_bot_wb_actions_builds_plan_and_apply_button(
     assert result.ok is True
     assert result.mode == "dry_run"
     assert "WB акции 70-55-55" in result.text
-    assert "изменить скидку: `2`" in result.text
-    assert "участие в акции с меньшей требуемой скидкой: `1`" in result.text
+    assert "всего товаров в магазине: `4`" in result.text
+    assert "подходят под доступные активные акции: `3`" in result.text
+    assert "участвуют в акциях: `2`" in result.text
+    assert "не участвуют в акциях: `2`" in result.text
+    assert "проходят заданный порог 70%: `1`" in result.text
+    assert "исключатся из текущих акций: `1`" in result.text
+    assert "не будут участвовать в акциях: `3`" in result.text
+    assert "скидка 60%: `1` товаров" in result.text
+    assert "скидка 55%: `3` товаров" in result.text
     assert result.reply_markup["inline_keyboard"][0][0]["callback_data"] == "wba_apply:wb_actions_discount_plan_70-55-55_test"
     assert result.artifacts["report"] == str(report)
 
@@ -865,6 +1306,94 @@ def test_bot_wb_actions_plan_without_write_rows_has_no_apply_button(
     assert result.ok is True
     assert "Изменений к применению нет" in result.text
     assert result.reply_markup == {}
+
+
+def test_bot_wb_manual_actions_collects_and_confirms_named_parameters() -> None:
+    start = dispatch_message("Ручная акция")
+
+    assert start.ok is True
+    assert start.command == "/wb-actions-manual"
+    assert start.conversation_state == {"stage": "wb_manual_scheme_input"}
+    assert "`порог  скидка_после_порога  скидка_вне_акций`" in start.text
+
+    invalid = dispatch_message("57 55", conversation_state=start.conversation_state)
+    assert invalid.ok is False
+    assert invalid.blocked_reason == "invalid_wb_manual_parameters"
+    assert invalid.conversation_state == start.conversation_state
+
+    review = dispatch_message("57 52 48", conversation_state=start.conversation_state)
+    assert review.ok is True
+    assert review.mode == "review"
+    assert "порог акции: `57%`" in review.text
+    assert "после превышения порога: `52%`" in review.text
+    assert "вне активных акций: `48%`" in review.text
+    assert review.conversation_state == {}
+    assert (
+        review.reply_markup["inline_keyboard"][0][0]["callback_data"]
+        == "wbam_confirm:57-48-52"
+    )
+    assert review.reply_markup["inline_keyboard"][1][0]["callback_data"] == "wbam_cancel"
+
+
+def test_bot_wb_manual_actions_confirm_builds_exact_plan(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from seller_agent.bot import commands
+
+    calls: list[dict] = []
+
+    def fake_plan(**kwargs: object) -> dict:
+        calls.append(dict(kwargs))
+        return {
+            "run_id": "wb_actions_discount_plan_57-48-52_test",
+            "summary": {
+                "scheme": "57-48-52",
+                "total_goods": 10,
+                "in_promos": 8,
+                "outside_promos": 2,
+                "multiple_promos": 4,
+                "changed_rows": 3,
+                "to_change": 3,
+                "increase": 1,
+                "decrease": 2,
+                "no_change": 7,
+                "active_promos": 3,
+                "future_promos": 1,
+            },
+            "artifacts": {},
+        }
+
+    monkeypatch.setattr(commands, "run_wb_actions_discount_plan", fake_plan)
+
+    result = dispatch_callback("wbam_confirm:57-48-52", data_dir=tmp_path)
+
+    assert result.ok is True
+    assert result.mode == "dry_run"
+    assert calls[0]["scheme_text"] == "57-48-52"
+    assert "порог акции: `57%`" in result.text
+    assert "после превышения порога: `52%`" in result.text
+    assert "вне активных акций: `48%`" in result.text
+    assert (
+        result.reply_markup["inline_keyboard"][0][0]["callback_data"]
+        == "wba_apply:wb_actions_discount_plan_57-48-52_test"
+    )
+    assert (
+        result.reply_markup["inline_keyboard"][1][0]["callback_data"]
+        == "wbam_reject:wb_actions_discount_plan_57-48-52_test"
+    )
+
+
+def test_bot_wb_manual_actions_cancel_and_reject_are_noop() -> None:
+    cancelled = dispatch_callback("wbam_cancel")
+    rejected = dispatch_callback("wbam_reject:wb_actions_discount_plan_57-48-52_test")
+
+    assert cancelled.ok is True
+    assert cancelled.mode == "cancelled"
+    assert "Изменений в WB не выполнял" in cancelled.text
+    assert rejected.ok is True
+    assert rejected.mode == "cancelled"
+    assert "Скидки в WB не изменены" in rejected.text
 
 
 def test_bot_wb_actions_callback_applies_specific_plan(
@@ -1332,6 +1861,54 @@ def test_poll_once_dispatches_allowed_chat_and_writes_offset(tmp_path: Path) -> 
     assert send_call[2]["message_thread_id"] == 55
 
 
+def test_poll_once_keeps_manual_wb_conversation_per_chat_and_thread(tmp_path: Path) -> None:
+    calls: list[tuple[str, str, dict]] = []
+
+    def fake_api(token: str, method: str, payload: dict) -> dict:
+        calls.append((token, method, payload))
+        if method == "getUpdates":
+            return {
+                "ok": True,
+                "result": [
+                    {
+                        "update_id": 201,
+                        "message": {
+                            "chat": {"id": 123},
+                            "text": "Ручная акция",
+                            "message_thread_id": 55,
+                        },
+                    },
+                    {
+                        "update_id": 202,
+                        "message": {
+                            "chat": {"id": 123},
+                            "text": "57 52 48",
+                            "message_thread_id": 55,
+                        },
+                    },
+                ],
+            }
+        return {"ok": True, "result": {"message_id": 11}}
+
+    state_file = tmp_path / ".sessions" / "telegram" / "state.json"
+    result = poll_once(
+        token="secret-token",
+        data_dir=tmp_path,
+        state_file=state_file,
+        allowed_chat_ids={123},
+        api_request=fake_api,
+    )
+
+    assert result["ok"] is True
+    assert result["processed_updates"] == 2
+    send_calls = [call for call in calls if call[1] == "sendMessage"]
+    assert "Введите три целых значения" in send_calls[0][2]["text"]
+    assert "порог акции: `57%`" in send_calls[1][2]["text"]
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    assert state["offset"] == 203
+    assert "conversations" not in state
+
+
 def test_runtime_job_dispatch_queues_live_status_and_deduplicates(tmp_path: Path) -> None:
     runtime_db = tmp_path / "runtime.db"
 
@@ -1495,6 +2072,44 @@ def test_notify_telegram_job_result_sends_text_and_safe_report(tmp_path: Path) -
     assert docs[0][1] == "sendDocument"
     assert docs[0][2]["message_thread_id"] == 55
     assert docs[0][3] == report_path.resolve()
+    update = store.get_telegram_update(501)
+    assert update is not None
+    assert update.processing_status == "completed"
+
+
+def test_notify_telegram_job_result_marks_notification_failure(tmp_path: Path) -> None:
+    runtime_db = tmp_path / "runtime.db"
+    store = JobStore(runtime_db)
+    job = store.create_job(
+        task_id="status-preflight",
+        actor="telegram:123",
+        job_id="job_notify_failure_test",
+        status="queued",
+    )
+    store.register_telegram_update(
+        update_id=502,
+        chat_id="123",
+        command="/status",
+        job_id=job.job_id,
+        processing_status="queued",
+    )
+    store.update_job_status(job.job_id, "success", result={"status": "ok", "artifacts": {}})
+
+    def failed_api(token: str, method: str, payload: dict) -> dict:
+        raise TelegramRunnerError("send failed")
+
+    result = notify_telegram_job_result(
+        token="secret-token",
+        job_id=job.job_id,
+        store=store,
+        data_dir=tmp_path / "data",
+        api_request=failed_api,
+    )
+
+    assert result.ok is False
+    update = store.get_telegram_update(502)
+    assert update is not None
+    assert update.processing_status == "notification_failed"
 
 
 def test_poll_once_dispatches_callback_query(
@@ -1553,6 +2168,60 @@ def test_poll_once_dispatches_callback_query(
     assert send_call[2]["text"] == "Applied"
     assert send_call[2]["message_thread_id"] == 55
     assert json.loads(state_file.read_text(encoding="utf-8"))["offset"] == 302
+
+
+def test_poll_once_persists_conversation_state_from_callback(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from seller_agent.bot import telegram_runner
+    from seller_agent.bot.commands import TelegramCommandResult
+
+    monkeypatch.setattr(
+        telegram_runner,
+        "dispatch_callback",
+        lambda data, **kwargs: TelegramCommandResult(
+            command="/period-report",
+            ok=True,
+            text="Введите дату начала",
+            conversation_state={
+                "stage": "period_report_custom_from",
+                "market_code": "o",
+                "report_code": "f",
+            },
+        ),
+    )
+
+    def fake_api(token: str, method: str, payload: dict) -> dict:
+        if method == "getUpdates":
+            return {
+                "ok": True,
+                "result": [
+                    {
+                        "update_id": 401,
+                        "callback_query": {
+                            "id": "cb-period",
+                            "data": "mpr_period:o:f:c",
+                            "message": {"chat": {"id": 123}, "message_thread_id": 55},
+                        },
+                    }
+                ],
+            }
+        return {"ok": True, "result": {"message_id": 11}}
+
+    state_file = tmp_path / ".sessions" / "telegram" / "state.json"
+    result = poll_once(
+        token="secret-token",
+        data_dir=tmp_path,
+        state_file=state_file,
+        allowed_chat_ids={123},
+        api_request=fake_api,
+    )
+
+    assert result["ok"] is True
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    conversation = next(iter(state["conversations"].values()))
+    assert conversation["stage"] == "period_report_custom_from"
 
 
 def test_poll_loop_requires_allowed_chat_ids(tmp_path: Path) -> None:

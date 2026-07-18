@@ -44,3 +44,4 @@ runtime/
 .sessions/
 tmp/
 *.log
+.playwright-cli/

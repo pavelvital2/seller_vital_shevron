@@ -8,7 +8,9 @@ from seller_agent.config import AppCredentials, OzonSellerCredentials, WbCredent
 from seller_agent.tasks.daily_morning_report import (
     _pending_packages,
     _recommendations_summary,
+    _summarize_wb_analytics_stocks,
     _summarize_wb_orders,
+    _summarize_wb_sales,
     latest_run_dirs,
     run_daily_morning_report,
 )
@@ -129,17 +131,61 @@ def test_daily_morning_report_uses_latest_preflight_without_refresh(tmp_path: Pa
 def test_summarize_wb_orders_counts_active_cancelled_and_amount() -> None:
     summary = _summarize_wb_orders(
         [
-            {"supplierArticle": "sku-1", "finishedPrice": 100, "isCancel": False},
+            {"supplierArticle": "sku-1", "finishedPrice": 100, "priceWithDisc": 150, "isCancel": False},
             {"supplierArticle": "sku-1", "priceWithDisc": "50.5", "isCancel": "false"},
-            {"supplierArticle": "sku-2", "finishedPrice": 30, "isCancel": True},
+            {"supplierArticle": "sku-2", "finishedPrice": 20, "priceWithDisc": 30, "isCancel": True},
         ]
     )
 
     assert summary["total_rows"] == 3
+    assert summary["total_orders"] == 3
     assert summary["active_orders"] == 2
     assert summary["cancelled_orders"] == 1
-    assert summary["amount"] == 150.5
-    assert summary["top_skus"] == [{"sku": "sku-1", "orders": 2}]
+    assert summary["amount"] == 230.5
+    assert summary["active_amount"] == 200.5
+    assert summary["cancelled_amount"] == 30
+    assert summary["price_basis"] == "priceWithDisc"
+    assert summary["amount_fields"]["all_rows"]["finishedPrice"] == 120
+    assert summary["top_skus"] == [{"sku": "sku-1", "orders": 2}, {"sku": "sku-2", "orders": 1}]
+
+
+def test_summarize_wb_sales_uses_dashboard_price_and_preserves_for_pay() -> None:
+    summary = _summarize_wb_sales(
+        [
+            {"saleID": "S1", "priceWithDisc": 500, "finishedPrice": 400, "forPay": 350},
+            {"saleID": "R1", "priceWithDisc": 100, "finishedPrice": 80, "forPay": 70},
+        ]
+    )
+
+    assert summary["sales_amount"] == 500
+    assert summary["returns_amount"] == 100
+    assert summary["net_amount_estimate"] == 400
+    assert summary["for_pay_amount"] == 350
+    assert summary["net_for_pay_estimate"] == 280
+    assert summary["price_basis"] == "priceWithDisc"
+
+
+def test_summarize_wb_analytics_stocks_aggregates_warehouses_by_nm_id() -> None:
+    summary = _summarize_wb_analytics_stocks(
+        stock_rows=[
+            {"nmId": 201, "quantity": 1, "inWayToClient": 2, "inWayFromClient": 0},
+            {"nmId": 201, "quantity": 2, "inWayToClient": 0, "inWayFromClient": 1},
+            {"nmId": 202, "quantity": 0, "inWayToClient": 0, "inWayFromClient": 0},
+        ],
+        catalog_rows=[
+            {"wb_nm_id": "201", "wb_vendor_code": "sku-1", "internal_sku": "internal-1", "product_name": "One"},
+            {"wb_nm_id": "202", "wb_vendor_code": "sku-2", "internal_sku": "internal-2", "product_name": "Two"},
+            {"wb_nm_id": "203", "wb_vendor_code": "sku-3", "internal_sku": "internal-3", "product_name": "Three"},
+        ],
+    )
+
+    assert summary["quantity_total"] == 3
+    assert summary["nm_rows"] == 2
+    assert summary["low_stock_count"] == 1
+    assert summary["zero_stock_count"] == 1
+    assert summary["missing_in_stock_source_count"] == 1
+    assert summary["in_way_to_client"] == 2
+    assert summary["in_way_from_client"] == 1
 
 
 def test_daily_morning_report_seller_v2_uses_business_adapters(tmp_path: Path, monkeypatch) -> None:
@@ -205,6 +251,7 @@ def test_daily_morning_report_seller_v2_uses_business_adapters(tmp_path: Path, m
                 "internal_product_id": "wb:sku-3",
                 "product_name": "WB only",
                 "wb_vendor_code": "sku-3",
+                "wb_nm_id": "203",
                 "mapping_status": "wb_only",
                 "active_ozon": "false",
                 "active_wb": "true",
@@ -294,9 +341,17 @@ def test_daily_morning_report_seller_v2_uses_business_adapters(tmp_path: Path, m
         def fetch_unanswered_questions_count(self):
             return {"data": {"count": 5}}
 
+    class FakeWbAnalyticsAdapter:
+        def __init__(self, credentials):
+            self.credentials = credentials
+
+        def fetch_wb_warehouse_stocks(self):
+            return [{"nmId": 201, "quantity": 2, "inWayToClient": 0, "inWayFromClient": 0}]
+
     monkeypatch.setattr("seller_agent.tasks.daily_morning_report.OzonSellerAdapter", FakeOzonAdapter)
     monkeypatch.setattr("seller_agent.tasks.daily_morning_report.WbStatisticsAdapter", FakeWbStatisticsAdapter)
     monkeypatch.setattr("seller_agent.tasks.daily_morning_report.WbCommunicationsAdapter", FakeWbCommunicationsAdapter)
+    monkeypatch.setattr("seller_agent.tasks.daily_morning_report.WbAnalyticsAdapter", FakeWbAnalyticsAdapter)
 
     result = run_daily_morning_report(
         credentials=AppCredentials(
@@ -386,6 +441,7 @@ def test_daily_morning_report_seller_v3_uses_new_template(tmp_path: Path, monkey
                 "internal_product_id": "wb:sku-3",
                 "product_name": "WB only",
                 "wb_vendor_code": "sku-3",
+                "wb_nm_id": "203",
                 "mapping_status": "wb_only",
                 "active_ozon": "false",
                 "active_wb": "true",
@@ -420,10 +476,13 @@ def test_daily_morning_report_seller_v3_uses_new_template(tmp_path: Path, monkey
     )
 
     class FakeOzonAdapter:
+        analytics_calls = 0
+
         def __init__(self, credentials):
             self.credentials = credentials
 
         def fetch_analytics_data(self, **kwargs):
+            type(self).analytics_calls += 1
             return {"result": {"totals": [1200, 3], "data": [{"metrics": [1200, 3]}]}}
 
         def fetch_product_stocks(self, product_ids):
@@ -471,6 +530,12 @@ def test_daily_morning_report_seller_v3_uses_new_template(tmp_path: Path, monkey
 
         def fetch_question_list(self, *, status: str = "ALL", limit: int = 100, offset: int = 0, sort_dir: str = "DESC"):
             return {"result": {"questions": [{"published_at": "2026-06-13T10:00:00Z"}]}}
+
+        def fetch_supply_order_ids(self, *, states, limit: int = 100):
+            return ["ozon-supply-1"]
+
+        def fetch_supply_orders(self, order_ids, *, batch_size: int = 50):
+            return [{"order_id": "ozon-supply-1", "state": "IN_TRANSIT"}]
 
     class FakeWbStatisticsAdapter:
         def __init__(self, credentials):
@@ -543,11 +608,27 @@ def test_daily_morning_report_seller_v3_uses_new_template(tmp_path: Path, monkey
         def fetch_fullstats(self, *, ids, date_from: str, date_to: str):
             return [{"advertId": 10, "days": [{"date": date_from, "sum": 15}]}]
 
+    class FakeWbAnalyticsAdapter:
+        def __init__(self, credentials):
+            self.credentials = credentials
+
+        def fetch_wb_warehouse_stocks(self):
+            return [{"nmId": 201, "quantity": 2, "inWayToClient": 0, "inWayFromClient": 0}]
+
+    class FakeWbFbwSuppliesAdapter:
+        def __init__(self, credentials):
+            self.credentials = credentials
+
+        def fetch_supplies(self):
+            return [{"supplyID": 1, "statusID": 3}]
+
     monkeypatch.setattr("seller_agent.tasks.daily_morning_report.OzonSellerAdapter", FakeOzonAdapter)
     monkeypatch.setattr("seller_agent.tasks.daily_morning_report.WbStatisticsAdapter", FakeWbStatisticsAdapter)
     monkeypatch.setattr("seller_agent.tasks.daily_morning_report.WbCommunicationsAdapter", FakeWbCommunicationsAdapter)
     monkeypatch.setattr("seller_agent.tasks.daily_morning_report.WbFinanceAdapter", FakeWbFinanceAdapter)
     monkeypatch.setattr("seller_agent.tasks.daily_morning_report.WbPromotionAdapter", FakeWbPromotionAdapter)
+    monkeypatch.setattr("seller_agent.tasks.daily_morning_report.WbAnalyticsAdapter", FakeWbAnalyticsAdapter)
+    monkeypatch.setattr("seller_agent.tasks.daily_morning_report.WbFbwSuppliesAdapter", FakeWbFbwSuppliesAdapter)
 
     result = run_daily_morning_report(
         credentials=AppCredentials(
@@ -564,6 +645,12 @@ def test_daily_morning_report_seller_v3_uses_new_template(tmp_path: Path, monkey
     assert result["report_version"] == "seller_v3"
     assert result["unified_catalog"]["products"] == 3
     assert result["unified_catalog"]["confirmed_products"] == 1
+    assert result["unified_catalog"]["target_products"] == 1
+    assert result["unified_catalog"]["target_with_internal_sku"] == 1
+    assert result["unified_catalog"]["target_identification_complete"] is True
+    assert result["unified_catalog"]["both_marketplaces_products"] == 1
+    assert result["unified_catalog"]["active_ozon_only_products"] == 1
+    assert result["unified_catalog"]["active_wb_only_products"] == 1
     assert result["unified_catalog"]["ozon_only_products"] == 1
     assert result["unified_catalog"]["wb_only_products"] == 1
     assert result["business"]["catalog_source"] == "unified_catalog"
@@ -576,10 +663,16 @@ def test_daily_morning_report_seller_v3_uses_new_template(tmp_path: Path, monkey
     assert result["business"]["wb"]["finance_expenses"]["total_expenses"] == 230.0
     assert result["business"]["ozon"]["communications"]["unanswered_questions"] == 2
     assert result["business"]["wb"]["communications"]["unanswered_questions"] == 5
+    assert FakeOzonAdapter.analytics_calls == 1
+    assert result["supplies_v3"]["ozon"]["in_transit"] == 1
+    assert result["supplies_v3"]["wb"]["ready_to_ship"] == 1
     report_text = Path(result["artifacts"]["report"]).read_text(encoding="utf-8")
     assert "Период данных:" in report_text
     assert "Единый Каталог" in report_text
     assert "| Товаров всего | 3 |" in report_text
+    assert "| Целевой ассортимент идентифицирован | да |" in report_text
+    assert "| Связанные пары Ozon+WB | 1 |" in report_text
+    assert "Mapping подтвержден" not in report_text
     assert "Заказы, Выкупы, Отмены За Период" in report_text
     assert "Деньги И Расходы За Период" in report_text
     assert "| Выкупы, шт. | 1 | 1 |" in report_text
@@ -590,4 +683,4 @@ def test_daily_morning_report_seller_v3_uses_new_template(tmp_path: Path, monkey
     assert "| Товаров участвует | 8 | 7 |" in report_text
     assert "| WB-артикулы без строки в источнике остатков | - | 1 |" in report_text
     assert "пакеты на согласование" in report_text
-    assert "| Есть текущие поставки | не подтверждено | не подтверждено |" in report_text
+    assert "| Есть текущие поставки | да | да |" in report_text

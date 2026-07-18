@@ -154,6 +154,57 @@ def test_normalize_wb_question_quantity_requires_owner_input() -> None:
     assert actions[0]["state"] == "needs_owner_input"
 
 
+def test_question_about_attachment_side_does_not_get_generic_velcro_answer() -> None:
+    reply = draft_question_reply(
+        {
+            "product_title": "Шеврон на липучке нагрудный",
+            "text": "На какую сторону цепляется: левую или правую?",
+        }
+    )
+
+    assert "с любой стороны" in reply
+    assert "если это указано" not in reply
+
+
+def test_legal_usage_question_has_cautious_answer() -> None:
+    reply = draft_question_reply(
+        {
+            "product_title": "Шеврон на липучке Прокуратура",
+            "text": "Что будет, если я буду носить шеврон прокуратура на рюкзаке?",
+        }
+    )
+
+    assert "не консультируем по правовым последствиям" in reply
+    assert "требования законодательства" in reply
+
+
+def test_question_size_uses_approved_passport_context() -> None:
+    reply = draft_question_reply(
+        {
+            "offer_id": "chev_kit2_pz_text0006",
+            "sku": "605329721",
+            "product_title": "Шевроны на липучке позывной Малой, комплект 2 шт., мох",
+            "text": "Какой размер у позывного?",
+        }
+    )
+
+    assert "125*25 мм" in reply
+    assert "80*50 мм" in reply
+
+
+def test_low_rating_without_text_does_not_invent_product_problem() -> None:
+    reply = draft_review_reply(
+        {
+            "product_title": "Комплект шевронов",
+            "text": "",
+            "rating": 3,
+        }
+    )
+
+    assert "не оправдал ожиданий" in reply
+    assert "не подошел" not in reply
+
+
 def test_wb_token_file_reads_first_line(monkeypatch, tmp_path: Path) -> None:
     token_file = tmp_path / "wb-token.txt"
     token_file.write_text("secret-token\n", encoding="utf-8")

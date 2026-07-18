@@ -291,11 +291,19 @@ Ozon Messenger также successfully executed approved-пакет, если о
   ожидаемого значения.
 - Для Ozon-отзывов с `photos_count > 0` список `/api/v4/review/list` может
   отдавать только счетчик фото без ссылок. Чтобы получить вложения перед
-  ответом, через активную Ozon LK/CDP-сессию открыть read-only detail:
+  ответом, через активную Ozon LK/CDP-сессию открыть detail:
   `POST /api/v2/review/detail` с `company_id`, `company_type: "seller"` и
   `review_uuid`. В ответе проверять поля `photos` и `videos`; фото покупателя
   нужно отличать от `product.cover_image`, потому что `cover_image` - это
   изображение карточки товара.
+- Подтверждено 2026-07-18: запрос `/api/v2/review/detail` имеет побочный
+  эффект и может перевести отзыв из `NOT_VIEWED` в `VIEWED`. Поэтому media
+  detail нельзя считать чистым read-only: запускать его только после approval
+  владельца на просмотр точного набора медиа-отзывов. После просмотра fresh
+  dry-run обязан сохранять такие строки как требующие публичного ответа, если
+  `interaction_status=VIEWED`, `comments_count=0`, `is_commentable_2=true` и
+  есть фото/видео. Иначе просмотренные для согласования отзывы потеряются из
+  очереди до отправки ответа.
 - Готовый helper для новых агентов:
 
 ```bash
@@ -306,7 +314,8 @@ NODE_PATH=/home/Codex/agent-tools/node/node_modules \
 
   Helper автоматически читает
   `processed/reviews_questions_items.json`, выбирает Ozon-отзывы с
-  `photos_count > 0` или `videos_count > 0`, делает read-only запрос
+  `photos_count > 0` или `videos_count > 0`, делает запрос с подтвержденным
+  побочным эффектом `NOT_VIEWED -> VIEWED`
   `/api/v2/review/detail`, сохраняет только redacted detail без автора,
   `order_number`, `chat_url`, user id и других приватных полей, скачивает
   вложения из `photos`/`videos` в
@@ -338,6 +347,33 @@ NODE_PATH=/home/Codex/agent-tools/node/node_modules \
   Нельзя автоматически отмечать его просмотренным в рамках старого approval.
 
 ## Проверенные операции
+
+### Штатный apply 2026-07-18: раздельные Ozon/WB inbox-пакеты
+
+- Ozon source: `ozon_inbox_20260718T0908_final_review`; применено `18`
+  публичных ответов на отзывы, `3` ответа на вопросы и `161` отметка отзывов
+  просмотренными.
+- WB source: `wb_inbox_20260718T0905_corrected`; применено `3` публичных
+  ответа на отзывы и `2` ответа на вопросы.
+- Перед apply выполнены свежие preflight-срезы. Все `182` Ozon и `5` WB
+  согласованных действий присутствовали без drift; `4` новых Ozon и `1`
+  новое WB действие были исключены из старого approval.
+- Verify: `ozon_inbox_20260718T1015_verify` оставил только `5` новых Ozon
+  отзывов, `wb_inbox_20260718T1015_verify` - только `1` новый WB отзыв.
+  Вопросов осталось `0`; пересечение verify с approved `source_id` равно `0`.
+- Устаревшие исходные и preapply pending-пакеты закрыты. Открыты только свежие
+  verify-пакеты с новыми отзывами для следующего owner review.
+- Apply-отчеты:
+  `data/runs/2026-07-18/ozon_inbox_20260718T0908_final_review_apply/ozon_inbox_apply_result.md`
+  и
+  `data/runs/2026-07-18/wb_inbox_20260718T0905_corrected_apply/wb_inbox_apply_result.md`.
+- Дополнительный хвост того же дня обработан отдельным approval:
+  `ozon_inbox_20260718T1023_new_review` - `5` отзывов без текста отмечены
+  просмотренными (`NOT_VIEWED 5 -> 0`);
+  `wb_inbox_20260718T1023_new_review` - опубликован `1` согласованный ответ.
+  Verify `ozon_inbox_20260718T1029_verify` и
+  `wb_inbox_20260718T1029_verify` вернул по `0` отзывов и вопросов к
+  обработке. После cleanup открытых approval-пакетов осталось `0`.
 
 ### Внештатная ситуация 2026-07-05: Ozon-вопросы не попали в `/ozon-inbox`
 

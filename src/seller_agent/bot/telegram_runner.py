@@ -269,6 +269,8 @@ def poll_once(
 ) -> dict[str, Any]:
     state = _read_state(state_file)
     offset = _maybe_int(state.get("offset"))
+    conversations_value = state.get("conversations")
+    conversations = dict(conversations_value) if isinstance(conversations_value, dict) else {}
     payload: dict[str, Any] = {
         "timeout": timeout_seconds,
         "limit": limit,
@@ -316,12 +318,29 @@ def poll_once(
 
             if callback_id:
                 try:
+                    callback_text = "Принято. Выполняю действие..."
+                    if data in {"wbam_cancel", "mpr_cancel", "wbwp_cancel"} or data.startswith(
+                        ("wbam_reject:", "wbwp_reject:")
+                    ):
+                        callback_text = "Отменено."
+                    elif data.startswith("wbam_confirm:"):
+                        callback_text = "Параметры подтверждены. Выполняю расчёт..."
+                    elif data.startswith(("mpr_market:", "mpr_type:", "mpr_period:")):
+                        callback_text = "Выбрано."
+                    elif data.startswith("mpr_run:"):
+                        callback_text = "Формирую read-only отчёт..."
+                    elif data.startswith("wbwp_mode:"):
+                        callback_text = "Выбрано."
+                    elif data.startswith("wbwp_run:"):
+                        callback_text = "Формирую Excel в работу..."
+                    elif data.startswith("wbwp_approve:"):
+                        callback_text = "План утверждён в работу."
                     api_request(
                         token,
                         "answerCallbackQuery",
                         {
                             "callback_query_id": callback_id,
-                            "text": "Принято. Выполняю действие...",
+                            "text": callback_text,
                             "show_alert": False,
                         },
                     )
@@ -329,7 +348,11 @@ def poll_once(
                     errors.append(str(exc))
 
             thread_id = _maybe_int(message_obj.get("message_thread_id"))
+            conversation_key = _conversation_key(chat_id, thread_id)
+            conversations.pop(conversation_key, None)
             command_result = dispatch_callback(data, data_dir=data_dir)
+            if command_result.conversation_state:
+                conversations[conversation_key] = command_result.conversation_state
             send_results = send_telegram_text(
                 token=token,
                 chat_id=chat_id,
@@ -371,6 +394,7 @@ def poll_once(
             continue
 
         thread_id = _maybe_int(message_obj.get("message_thread_id"))
+        conversation_key = _conversation_key(chat_id, thread_id)
         command_result = None
         if runtime_jobs and update_id is not None:
             command_result = dispatch_runtime_job_message(
@@ -390,7 +414,12 @@ def poll_once(
                 live_today=live_today,
                 live_status=live_status,
                 runtime_db=runtime_db,
+                conversation_state=conversations.get(conversation_key),
             )
+        if command_result.conversation_state:
+            conversations[conversation_key] = command_result.conversation_state
+        else:
+            conversations.pop(conversation_key, None)
         send_results = send_telegram_text(
             token=token,
             chat_id=chat_id,
@@ -415,7 +444,12 @@ def poll_once(
         errors.extend(result.error for result in document_results if result.error)
 
     if next_offset is not None:
-        _write_state(state_file, {"offset": next_offset})
+        state["offset"] = next_offset
+        if conversations:
+            state["conversations"] = conversations
+        else:
+            state.pop("conversations", None)
+        _write_state(state_file, state)
 
     return {
         "ok": not errors,
@@ -637,6 +671,10 @@ def _write_state(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     path.chmod(0o600)
+
+
+def _conversation_key(chat_id: int, thread_id: int | None) -> str:
+    return f"{chat_id}:{thread_id or 0}"
 
 
 def _loop_log_row(iteration: int, result: dict[str, Any]) -> dict[str, Any]:

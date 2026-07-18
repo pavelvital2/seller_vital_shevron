@@ -4,7 +4,7 @@ import csv
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
-from decimal import Decimal, ROUND_CEILING
+from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 import fcntl
 import json
 import os
@@ -22,6 +22,7 @@ from seller_agent.reports.writer import ensure_dir, write_json
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 WB_MAX_DISCOUNT_STEP_PERCENTAGE_POINTS = 35
+WB_QUARANTINE_SAFE_PRICE_DROP_PERCENT = 33
 
 
 class WbActionsSnapshotBusyError(RuntimeError):
@@ -152,10 +153,22 @@ def limit_discount_step(
 ) -> int:
     delta = target_discount - current_discount
     if abs(delta) <= max_step:
-        return target_discount
+        step_limited_discount = target_discount
+    elif delta > 0:
+        step_limited_discount = current_discount + max_step
+    else:
+        step_limited_discount = current_discount - max_step
+
     if delta > 0:
-        return current_discount + max_step
-    return current_discount - max_step
+        current_price_factor = Decimal(100 - current_discount)
+        minimum_next_price_factor = current_price_factor * (
+            Decimal(100 - WB_QUARANTINE_SAFE_PRICE_DROP_PERCENT) / Decimal(100)
+        )
+        quarantine_safe_discount = int(
+            (Decimal(100) - minimum_next_price_factor).to_integral_value(rounding=ROUND_FLOOR)
+        )
+        return min(step_limited_discount, quarantine_safe_discount)
+    return step_limited_discount
 
 
 def _discount_price(base_price: Decimal | None, discount: int) -> str:
@@ -360,7 +373,12 @@ def build_rows(*, actions_dir: Path, prices_path: Path, scheme: Scheme) -> tuple
                 "Цена к загрузке": upload_price,
                 "Дельта загрузки, п.п.": upload_delta,
                 "Осталось до целевой, п.п.": remaining_delta,
-                "Ограничение шага": f"{WB_MAX_DISCOUNT_STEP_PERCENTAGE_POINTS} п.п." if remaining_delta else "",
+                "Ограничение шага": (
+                    f"цена не более -{WB_QUARANTINE_SAFE_PRICE_DROP_PERCENT}%; "
+                    f"скидка не более {WB_MAX_DISCOUNT_STEP_PERCENTAGE_POINTS} п.п."
+                    if remaining_delta
+                    else ""
+                ),
                 "Действие": action,
                 "Причина": reason,
             }
@@ -407,6 +425,7 @@ def build_payload(rows: list[dict[str, Any]]) -> tuple[dict[str, Any], list[dict
         "dry_run": True,
         "upload_endpoint": "https://discounts-prices-api.wildberries.ru/api/v2/upload/task",
         "discount_step_limit_pp": WB_MAX_DISCOUNT_STEP_PERCENTAGE_POINTS,
+        "quarantine_safe_price_drop_percent": WB_QUARANTINE_SAFE_PRICE_DROP_PERCENT,
         "data": [
             {
                 "nmID": int(row["Артикул WB"]),
@@ -422,7 +441,8 @@ def build_payload(rows: list[dict[str, Any]]) -> tuple[dict[str, Any], list[dict
         },
         "note": (
             "Preview only. Do not upload without explicit owner confirmation. "
-            f"WB discount changes are limited to {WB_MAX_DISCOUNT_STEP_PERCENTAGE_POINTS} percentage points per upload."
+            f"WB discount changes are limited to {WB_MAX_DISCOUNT_STEP_PERCENTAGE_POINTS} percentage points "
+            f"and a {WB_QUARANTINE_SAFE_PRICE_DROP_PERCENT}% selling-price decrease per upload."
         ),
     }
     return payload, changed_rows

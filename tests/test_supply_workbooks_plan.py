@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from seller_agent.tasks.supply_workbooks_plan import run_supply_workbooks_plan
+from seller_agent.tasks.supply_workbooks_plan import _infer_pack_qty, run_supply_workbooks_plan
+
+
+def test_petlitcy_uncut_pair_counts_as_one_physical_item() -> None:
+    assert _infer_pack_qty("Петлица ФСБ, 2 шт., неразрезанная", fallback=2) == 1
 
 
 def test_supply_workbooks_plan_blocks_without_credentials_or_adapters(tmp_path: Path) -> None:

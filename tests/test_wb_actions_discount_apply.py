@@ -9,6 +9,7 @@ from seller_agent.tasks.wb_actions_discount_apply import (
     _payload_from_rows,
     _requires_staged_discount,
     _split_regular_and_staged_rows,
+    _upload_error_summary,
     run_wb_actions_discount_apply,
     run_wb_actions_discount_verify,
 )
@@ -168,14 +169,14 @@ def test_payload_from_rows_uses_limited_upload_discount() -> None:
                 "Текущая скидка": "0",
                 "Финальная скидка": "55",
                 "Дельта, п.п.": "55",
-                "Скидка к загрузке": "35",
-                "Дельта загрузки, п.п.": "35",
+                "Скидка к загрузке": "33",
+                "Дельта загрузки, п.п.": "33",
             }
         ]
     )
 
     assert len(changed_rows) == 1
-    assert payload == {"data": [{"nmID": 101, "price": 1100, "discount": 35}]}
+    assert payload == {"data": [{"nmID": 101, "price": 1100, "discount": 33}]}
 
 
 def test_split_regular_and_staged_rows_does_not_quarantine_limited_step() -> None:
@@ -186,11 +187,11 @@ def test_split_regular_and_staged_rows_does_not_quarantine_limited_step() -> Non
             "Текущая скидка": "0",
             "Финальная скидка": "55",
             "Дельта, п.п.": "55",
-            "Скидка к загрузке": "35",
-            "Дельта загрузки, п.п.": "35",
+            "Скидка к загрузке": "33",
+            "Дельта загрузки, п.п.": "33",
         }
     ]
-    eligible_payload = {"data": [{"nmID": 101, "price": 1100, "discount": 35}]}
+    eligible_payload = {"data": [{"nmID": 101, "price": 1100, "discount": 33}]}
 
     regular_rows, staged_rows = _split_regular_and_staged_rows(
         eligible_payload=eligible_payload,
@@ -212,6 +213,36 @@ def test_classify_verify_status_detects_price_quarantine() -> None:
         )
         == "price_quarantine"
     )
+
+
+def test_upload_error_summary_detects_new_price_quarantine_wording() -> None:
+    details = {
+        "history": {
+            "data": {
+                "data": {
+                    "historyGoods": [
+                        {
+                            "nmID": 101,
+                            "vendorCode": "chev_back_test",
+                            "price": 1100,
+                            "discount": 35,
+                            "status": 3,
+                            "errorText": (
+                                "New price is several times lower than the current price. "
+                                "Item has been moved to Price Quarantine"
+                            ),
+                        }
+                    ]
+                }
+            }
+        }
+    }
+
+    summary = _upload_error_summary(details)
+
+    assert summary["failed_rows_count"] == 1
+    assert summary["price_quarantine_rows_count"] == 1
+    assert summary["price_quarantine_rows"][0]["nmID"] == 101
 
 
 def test_wb_actions_apply_uses_wb_scoped_api_preflight(tmp_path, monkeypatch) -> None:

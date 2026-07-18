@@ -13,8 +13,10 @@ description: "Use for Ozon/Wildberries reviews and questions workflows: read-onl
 - Use the full chain:
   `read-only -> dry-run -> review -> approved -> apply -> verify -> cleanup`.
 - For inbox workflows, cleanup includes closing approval tails with
-  `approvals close` after successful apply and zero-action verify. Do not leave
-  the original inbox pending or fresh verify pending in `pending_review`.
+  `approvals close` after successful apply and verify. Close superseded source
+  and preapply snapshots. If verify found new rows that were absent from the
+  approved package, keep only the latest verify pending open for the next
+  owner review; never close or apply those rows under the previous approval.
 - For Ozon LK/CDP verify, `actions_count=0` is not enough when
   `/api/review/counter` still has `NOT_VIEWED > 0`. Increase review-list
   pagination, collect the tail, get owner approval, apply it, and verify
@@ -55,9 +57,12 @@ description: "Use for Ozon/Wildberries reviews and questions workflows: read-onl
   `scripts/notifications/wb_news_readonly.js`; report actual rows and important
   rows from that script only. Do not invent unread counts, and do not mark WB
   notifications read until a confirmed write route exists.
-- For Ozon review media details use
-  `scripts/reviews/ozon_review_media_detail_cdp.js` when the list source only
-  contains media counts.
+- Ozon `/api/v2/review/detail` is not read-only in practice: on 2026-07-18 it
+  changed three media reviews from `NOT_VIEWED` to `VIEWED`. Use
+  `scripts/reviews/ozon_review_media_detail_cdp.js` only after owner approval
+  to inspect the exact media-review package. The next dry-run must retain
+  `VIEWED` media reviews with `comments_count=0` and `is_commentable_2=true`
+  until their public replies are applied and verified.
 
 ## Output
 
@@ -70,6 +75,12 @@ Use the saved reviews/questions templates:
 5. предложенные ответы;
 6. что требует owner approval;
 7. apply/verify result after approval.
+
+The owner-facing top-level report must include the exact buyer review or
+question text and the full proposed answer for every reply action. Counts and
+links to a nested report are not a substitute for these texts. For an empty
+rating-only review, state explicitly that the text is absent and show the
+planned action (`mark viewed` or a public reply).
 
 After a successful operation, update `reviews_questions_runbook.md` with any
 new confirmed recovery path or marketplace limitation.

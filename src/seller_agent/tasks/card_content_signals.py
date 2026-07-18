@@ -12,6 +12,7 @@ from seller_agent.catalog.loader import normalize_sku
 from seller_agent.config import AppCredentials
 from seller_agent.core.run_manifest import write_summary_run_manifest
 from seller_agent.marketplaces.ozon.adapter import OzonSellerAdapter
+from seller_agent.marketplaces.wb.analytics_adapter import WbAnalyticsAdapter
 from seller_agent.marketplaces.wb.statistics_adapter import WbStatisticsAdapter
 from seller_agent.reports.writer import ensure_dir, write_json
 
@@ -320,24 +321,34 @@ def build_wb_stock_signals(
     period_to: str = "",
 ) -> list[dict[str, str]]:
     by_code = _content_by_wb_vendor_code(content_rows)
-    totals: dict[str, float] = {}
+    by_nm = _content_by_wb_nm_id(content_rows)
+    totals: dict[tuple[str, str], float] = {}
     for row in stock_rows:
         code = _first_text(row.get("supplierArticle"), row.get("vendorCode"), row.get("vendor_code"))
-        if not code:
+        nm_id = _first_text(row.get("nmId"), row.get("nmID"), row.get("nm_id"))
+        if not code and not nm_id:
             continue
-        totals[code] = totals.get(code, 0.0) + _first_number(row, ("quantity", "qty", "stock"))
+        key = (nm_id, code)
+        totals[key] = totals.get(key, 0.0) + _first_number(row, ("quantity", "qty", "stock"))
 
     rows: list[dict[str, str]] = []
-    for code, quantity in sorted(totals.items()):
-        content_row = by_code.get(code)
-        signal = _base_signal(marketplace="wb", source="/api/v1/supplier/stocks", content_row=content_row, period_to=period_to)
+    for (nm_id, code), quantity in sorted(totals.items()):
+        content_row = by_nm.get(nm_id) or by_code.get(code)
+        signal = _base_signal(
+            marketplace="wb",
+            source="/api/analytics/v1/stocks-report/wb-warehouses",
+            content_row=content_row,
+            period_to=period_to,
+        )
         signal.update(
             {
                 "vendorCode": signal.get("vendorCode") or code,
                 "wb_vendor_code": signal.get("wb_vendor_code") or code,
+                "nmID": signal.get("nmID") or nm_id,
+                "wb_nm_id": signal.get("wb_nm_id") or nm_id,
                 "stock_total": _format_number(quantity),
                 "wb_stock_total": _format_number(quantity),
-                "notes": "WB supplier stocks aggregated by supplierArticle.",
+                "notes": "WB warehouse stocks aggregated by nmId across sizes and warehouses.",
             }
         )
         rows.append(signal)
@@ -354,6 +365,9 @@ def build_wb_sales_signals(
     by_code = _content_by_wb_vendor_code(content_rows)
     aggregate: dict[str, dict[str, float]] = {}
     for row in sales_rows:
+        sale_date = _first_text(row.get("date"), row.get("saleDate"), row.get("sale_date"))[:10]
+        if sale_date and not (period_from <= sale_date <= period_to):
+            continue
         sale_id = normalize_sku(row.get("saleID") or row.get("saleId"))
         if sale_id.startswith("R") or _truthy(row.get("isReturn")):
             continue
@@ -612,15 +626,23 @@ def run_collect_card_signals(
     if not errors.get("content_master") and not skip_api and scope_wb:
         if credentials.wb:
             wb = WbStatisticsAdapter(credentials.wb)
+            wb_analytics = WbAnalyticsAdapter(credentials.wb)
             try:
-                wb_stock_rows = wb.fetch_stocks_legacy(date_from=period_from)
+                nm_ids = sorted(
+                    {
+                        int(row["wb_nm_id"])
+                        for row in content_rows
+                        if str(row.get("wb_nm_id") or "").strip().isdigit()
+                    }
+                )
+                wb_stock_rows = wb_analytics.fetch_wb_warehouse_stocks(nm_ids=nm_ids)
                 write_json(raw_dir / "wb_stocks.json", wb_stock_rows)
                 stock_rows.extend(build_wb_stock_signals(wb_stock_rows, content_rows, period_to=period_to))
-                sources["wb_stocks"] = "/api/v1/supplier/stocks"
+                sources["wb_stocks"] = "/api/analytics/v1/stocks-report/wb-warehouses"
             except Exception as exc:  # noqa: BLE001
                 errors["wb_stocks"] = _safe_error(exc)
             try:
-                wb_sales_rows = wb.fetch_sales(date_from=period_from, flag=1)
+                wb_sales_rows = wb.fetch_sales(date_from=period_from, flag=0)
                 write_json(raw_dir / "wb_sales.json", wb_sales_rows)
                 sales_rows.extend(build_wb_sales_signals(wb_sales_rows, content_rows, period_from=period_from, period_to=period_to))
                 sources["wb_sales"] = "/api/v1/supplier/sales"

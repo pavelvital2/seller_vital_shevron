@@ -74,6 +74,12 @@ fresh-проверяющий должны получать только мини
   статусами `needs_manual_review` и `excluded_non_patch_assortment`. Такие
   строки сохраняются в `excluded_package_index.csv/json` с причиной, но
   fresh-аудиторам не выдаются до отдельного решения владельца;
+- перед каждым запуском передает аудитору актуальную
+  `data/planning/ozon_hashtag_frequency_table.md`; без нее нельзя считать
+  подбор расширенного Ozon-набора проверенным;
+- не принимает результат со слабым общим описанием без
+  `description_semantic_plan`/`description_seo_coverage` или с Ozon-набором
+  меньше `20` без проверяемого `hashtag_shortfall_reason`;
 - при выборе очереди для текущего SEO/content-аудита сначала отдает товары с
   остатком, плохой карточкой/SEO и нулевыми или низкими продажами:
   `business_priority=now` и

@@ -75,9 +75,10 @@ def test_build_wb_sales_and_stock_signals_aggregate_supplier_article() -> None:
     )
     sales_rows = build_wb_sales_signals(
         [
-            {"supplierArticle": "wb-1", "saleID": "S1", "forPay": 150},
-            {"supplierArticle": "wb-1", "saleID": "S2", "forPay": 160},
-            {"supplierArticle": "wb-1", "saleID": "R3", "forPay": -160},
+            {"supplierArticle": "wb-1", "saleID": "S1", "date": "2026-06-01T12:00:00", "forPay": 150},
+            {"supplierArticle": "wb-1", "saleID": "S2", "date": "2026-06-02T12:00:00", "forPay": 160},
+            {"supplierArticle": "wb-1", "saleID": "R3", "date": "2026-06-03T12:00:00", "forPay": -160},
+            {"supplierArticle": "wb-1", "saleID": "S4", "date": "2026-05-01T12:00:00", "forPay": 999},
         ],
         content_rows,
         period_from="2026-05-25",
@@ -88,6 +89,31 @@ def test_build_wb_sales_and_stock_signals_aggregate_supplier_article() -> None:
     assert stock_rows[0]["wb_stock_total"] == "7"
     assert sales_rows[0]["sales_units_30d"] == "2"
     assert sales_rows[0]["sales_revenue_30d"] == "310"
+
+
+def test_build_wb_stock_signals_aggregates_new_analytics_rows_by_nm_id() -> None:
+    content_rows = [
+        {
+            "internal_product_id": "chev-3",
+            "wb_vendor_code": "wb-3",
+            "wb_nm_id": "703",
+        }
+    ]
+
+    stock_rows = build_wb_stock_signals(
+        [
+            {"nmId": 703, "chrtId": 1, "warehouseId": 10, "quantity": 4},
+            {"nmId": 703, "chrtId": 1, "warehouseId": 20, "quantity": 6},
+        ],
+        content_rows,
+        period_to="2026-07-17",
+    )
+
+    assert stock_rows[0]["internal_product_id"] == "chev-3"
+    assert stock_rows[0]["wb_nm_id"] == "703"
+    assert stock_rows[0]["wb_vendor_code"] == "wb-3"
+    assert stock_rows[0]["wb_stock_total"] == "10"
+    assert stock_rows[0]["source"] == "/api/analytics/v1/stocks-report/wb-warehouses"
 
 
 def test_normalize_parser_signal_rows_supports_ozon_and_wb_keys(tmp_path: Path) -> None:

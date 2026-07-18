@@ -22,6 +22,7 @@ def dispatch_message(
     live_today: bool = False,
     live_status: bool = False,
     runtime_db: Path = DEFAULT_RUNTIME_DB,
+    conversation_state: dict | None = None,
 ) -> TelegramCommandResult:
     return handle_telegram_command(
         message,
@@ -29,6 +30,7 @@ def dispatch_message(
         live_today=live_today,
         live_status=live_status,
         runtime_db=runtime_db,
+        conversation_state=conversation_state,
     )
 
 

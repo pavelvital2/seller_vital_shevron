@@ -28,6 +28,8 @@ def test_wb_inbox_report_includes_product_rating_rows(tmp_path: Path) -> None:
                         "sku": "123",
                         "rating": 2,
                         "product_title": "Шеврон тестовый",
+                        "source_text": "Край вышит неровно",
+                        "draft_text": "Спасибо за замечание. Проверим изделие.",
                     }
                 ]
             },
@@ -53,6 +55,48 @@ def test_wb_inbox_report_includes_product_rating_rows(tmp_path: Path) -> None:
     assert "Шеврон тестовый" in report
     assert "низких оценок 1-3 по товарам: `1`" in report
     assert "важных WB новостей/уведомлений: `1`" in report
+    assert "## Ответы на отзывы" in report
+    assert "Отзыв покупателя: Край вышит неровно" in report
+    assert "Предлагаемый ответ: Спасибо за замечание. Проверим изделие." in report
+
+
+def test_ozon_inbox_report_includes_review_reply_text(tmp_path: Path) -> None:
+    actions_path = tmp_path / "actions.json"
+    actions_path.write_text(
+        json.dumps(
+            {
+                "actions": [
+                    {
+                        "platform": "ozon",
+                        "source_type": "review",
+                        "action_type": "public_review_reply",
+                        "offer_id": "chev_test_0002",
+                        "sku": "456",
+                        "rating": 5,
+                        "product_title": "Шеврон с фото",
+                        "source_text": "Отличное качество",
+                        "draft_text": "Спасибо за отзыв и фото!",
+                        "photos_count": 1,
+                        "videos_count": 0,
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    report = _build_ozon_report(
+        run_id="ozon_inbox_test",
+        reviews_summary={"actions_count": 1, "artifacts": {"actions": str(actions_path)}},
+        messenger_summary={"actions": []},
+        artifacts={},
+    )
+
+    assert "## Ответы на отзывы" in report
+    assert "Отзыв покупателя: Отличное качество" in report
+    assert "Медиа: фото `1`, видео `0`" in report
+    assert "Предлагаемый ответ: Спасибо за отзыв и фото!" in report
 
 
 def test_ozon_inbox_report_includes_customer_questions(tmp_path: Path) -> None:
@@ -262,4 +306,71 @@ def test_customer_question_still_gets_reply_draft() -> None:
     )
 
     assert action["action_type"] == "send_chat_message"
-    assert "наличие" in action["draft_reply"].lower()
+    assert "на заказ не изготавливаем" in action["draft_reply"].lower()
+
+
+def test_product_chat_header_without_question_asks_buyer_to_clarify() -> None:
+    action = _classify_messenger_action(
+        chat_id="chat-1",
+        message={
+            "message_id": "m1",
+            "is_read": False,
+            "user": {"type": "Customer"},
+            "data": ['Здравствуйте! У меня вопрос по вашему товару "Шеврон тестовый", артикул test001.'],
+        },
+        previous_message=None,
+    )
+
+    assert action["action_type"] == "send_chat_message"
+    assert action["draft_reply"] == "Здравствуйте! Напишите, пожалуйста, ваш вопрос по товару."
+
+
+def test_ozon_messenger_collection_keeps_only_newest_unread_action_per_chat(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    class FakeOzonAdapter:
+        def __init__(self, credentials: OzonSellerCredentials) -> None:
+            self.credentials = credentials
+
+        def post(self, path: str, payload: dict) -> dict:
+            if path == "/v3/chat/list":
+                return {
+                    "chats": [{"chat": {"chat_id": "chat-1"}, "unread_count": 2}],
+                    "has_next": False,
+                    "total_unread_count": 2,
+                }
+            if path == "/v3/chat/history":
+                return {
+                    "messages": [
+                        {
+                            "message_id": "2",
+                            "is_read": False,
+                            "user": {"type": "Customer"},
+                            "data": ["Нужен позывной Химик"],
+                        },
+                        {
+                            "message_id": "1",
+                            "is_read": False,
+                            "user": {"type": "Customer"},
+                            "data": ["Здравствуйте"],
+                        },
+                    ]
+                }
+            raise AssertionError(path)
+
+    monkeypatch.setattr(inbox_workflow, "OzonSellerAdapter", FakeOzonAdapter)
+
+    result = _collect_ozon_messenger_actions(
+        credentials=AppCredentials(
+            ozon_seller=OzonSellerCredentials(client_id="client", api_key="key"),
+            ozon_performance=None,
+            wb=None,
+        ),
+        run_dir=tmp_path / "run",
+        limit=300,
+    )
+
+    assert len(result["actions"]) == 1
+    assert result["actions"][0]["message_id"] == "2"
+    assert result["actions"][0]["action_type"] == "send_chat_message"

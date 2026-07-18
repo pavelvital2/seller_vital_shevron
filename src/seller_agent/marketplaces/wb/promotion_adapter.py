@@ -71,6 +71,13 @@ class WbPromotionAdapter:
         data = self.get("/adv/v1/balance")
         return data if isinstance(data, dict) else {}
 
+    def fetch_bid_recommendations(self, *, advert_id: int, nm_id: int) -> dict[str, Any]:
+        data = self.get(
+            "/api/advert/v0/bids/recommendations",
+            {"advertId": advert_id, "nmId": nm_id},
+        )
+        return data if isinstance(data, dict) else {}
+
     def update_bids(self, bids: list[dict[str, Any]]) -> dict[str, Any]:
         data = self.patch("/api/advert/v1/bids", {"bids": bids})
         return data if isinstance(data, dict) else {}

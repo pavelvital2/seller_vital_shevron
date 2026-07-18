@@ -225,7 +225,9 @@ def _passport_wants_ozon_create(data_dir: Path, sku: str) -> bool:
     identity = passport.get("identity") or {}
     if _normalize_text(identity.get("ozon_offer_id") or identity.get("ozon_product_id")):
         return False
-    return bool(_normalize_text(identity.get("wb_vendor_code") or identity.get("wb_nm_id")))
+    safety = passport.get("safety") if isinstance(passport.get("safety"), dict) else {}
+    dangerous_actions = safety.get("dangerous_actions") if isinstance(safety.get("dangerous_actions"), list) else []
+    return "ozon_card_create" in dangerous_actions
 
 
 def _run_wb_create_stage(

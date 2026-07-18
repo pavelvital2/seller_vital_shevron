@@ -118,10 +118,14 @@ def _is_unread(message: dict[str, Any]) -> bool:
 
 def _draft_customer_chat_reply(text: str) -> str:
     lower = text.lower()
+    if re.fullmatch(r"\s*(здравствуйте|добрый день|добрый вечер|привет)[!.\s]*", lower):
+        return "Здравствуйте! Напишите, пожалуйста, ваш вопрос по товару."
+    if re.fullmatch(r'здравствуйте! у меня вопрос по вашему товару .+артикул\s+[^.]+\.?', lower, flags=re.DOTALL):
+        return "Здравствуйте! Напишите, пожалуйста, ваш вопрос по товару."
     if re.search(r"налич|есть|под заказ|сделать|изготов|пух|позывн|можно", lower):
         return (
-            "Здравствуйте! К сожалению, наличие такого варианта сейчас не подтверждаю, "
-            "а под заказ мы не изготавливаем. Можно выбрать доступные варианты из нашего магазина."
+            "Здравствуйте! Индивидуальные шевроны по макету или с отдельным позывным на заказ не изготавливаем. "
+            "В магазине доступны только представленные варианты."
         )
     return ""
 
@@ -303,6 +307,9 @@ def _collect_ozon_messenger_actions(
                 continue
             previous_message = messages[index + 1] if index + 1 < len(messages) else None
             actions.append(_classify_messenger_action(chat_id=chat_id, message=message, previous_message=previous_message))
+            # History is newest-first. Reading or answering the newest unread
+            # message closes the older unread tail in the same chat.
+            break
 
     return {
         "status": "ok",
@@ -451,6 +458,22 @@ def _question_action_rows(summary: dict[str, Any]) -> list[dict[str, Any]]:
     )
 
 
+def _review_reply_action_rows(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = [
+        action
+        for action in _review_actions(summary)
+        if action.get("source_type") == "review" and action.get("action_type") == "public_review_reply"
+    ]
+    return sorted(
+        rows,
+        key=lambda row: (
+            _rating_sort_key(str(row.get("rating") or "н/д")),
+            str(row.get("offer_id") or row.get("sku") or ""),
+            str(row.get("source_id") or ""),
+        ),
+    )
+
+
 def _low_rating_product_rows_count(rows: list[dict[str, Any]]) -> int:
     count = 0
     for row in rows:
@@ -508,6 +531,32 @@ def _format_question_action_rows(rows: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
+def _format_review_reply_action_rows(rows: list[dict[str, Any]]) -> list[str]:
+    if not rows:
+        return ["- публичных ответов на отзывы нет"]
+    lines: list[str] = []
+    for index, row in enumerate(rows[:100], 1):
+        product_id = row.get("offer_id") or row.get("sku") or "без артикула"
+        review_text = str(row.get("source_text") or "").strip() or "без текста"
+        draft_text = str(row.get("draft_text") or "").strip() or "черновик отсутствует"
+        photos_count = int(row.get("photos_count") or 0)
+        videos_count = int(row.get("videos_count") or 0)
+        lines.extend(
+            [
+                f"### {index}. `{product_id}` - {row.get('product_title') or 'без названия'}",
+                "",
+                f"- Оценка: `{row.get('rating') or 'н/д'}`",
+                f"- Отзыв покупателя: {review_text}",
+                f"- Медиа: фото `{photos_count}`, видео `{videos_count}`",
+                f"- Предлагаемый ответ: {draft_text}",
+                "",
+            ]
+        )
+    if len(rows) > 100:
+        lines.append(f"- ... еще `{len(rows) - 100}` ответов")
+    return lines
+
+
 def _build_ozon_report(
     *,
     run_id: str,
@@ -517,6 +566,7 @@ def _build_ozon_report(
 ) -> str:
     review_counts = _reviews_counts(reviews_summary)
     product_rating_rows = _product_rating_rows(reviews_summary)
+    review_reply_rows = _review_reply_action_rows(reviews_summary)
     question_rows = _question_action_rows(reviews_summary)
     messenger_actions = messenger_summary.get("actions") if isinstance(messenger_summary.get("actions"), list) else []
     verification_warnings = reviews_summary.get("verification_warnings") if isinstance(reviews_summary.get("verification_warnings"), list) else []
@@ -582,6 +632,8 @@ def _build_ozon_report(
         )
     lines.extend(["", "## Оценки по конкретным товарам", ""])
     lines.extend(_format_product_rating_rows(product_rating_rows))
+    lines.extend(["", "## Ответы на отзывы", ""])
+    lines.extend(_format_review_reply_action_rows(review_reply_rows))
     lines.extend(["", "## Вопросы покупателей", ""])
     lines.extend(_format_question_action_rows(question_rows))
     lines.extend(["", "## Важные уведомления Ozon", ""])
@@ -612,6 +664,8 @@ def _build_wb_report(
 ) -> str:
     review_counts = _reviews_counts(reviews_summary)
     product_rating_rows = _product_rating_rows(reviews_summary)
+    review_reply_rows = _review_reply_action_rows(reviews_summary)
+    question_rows = _question_action_rows(reviews_summary)
     notification_items = wb_notifications.get("items") if isinstance(wb_notifications.get("items"), list) else []
     important_items = wb_notifications.get("important_items") if isinstance(wb_notifications.get("important_items"), list) else []
     lines = [
@@ -636,6 +690,14 @@ def _build_wb_report(
         "## Оценки по конкретным товарам",
         "",
         *_format_product_rating_rows(product_rating_rows),
+        "",
+        "## Ответы на отзывы",
+        "",
+        *_format_review_reply_action_rows(review_reply_rows),
+        "",
+        "## Вопросы покупателей",
+        "",
+        *_format_question_action_rows(question_rows),
         "",
         "## WB уведомления",
         "",

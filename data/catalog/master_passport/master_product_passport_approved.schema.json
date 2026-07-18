@@ -112,7 +112,47 @@
       "type": "object",
       "properties": {
         "target_assets": {"type": "array", "items": {"type": "object"}},
-        "designer_tasks": {"type": "array", "items": {"type": "string"}}
+        "target_marketplace_photo_set": {"type": "array", "items": {"type": "object"}},
+        "target_ozon_photo_set": {"type": "array", "items": {"type": "object"}},
+        "target_wb_photo_set": {"type": "array", "items": {"type": "object"}},
+        "wb_departmental_symbol_policy": {
+          "type": ["object", "null"],
+          "properties": {
+            "checked_at": {"type": "string"},
+            "checked_by": {"type": "string"},
+            "media_apply_status": {
+              "type": "string",
+              "enum": [
+                "allowed_verified",
+                "blocked_pending_watermarked_assets",
+                "not_applicable"
+              ]
+            },
+            "rule": {"type": "string"},
+            "protected_symbol_positions": {
+              "type": "array",
+              "items": {"type": "integer"}
+            },
+            "neutral_no_symbol_positions": {
+              "type": "array",
+              "items": {"type": "integer"}
+            },
+            "unprotected_symbol_positions": {
+              "type": "array",
+              "items": {"type": "integer"}
+            },
+            "note": {"type": "string"}
+          }
+        },
+        "designer_tasks": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {"type": "string"},
+              {"type": "object"}
+            ]
+          }
+        }
       }
     },
     "grouping": {

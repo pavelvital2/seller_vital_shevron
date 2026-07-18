@@ -23,6 +23,12 @@
   Seller API `2.1`, загружена через CDP/ЛК Vital Shevron 2026-06-29, потому
   что прямой shell-доступ к `docs.ozon.ru` возвращал redirect loop.
 
+## Проверенные endpoint-карточки
+
+- `endpoints/supply_order.md` - заявки, поставки и bundle-состав.
+- `endpoints/cluster_list.md` - `/v2/cluster/list`, mapping кластера назначения,
+  `macrolocal_cluster_id` и складов размещения.
+
 ## Правило обновления
 
 Для каждого используемого endpoint-а должна быть карточка в `endpoints/` с

@@ -82,6 +82,9 @@
   состояния fresh-агенту.
 - `data/planning/revision_2026-06-13.md` - ревизия проекта после настройки
   Ozon/WB операций и apply WB promotion ставок.
+- `data/planning/revision_2026-07-18.md` - актуальная полная ревизия проекта:
+  код, tests, TaskRegistry, runtime Job Worker, systemd, API preflight,
+  документация, риски и checkpoint перед кнопкой `Цены и маржа`.
 - `data/planning/recommendations_index.md` - реестр рекомендаций.
 - `data/planning/followups.md` - контрольные follow-up задачи, которые нельзя
   потерять между сессиями агентов.
@@ -114,6 +117,9 @@
   live read-only `/today` и `/status`, безопасное прикрепление файла отчета
   из `artifacts`, внешний token-file/env, ограничения и запрет write-операций.
 - `data/planning/daily_morning_report_runbook.md` - утренний отчет.
+- `data/planning/marketplace_period_report_runbook.md` - read-only отчёт Ozon
+  или WB за выбранный период: краткий, финансовый и полный варианты,
+  физические изделия по `pack_qty`, Markdown/Excel/JSON и Telegram flow.
 - `data/planning/reviews_questions_runbook.md` - отзывы и вопросы.
 - `data/planning/ozon_messenger_runbook.md` - Ozon Messenger/уведомления:
   вопросы покупателей, важные сообщения площадки, ежедневный triage,
@@ -130,6 +136,9 @@
 - `data/planning/wb_actions_runbook.md` - акции и скидки WB.
 - `data/planning/pricing_runbook.md` - цены, скидки, минимальные цены и
   себестоимость Ozon/WB.
+- `data/planning/pricing_margin_button_plan.md` - сохраненная концепция
+  Telegram-кнопки `Цены и маржа`: финансовая модель, ценовая сетка,
+  ручная корректировка, dry-run, approval, Job Worker и verify.
 - `data/planning/ozon_parser_positions_runbook.md` - анализ позиций Ozon по
   read-only данным парсера.
 - `data/planning/wb_parser_positions_runbook.md` - анализ позиций WB по
@@ -342,6 +351,16 @@ Telegram/Markdown-сводку. Постоянные Markdown-документы
 `data/planning/product_card_work_checkpoint.md` и ссылки на run/report
 artifacts. Нельзя оставлять уже примененные и проверенные карточки в статусе
 `pending`.
+
+Для WB-фото ведомственных товаров действует постоянное правило владельца:
+если на изображении видна государственная или ведомственная символика, она
+должна быть заретуширована либо закрыта водяным знаком. Агенты не должны
+рекомендовать или планировать замену таких WB-фото на версии без защиты.
+Нейтральные сервисные слайды и фото вариантов ношения без символики можно
+переносить между площадками без водяного знака. Текстовые и атрибутные
+изменения карточки не блокируются из-за незавершенной фото-доработки, но WB
+media update должен оставаться заблокированным до готовности защищенных версий
+всех изображений с символикой.
 
 Для ежедневных операций с входящими сущностями магазинов (уведомления,
 сообщения покупателей, отзывы, вопросы, pending approvals) после согласования

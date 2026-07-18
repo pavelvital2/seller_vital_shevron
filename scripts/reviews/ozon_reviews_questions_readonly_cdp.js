@@ -254,7 +254,17 @@ async function fetchReviews(page, companyId, limit) {
   for (const pageResult of pages) {
     const items = Array.isArray(pageResult.json?.result) ? pageResult.json.result : [];
     for (const item of items) {
-      if (item.interaction_status === 'NOT_VIEWED' && item.uuid && !seen.has(item.uuid)) {
+      const isViewedMediaWithoutReply = (
+        item.interaction_status === 'VIEWED' &&
+        item.is_commentable_2 === true &&
+        Number(item.comments_count || 0) === 0 &&
+        (Number(item.photos_count || 0) > 0 || Number(item.videos_count || 0) > 0)
+      );
+      if (
+        (item.interaction_status === 'NOT_VIEWED' || isViewedMediaWithoutReply) &&
+        item.uuid &&
+        !seen.has(item.uuid)
+      ) {
         seen.add(item.uuid);
         merged.push(item);
       }

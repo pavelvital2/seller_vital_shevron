@@ -1,6 +1,6 @@
 # Product Card Work Checkpoint
 
-Дата чекпойнта: 2026-07-13
+Дата чекпойнта: 2026-07-15
 
 ## Назначение
 
@@ -34,7 +34,7 @@
 На момент чекпойнта работа идет в ветке:
 
 ```text
-feature/runtime-job-store
+checkpoint/card-runtime-20260708
 ```
 
 В рабочем дереве могут быть незакоммиченные изменения по карточкам,
@@ -43,6 +43,322 @@ feature/runtime-job-store
 отдельная ревизия `git diff` и проверка `git status --ignored`, потому что
 часть карточных паспортов и run artifacts может не попадать в обычный
 tracked-status.
+
+## Точка продолжения 2026-07-15: `chev_kp_prikol_text0014`
+
+Владелец согласовал Layer 2 с четырьмя уточнениями и разрешил создание
+паспорта. Marketplace write отдельно не разрешен.
+
+Выполнено:
+
+- в целевой комплект добавлен стандартный слайд вариантов ношения с военным;
+- зафиксирован полный комплект из `5` фото для будущей карточки Ozon;
+- Ozon-хештеги расширены до `30`: сначала точные тематические запросы, затем
+  подтвержденные популярные релевантные запросы по убыванию;
+- модель для группировки: `Прикол`;
+- Layer 3 создан:
+  `data/catalog/master_passport/approved/chev_kp_prikol_text0014.json`;
+- promotion run:
+  `data/runs/2026-07-15/promote_chev_kp_prikol_text0014_20260715T0716_fixed/`;
+- статус паспорта: `owner_approved_pending_batch_apply` /
+  `marketplace_apply.status=not_applied`;
+- всего owner-approved паспортов после promotion: `211`.
+
+Карточка Ozon еще не создана. В паспорте сохранен будущий Ozon create с
+`offer_id=chev_kp_prikol_text0014`, но `apply_authorized=false`. Следующий
+write-шаг допустим только после отдельного dry-run, показа владельцу точного
+пакета создания и команды `применяй`.
+
+При promotion выявлена и исправлена ошибка обработки list-valued хештегов:
+список больше не превращается в строку со скобками и кавычками. Добавлен тест
+на сохранение списка, поисковых запросов и safety-флага `ozon_card_create`.
+
+## Точка продолжения 2026-07-15: `chev_kp_prikol_text0015`
+
+Владелец согласовал остальные поля и уточнил фото, модель, хештеги и SEO
+описания. Marketplace write отдельно не разрешен.
+
+Выполнено:
+
+- стандартный слайд вариантов ношения с военным добавлен четвертым;
+- целевой комплект содержит `5` фото, сервисный слайд оставлен пятым;
+- модель для группировки: `Прикол`;
+- Ozon-хештеги расширены до `30` по принципу предыдущей карточки: сначала
+  точные тематические, затем релевантные популярные запросы по убыванию;
+- описание усилено естественными фразами `шеврон прикол`, `прикольная
+  нашивка на липучке`, `шеврон на кепку`, `нашивка на рюкзак`, `патч на
+  липучке`; служебных SEO-фраз и перечисления ключей нет;
+- Layer 3 создан:
+  `data/catalog/master_passport/approved/chev_kp_prikol_text0015.json`;
+- promotion run:
+  `data/runs/2026-07-15/promote_chev_kp_prikol_text0015_20260715T0727/`;
+- статус: `owner_approved_pending_batch_apply` /
+  `marketplace_apply.status=not_applied`;
+- всего owner-approved паспортов после promotion: `212`.
+
+Обновленный HTML проверен в Chromium через локальный HTTP: mobile
+`390/390`, desktop `1366/1366`, встроено одно изображение-коллаж, битых
+изображений нет. Создание Ozon-карточки для этого SKU не согласовано и не
+включено в dangerous actions паспорта.
+
+## Точка продолжения 2026-07-15: `chev_kit2_nr_mvd_pict0004`
+
+Владелец согласовал остальные поля и разрешил создать Layer 3 паспорт с
+уточнениями по названию, фото и SEO. Marketplace write отдельно не разрешен.
+
+Выполнено:
+
+- сохранено полное название `Шевроны на липучке Полиция МВД ГИБДД ДПС,
+  комплект 2 шт.`: длина `56` символов, сокращение не требуется;
+- описание усилено релевантными SEO-фразами естественно и сохранено в трех
+  тематических блоках без служебного перечисления ключей;
+- для Ozon зафиксированы все текущие `5` фото без изменений;
+- для WB зафиксирован целевой набор из `4` текущих фото: удаляется только
+  полный дубль WB №2, остальные фото и обязательные водяные знаки сохраняются;
+- создана задача дизайнеру `VS-DESIGN-034`: подготовить отдельный WB-слайд с
+  размером `75*100 мм` и обязательными водяными знаками;
+- модель для группировки сохранена как `МВД`;
+- физические параметры комплекта разделены корректно: одно изделие `10 г`,
+  комплект/упаковка `20 г`, размер каждого шеврона `75*100 мм`;
+- Layer 3 создан:
+  `data/catalog/master_passport/approved/chev_kit2_nr_mvd_pict0004.json`;
+- итоговый promotion run:
+  `data/runs/2026-07-15/promote_chev_kit2_nr_mvd_pict0004_20260715T0830_fixed/`;
+- статус: `owner_approved_pending_batch_apply` /
+  `marketplace_apply.status=not_applied`;
+- всего owner-approved паспортов после promotion: `213`.
+
+При promotion исправлен общий контракт раздельных наборов фото Ozon и WB:
+паспорт теперь сохраняет `target_ozon_photo_set` и `target_wb_photo_set`.
+Это исключает перенос удаления WB-дубля на неизменяемый набор Ozon. Любые
+изменения карточек и медиа допустимы только после отдельного dry-run и команды
+владельца `применяй`.
+
+## Точка продолжения 2026-07-15: SEO quality gate и следующая тройка
+
+После повторных замечаний владельца по слабому SEO описаний и коротким наборам
+хештегов усилен постоянный пакет fresh-аудитора:
+
+- prompt теперь обязательно передает
+  `data/planning/ozon_hashtag_frequency_table.md`;
+- до написания описания аудитор строит `description_semantic_plan`, после -
+  `description_seo_coverage`;
+- описание должно естественно покрывать точную тему, тип и крепление,
+  подтвержденные свойства, primary/secondary/broad запросы из входного пакета;
+- обычный Ozon-набор должен содержать `20-30` уникальных релевантных
+  хештегов, цель - `30`; меньше `20` допустимо только с проверяемым
+  `hashtag_shortfall_reason`;
+- порядок хештегов: точная тематика/вариант, тип и крепление, релевантное место
+  ношения, затем широкие релевантные по убыванию частотности;
+- валидатор обязан вернуть слабое описание или необоснованно короткий набор в
+  `needs_rework`.
+
+Изменены:
+
+```text
+data/planning/card_audit_agent_docs/fresh_single_card_auditor_prompt_v2.md
+data/planning/card_audit_agent_docs/card_audit_minimal_rules.md
+data/planning/card_audit_agent_docs/card_validator_minimal_prompt.md
+data/planning/card_audit_agent_docs/card_audit_output_contract.md
+data/planning/card_audit_agent_docs/README.md
+data/planning/product_card_audit_orchestration_runbook.md
+```
+
+После обновления prompt три независимых одноразовых fresh-аудитора подготовили
+следующую тройку Layer 2 без правок оркестратора:
+
+1. `chev_kit2_nr_mvd_pict0005`:
+   `data/catalog/card_audits/fresh_triples_stale_layer1_20260715/0056_chev_kit2_nr_mvd_pict0005/`;
+2. `chev_kit2_nr_mvd_pict0006`:
+   `data/catalog/card_audits/fresh_triples_stale_layer1_20260715/0057_chev_kit2_nr_mvd_pict0006/`;
+3. `chev_kit2_nr_rg_pict0003`:
+   `data/catalog/card_audits/fresh_triples_stale_layer1_20260715/0058_chev_kit2_nr_rg_pict0003/`.
+
+У всех трех:
+
+- `agent_audit.status=agent_audited`;
+- все доступные фото просмотрены;
+- `30` уникальных Ozon-хештегов;
+- заполнены `description_semantic_plan` и `description_seo_coverage`;
+- `layout_validation_status=passed`, mobile `390/390`, desktop `1366/1366`;
+- на момент первичного аудита marketplace write и Layer 3 не выполнялись;
+- на момент первичной отправки `owner_review.status=not_submitted`.
+
+HTML отправлены владельцу через общий `telegram-ai-agent` в топик `42336` без
+изменения файлов fresh-аудиторов:
+
+- `chev_kit2_nr_mvd_pict0006.html` - `message_id=94536`;
+- `chev_kit2_nr_mvd_pict0005.html` - `message_id=94543`;
+- `chev_kit2_nr_rg_pict0003.html` - `message_id=94544`.
+
+Первичный запуск через Codex `workspace-write` был заблокирован неисправностью
+локального `bwrap` (`RTM_NEWADDR`). Результаты этого запуска не создавались.
+Тройка повторно запущена новыми ephemeral fresh-сессиями с прямым запретом
+писать вне индивидуального `WRITE_SCOPE`; итоговые процессы завершены.
+
+## Точка продолжения 2026-07-16: `chev_kit2_nr_mvd_pict0006`
+
+Владелец окончательно согласовал Layer 2 с последней корректировкой описания:
+`Оливковая основа и оливковая окантовка разных оттенков`. Marketplace write
+не разрешен.
+
+Выполнено:
+
+- формулировка заменена в canonical/Ozon/WB описании и owner-review HTML;
+- сохранено согласованное название длиной `56` символов;
+- цвета: `оливковый, чёрный`;
+- Layer 2 закрыт со статусом
+  `owner_approved_pending_batch_apply`;
+- Layer 3 создан и проверен:
+  `data/catalog/master_passport/approved/chev_kit2_nr_mvd_pict0006.json`;
+- итоговый promotion run:
+  `data/runs/2026-07-16/promote_approved_card_passport_chev_kit2_nr_mvd_pict0006_corrected_20260716T0645/`;
+- паспорт содержит `30` Ozon-хештегов, размер изделия `75*100 мм`, упаковку
+  Ozon `100*100*20 мм`, WB `10*10*2 см`, вес комплекта `20 г`;
+- `marketplace_apply.status=not_applied`.
+
+Во время promotion устранена несовместимость нового fresh-аудиторского
+контракта `proposed_final_card.physical` со старым конвертером Layer 2 ->
+Layer 3. Конвертер теперь поддерживает оба формата, отдельные массивы фото с
+позициями и игнорирует служебную подпись вместо списка хештегов. Регрессионные
+тесты: `7 passed`.
+
+## Точка продолжения 2026-07-16: `chev_kit2_nr_mvd_pict0005`
+
+Владелец полностью согласовал карточку и отдельно утвердил её параметры
+названия и описания как эталон структуры для следующих комплектов МВД.
+Marketplace write не разрешен.
+
+Выполнено:
+
+- Layer 2 закрыт со статусом `owner_approved_pending_batch_apply`;
+- Layer 3 создан и проверен:
+  `data/catalog/master_passport/approved/chev_kit2_nr_mvd_pict0005.json`;
+- итоговый promotion run:
+  `data/runs/2026-07-16/promote_chev_kit2_nr_mvd_pict0005_20260716_model_fix/`;
+- title: `Шевроны на липучке МВД Полиция ГИБДД ДПС, комплект 2 шт.`
+  (`56` символов);
+- модель группировки: `МВД`;
+- паспорт содержит `30` Ozon-хештегов, размер каждого изделия `75*100 мм`,
+  упаковку Ozon `100*100*20 мм`, WB `10*10*2 см`, вес комплекта `20 г`;
+- `marketplace_apply.status=not_applied`.
+
+Шаблон МВД закреплен в
+`data/planning/card_content_standards_runbook.md` и минимальных правилах
+fresh-аудиторов. Факты конкретного товара - надписи, цвета и размеры - нельзя
+копировать в другие комплекты без проверки их Layer 1 и фото.
+
+Во время promotion устранена ещё одна несовместимость Layer 2 -> Layer 3:
+добавлена поддержка `proposed_final_card.physical_parameters`, очистка слова
+`каждый` из машинного размера изделия и чтение модели из `9048_model`.
+Регрессионные тесты promotion: `8 passed`.
+
+## Точка продолжения 2026-07-16: `chev_kit2_nr_rg_pict0003`
+
+Владелец окончательно согласовал исправленные название, название цвета и
+упаковку. Layer 3 создан; marketplace write не выполнялся.
+
+Исправлено:
+
+- title: `Шевроны на липучке Росгвардия ОН ЦО, комплект 2 шт` (`50`
+  символов); полный вариант с `чёрно-серый` имеет `63` символа, поэтому цвет
+  убран по правилу лимита `60`;
+- Ozon `Название цвета`: `Комплект Росгвардия НО ЦО 2 шт., чёрно-серый`;
+- упаковка: Ozon `100*100*20 мм`, WB `10*10*2 см`;
+- подтвержденная причина прежней ошибки: fresh-аудитор перенес физическую
+  ширину изделия `75 мм` в упаковку вместо стандартного основания
+  нарукавного шеврона `100*100 мм`;
+- prompt, минимальные правила, validator и постоянные runbook усилены
+  обязательным package quality gate;
+- исправленный self-contained HTML проверен в Chromium: mobile `390/390`,
+  desktop `1366/1366`, `1` встроенное изображение, битых изображений `0`;
+- HTML отправлен в Telegram message `94601`, коллаж - `94602`.
+- Layer 2 закрыт со статусом `owner_approved_pending_batch_apply`;
+- Layer 3 создан и проверен:
+  `data/catalog/master_passport/approved/chev_kit2_nr_rg_pict0003.json`;
+- итоговый promotion run:
+  `data/runs/2026-07-16/promote_chev_kit2_nr_rg_pict0003_20260716/`;
+- паспорт содержит `30` Ozon-хештегов, модель `Росгвардия`, размер каждого
+  изделия `75*100 мм`, вес комплекта `20 г`, Ozon-фотонабор `1-6` и
+  WB-фотонабор `1-5`;
+- `marketplace_apply.status=not_applied`.
+
+Promotion дополнен поддержкой fresh-полей `product_size_mm_each`,
+`package_size_mm` и структурированных WB `dimensions_cm`. Регрессионные тесты:
+`8 passed`.
+
+## Точка продолжения 2026-07-14
+
+Контекст карточной работы повторно проверен по Layer 2, Layer 3, статусному
+snapshot и актуальному backlog. Текущая точка продолжения:
+
+- approved passports: `210`;
+- `209` паспортов закрыты как `owner_approved_applied_verified` и
+  `applied_verified`;
+- один особый паспорт `chev_pz_ng_text0074` имеет статус
+  `owner_approved` / `wb_applied_ozon_removed_policy`: карточка работает
+  только на WB, восстанавливать ее на Ozon без отдельного решения владельца
+  нельзя;
+- согласованных паспортов, ожидающих apply, сейчас нет;
+- последняя согласованная пачка из 10 карточек полностью прошла
+  `apply -> verify -> card_status_sync`; повторно применять ее нельзя;
+- старые Layer 2 записи `not_submitted` и исторические pending-разделы ниже
+  не являются текущей очередью: перед повторным использованием их нужно
+  пересобрать из свежего Layer 1.
+
+Актуальный статусный источник:
+`data/catalog/card_status/latest.json`, сформирован
+`2026-07-13T19:49:38`.
+
+Текущий backlog содержит `674` строки / `608` уникальных SKU. Без approved
+passport остаются примерно `415` уникальных SKU; из них `65` относятся к
+`business_priority=now` и `audit_priority=high`. Сам backlog сформирован
+2026-07-05. Владелец 2026-07-15 отдельно подтвердил, что изменений в выбранных
+карточках не было, и распорядился продолжить без refresh Layer 1. Это
+owner-approved исключение для текущей тройки, а не отмена общего правила
+проверки свежести.
+
+Следующая тройка по текущему `backlog_rank` после исключения уже approved SKU:
+
+1. `chev_kp_prikol_text0014` - WB-only, шеврон «Я все могу но не буду»;
+2. `chev_kp_prikol_text0015` - WB-only, шеврон «Не ходи за мной я сам
+   заблудился»;
+3. `chev_kit2_nr_mvd_pict0004` - Ozon/WB, комплект шевронов
+   «Полиция МВД ГИБДД/ДПС».
+
+Тройка выдана fresh-аудиторам без refresh Layer 1 по решению владельца:
+
+1. использован row-level Layer 1 package от 2026-06-28;
+2. каждая карточка обработана отдельным одноразовым fresh-аудитором;
+3. все доступные фото просмотрены, self-contained HTML и `audit.json` созданы;
+4. HTML проверены на `390x844` и `1366x1000`, горизонтального overflow и
+   битых встроенных изображений нет;
+5. файлы отправлены владельцу сразу по готовности и ожидают review;
+6. `согласовано` означает только Layer 2 corrections и создание Layer 3;
+   marketplace write начинается только после отдельного `применяй` по точно
+   показанному пакету.
+
+Layer 2 текущей тройки:
+
+- `data/catalog/card_audits/fresh_triples_stale_layer1_20260715/0053_chev_kp_prikol_text0014/`;
+- `data/catalog/card_audits/fresh_triples_stale_layer1_20260715/0054_chev_kp_prikol_text0015/`;
+- `data/catalog/card_audits/fresh_triples_stale_layer1_20260715/0055_chev_kit2_nr_mvd_pict0004/`.
+
+Все три аудита прошли layout-проверку. После owner review для всех трех созданы
+Layer 3 паспорта со статусом `owner_approved_pending_batch_apply`; marketplace
+write не выполнялся.
+
+HTML отправлены владельцу как реальные Telegram-документы через общий бот в
+рабочий топик `42336`:
+
+- `chev_kp_prikol_text0014.html` - `message_id=94451`;
+- `chev_kp_prikol_text0015.html` - `message_id=94452`;
+- `chev_kit2_nr_mvd_pict0004.html` - `message_id=94453`.
+
+Актуальное правило петлиц: одна неразрезанная пара с двумя видимыми петлицами
+считается одной физической и одной товарной единицей. Поэтому количество в
+упаковке и единиц в товаре равно `1`, комплектация -
+`неразрезанная пара петлиц на липучке 1 шт.`
 
 ## Короткий текущий статус 2026-07-13
 
@@ -1089,9 +1405,20 @@ SEO строить по согласованной логике:
 data/planning/product_card_designer_tasks.md
 ```
 
-Для ведомственных/форменных шевронов с символикой на WB перед media apply
-нужны версии с водяным знаком/логотипом VitalEmb на защищенной символике. Если
-таких фото нет, добавить задачу дизайнеру и не придумывать, что фото готово.
+Для ведомственных/форменных товаров перед WB media apply нужно классифицировать
+каждый целевой слайд:
+
+- `symbol_bearing`: видна государственная или ведомственная символика; нужна
+  ретушь либо водяной знак поверх символики;
+- `neutral_no_symbol`: символики нет; водяной знак не требуется, перенос между
+  площадками разрешен;
+- `service_no_product`: нейтральная сервисная инфографика; водяной знак не
+  требуется.
+
+Если защищенной версии `symbol_bearing`-слайда нет, добавить задачу дизайнеру,
+записать `media_apply_status=blocked_pending_watermarked_assets` и не выполнять
+WB media update. Это ограничение не блокирует отдельно согласованные изменения
+текста, SEO и характеристик.
 
 ## Материал, состав, липучка
 
@@ -1515,6 +1842,26 @@ data/reports/card_reviews/2026-07-05/chev_kp_bpla_pict0003_owner_review_fast.htm
 
 ## Что нельзя делать
 
+### 2026-07-16 — `chev_kit2_nr_rg_pict0006`
+
+- исправленный HTML окончательно согласован владельцем;
+- Layer 2: `owner_approved_pending_batch_apply`;
+- Layer 3:
+  `data/catalog/master_passport/approved/chev_kit2_nr_rg_pict0006.json`;
+- promotion run:
+  `data/runs/2026-07-16/promote_approved_card_passport_chev_kit2_nr_rg_pict0006_20260716T1857_fix_wb_identity/`;
+- Ozon фото 1-6: `keep/do_not_touch`;
+- WB фотоплан: сохранить текущие фото и добавить Ozon 5 как слайд вариантов
+  ношения;
+- marketplace write не выполнялся.
+
+- Для Ozon JPEG в CMYK нельзя делать визуальные выводы по результату
+  `Pillow.convert("RGB")` или простого ImageMagick-преобразования. Перед
+  сборкой HTML исходный URL нужно отрендерить через Chromium и сохранить
+  браузерный результат в sRGB.
+- Искаженный CMYK-коллаж не является основанием менять фотографии Ozon.
+  Если на странице Ozon фото отображаются корректно, использовать
+  `keep/do_not_touch`.
 - Не менять HTML-шаблон без просьбы владельца.
 - Не отправлять HTML без встроенных изображений.
 - Не писать `на рукав` в title/hashtags для неформенных тематических `nr`.
@@ -1523,3 +1870,156 @@ data/reports/card_reviews/2026-07-05/chev_kp_bpla_pict0003_owner_review_fast.htm
 - Не делать marketplace write из Layer 1 или несогласованного Layer 2.
 - Не считать `approval.status` в Layer 3 единственным источником apply-статуса.
 - Не откатывать чужие изменения в рабочем дереве.
+
+## Проверка WB-фотопланов перед следующим apply 2026-07-16
+
+Проверены все `7` Layer 3 паспортов со статусом
+`owner_approved_pending_batch_apply` и `marketplace_apply.status=not_applied`.
+
+- `chev_kit2_nr_mvd_pict0004`: WB-слайды с символикой защищены; нейтральные
+  варианты ношения и сервисный слайд допустимы без водяного знака;
+- `chev_kit2_nr_mvd_pict0005`: WB 1-3 защищены, WB 4-5 нейтральны;
+- `chev_kit2_nr_mvd_pict0006`: WB 1-3 защищены, WB 4-5 нейтральны;
+- `chev_kit2_nr_rg_pict0003`: WB 1, 3, 4 защищены, WB 2 и 5 нейтральны;
+- `chev_kit2_nr_rg_pict0006`: Ozon 5 с вариантами ношения не содержит
+  символики и остается в целевом WB-фотоплане; текущие WB-слайды 1, 3 и 4
+  содержат незащищенную символику, поэтому только WB media update имеет статус
+  `blocked_pending_watermarked_assets`, задача дизайнеру `VS-DESIGN-035`;
+- `chev_kp_prikol_text0014` и `chev_kp_prikol_text0015`: правило не применимо.
+
+В Layer 2 и Layer 3 записан `media.wb_departmental_symbol_policy`. Пакетный
+preflight теперь отдельно выводит `wb_media_policy` и
+`wb_media_blocked_skus`, не блокируя текстовые/SEO/атрибутные изменения.
+
+## Согласование `chev_kit2_nr_rg_pict0007` 2026-07-16
+
+Владелец согласовал карточку с двумя исправлениями:
+
+- текущие фото Ozon и WB оставить без изменений; в WB добавить нейтральный
+  Ozon 5 с вариантами ношения без символики;
+- в описании заменить ошибочное `скрещенные клинки` на
+  `скрещенные булавы`.
+
+Layer 2 закрыт со статусом `owner_approved_pending_batch_apply`. Создан Layer 3
+passport `data/catalog/master_passport/approved/chev_kit2_nr_rg_pict0007.json`;
+`marketplace_apply.status=not_applied`. Целевой WB-фотоплан:
+`WB 1-4 -> Ozon 5 -> WB 5`, media policy `allowed_verified`.
+
+Promotion дополнительно исправлен для fresh-контракта: placeholder
+`same_as_canonical_description` теперь раскрывается в фактическое canonical
+description, а `physical.item_weight_g_each` сохраняется как вес одного изделия.
+Финальный run:
+`data/runs/2026-07-16/promote_approved_card_passport_chev_kit2_nr_rg_pict0007_20260716T1930_final/`.
+
+## Согласование `chev_kit2_nr_rg_pict0011` 2026-07-16
+
+Владелец согласовал карточку для создания паспорта без применения на
+маркетплейсы:
+
+- размер каждого изделия подтвержден как `75*100 мм`;
+- на Ozon добавить только текущий WB 4 с вариантами ношения без ведомственной
+  символики;
+- остальные Ozon 1-6 и WB 1-5 оставить без изменения;
+- текущие WB 1-3 пока остаются с серой ретушью;
+- дизайнеру создана задача `VS-DESIGN-036`: заменить серые маски на защитные
+  водяные знаки в виде нашего логотипа и исправить WB-размерный слайд с
+  `80*100 мм` на `75*100 мм`;
+- готовые дизайнерские WB-фото нельзя применять без отдельного согласования.
+
+Layer 2:
+`data/catalog/card_audits/fresh_quad_stale_layer1_20260716/0343_chev_kit2_nr_rg_pict0011/audit.json`.
+
+Layer 3:
+`data/catalog/master_passport/approved/chev_kit2_nr_rg_pict0011.json`.
+
+Статус: `owner_approved_pending_batch_apply`,
+`marketplace_apply.status=not_applied`.
+
+Promotion run:
+`data/runs/2026-07-16/promote_approved_card_passport_chev_kit2_nr_rg_pict0011_20260716T2220_final/`.
+
+## Согласование `chev_kp_prikol_text0002` 2026-07-16
+
+Владелец полностью согласовал аудит карточки:
+
+- название: `Шеврон прикол на липучке Мозги не делайте, на кепку`;
+- единое описание из трех тематических блоков;
+- цвета `оливковый, черный`;
+- название цвета `Мозги мне с самого утра не делайте, оливковый`;
+- размер изделия `80*50 мм`, вес `10 г`;
+- упаковка Ozon `100*60*10 мм`, WB `10*6*1 см`;
+- целевая модель `Шевроны прикол на кепку, текст`;
+- группировка остается отдельной ручной опасной операцией после проверки
+  состава текущих групп;
+- Ozon 1-5 оставить; для WB подготовить адаптированный Ozon 4 как пятый
+  слайд между WB 3 и WB 4.
+
+Создана задача дизайнеру `VS-DESIGN-037`. До готовности адаптированного файла
+WB media apply не выполнять.
+
+Layer 2:
+`data/catalog/card_audits/fresh_quad_stale_layer1_20260716/0344_chev_kp_prikol_text0002/audit.json`.
+
+Layer 3:
+`data/catalog/master_passport/approved/chev_kp_prikol_text0002.json`.
+
+Статус: `owner_approved_pending_batch_apply`,
+`marketplace_apply.status=not_applied`.
+
+Promotion run:
+`data/runs/2026-07-16/promote_approved_card_passport_chev_kp_prikol_text0002_20260716T2223_final/`.
+
+## Apply 10 согласованных карточек 2026-07-16
+
+Применены и финально проверены:
+
+- `chev_kit2_nr_mvd_pict0004`;
+- `chev_kit2_nr_mvd_pict0005`;
+- `chev_kit2_nr_mvd_pict0006`;
+- `chev_kit2_nr_rg_pict0003`;
+- `chev_kit2_nr_rg_pict0006`;
+- `chev_kit2_nr_rg_pict0007`;
+- `chev_kit2_nr_rg_pict0011`;
+- `chev_kp_prikol_text0002`;
+- `chev_kp_prikol_text0014`;
+- `chev_kp_prikol_text0015`.
+
+Результат:
+
+- seller SKU: Ozon `8/8`, WB `10/10`;
+- контент: Ozon `9/9`, WB `10/10`, final verify `ok`;
+- `chev_kp_prikol_text0014` создана на Ozon:
+  `product_id=5527535955`, `price=550`, `old_price=1100`,
+  `min_price=400`;
+- `chev_kp_prikol_text0015` осталась WB-only, создание Ozon не выполнялось;
+- WB media для `chev_kit2_nr_rg_pict0006` не отправлялись из-за
+  `blocked_pending_watermarked_assets`; текущие WB-фото сохранены;
+- Layer 2 и Layer 3 закрыты для `10/10` со статусом
+  `owner_approved_applied_verified`;
+- итоговый snapshot:
+  `data/catalog/card_status/latest.json`.
+
+Основные runs:
+
+- approved dry-run:
+  `data/runs/2026-07-16/plan_10_approved_cards_final_20260716T2233/`;
+- основной apply:
+  `data/runs/2026-07-16/apply_10_approved_cards_20260716T2234/`;
+- recovery content apply:
+  `data/runs/2026-07-16/recovery_5_cards_apply_nomedia_20260716T2243/`;
+- финальный verify:
+  `data/runs/2026-07-16/verify_10_approved_cards_final_20260716T2244/`.
+
+Подтвержденные recovery-правила:
+
+- WB/Ozon dictionary-поля цвета используют технические значения
+  `черный`, `желтый`; owner-facing текст можно оставлять с `ё`;
+- WB отклоняет всю связанную группу карточек, если одна строка содержит
+  недопустимое dictionary-значение;
+- WB CDN URL старой позиции фото нельзя повторно использовать после
+  перестановки слайдов: позиционные URL меняются и могут вернуть `409`;
+- Ozon-create в batch разрешен только при явном
+  `safety.dangerous_actions=ozon_card_create`;
+- post-verify не должен считать
+  `ozon_offer_id_after_seller_sku_update` доказательством существования
+  Ozon-карточки.

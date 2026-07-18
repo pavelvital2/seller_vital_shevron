@@ -1,5 +1,6 @@
 import pytest
 
+from seller_agent.config import AppCredentials
 from seller_agent.tasks.card_content_update import (
     _build_ozon_payload,
     _build_ozon_verify_payload,
@@ -9,6 +10,7 @@ from seller_agent.tasks.card_content_update import (
     _ozon_product_status_is_blocking,
     _ozon_task_id,
     _verify_wb_payloads,
+    _verify_one,
     _wb_media_urls_from_passport,
     run_apply_approved_card,
 )
@@ -235,6 +237,29 @@ def test_wb_media_urls_from_passport_requires_explicit_target_assets() -> None:
     assert _wb_media_urls_from_passport(
         {"media": {"target_assets": [{"url": "https://example.test/1.jpg"}, {"url": "https://example.test/1.jpg"}]}}
     ) == ["https://example.test/1.jpg"]
+
+
+def test_verify_one_does_not_treat_future_ozon_offer_id_as_existing_card(tmp_path) -> None:
+    passport = {
+        "identity": {
+            "internal_sku": "wb_only_1",
+            "ozon_offer_id": "",
+            "ozon_offer_id_after_seller_sku_update": "wb_only_1",
+            "wb_vendor_code": "wb_only_1",
+        }
+    }
+
+    result = _verify_one(
+        passport=passport,
+        data_dir=tmp_path,
+        credentials=AppCredentials(ozon_seller=None, ozon_performance=None, wb=None),
+        skip_api=True,
+        run_dir=tmp_path / "verify",
+    )
+
+    assert "ozon" not in result["marketplaces"]
+    assert result["marketplaces"]["wb"]["status"] == "missing"
+    assert result["errors"] == ["wb_current_card_not_found"]
 
 
 def test_wb_verify_normalizes_collapsed_blank_lines_and_is_valid_dimension(tmp_path) -> None:

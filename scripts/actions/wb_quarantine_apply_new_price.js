@@ -16,6 +16,7 @@ const opts = {
   targets: '',
   out: '',
   profile: process.env.WB_BROWSER_PROFILE || defaultProfile,
+  dryRun: false,
 };
 
 for (let i = 0; i < args.length; i += 1) {
@@ -23,6 +24,7 @@ for (let i = 0; i < args.length; i += 1) {
   if (arg === '--targets') opts.targets = path.resolve(args[++i]);
   else if (arg === '--out') opts.out = path.resolve(args[++i]);
   else if (arg === '--profile') opts.profile = path.resolve(args[++i]);
+  else if (arg === '--dry-run') opts.dryRun = true;
   else if (arg === '--help') {
     console.log([
       'Usage: node scripts/actions/wb_quarantine_apply_new_price.js --targets FILE --out FILE [options]',
@@ -31,6 +33,7 @@ for (let i = 0; i < args.length; i += 1) {
       '',
       'Options:',
       '  --profile DIR   Persistent WB browser profile.',
+      '  --dry-run       Read and match quarantine rows without applying them.',
     ].join('\n'));
     process.exit(0);
   } else {
@@ -78,7 +81,7 @@ async function main() {
   const startedAt = new Date().toISOString();
   const result = {
     status: 'blocked',
-    mode: 'apply_new_price',
+    mode: opts.dryRun ? 'dry_run' : 'apply_new_price',
     startedAt,
     finishedAt: '',
     targets_count: targets.length,
@@ -97,7 +100,7 @@ async function main() {
     await page.goto(quarantineUrl, { waitUntil: 'domcontentloaded', timeout: 90000 });
     await page.waitForTimeout(6000);
 
-    const lkResult = await page.evaluate(async ({ quarantineGoodsUrl, targets }) => {
+    const lkResult = await page.evaluate(async ({ quarantineGoodsUrl, targets, dryRun }) => {
       const headers = {
         'wb-seller-lk': localStorage.getItem('wb-eu-portal.seller-token'),
         authorizev3: localStorage.getItem('wb-eu-passport-v2.access-token'),
@@ -162,10 +165,10 @@ async function main() {
         }));
 
       let apply = null;
-      if (matched.length) {
+      if (matched.length && !dryRun) {
         apply = await request('POST', quarantineGoodsUrl, { data: matched.map((row) => row.internal_id) });
       }
-      await new Promise((resolve) => setTimeout(resolve, 4000));
+      if (!dryRun) await new Promise((resolve) => setTimeout(resolve, 4000));
       const after = await readQuarantine();
       const remainingKeys = new Set(after.rows.map((row) => `${Number(row.nmID)}|${Number(row.newPrice)}|${Number(row.newDiscount)}`));
       const remainingMatched = matched.filter((row) => remainingKeys.has(`${row.nmID}|${row.price}|${row.discount}`));
@@ -179,7 +182,7 @@ async function main() {
         after_response_status: after.response.status,
         remainingMatched,
       };
-    }, { quarantineGoodsUrl, targets });
+    }, { quarantineGoodsUrl, targets, dryRun: opts.dryRun });
 
     result.before_count = lkResult.before_count;
     result.matched_count = lkResult.matched.length;
@@ -189,7 +192,12 @@ async function main() {
     result.apply_response = lkResult.apply;
     result.after_count = lkResult.after_count;
     result.after_matched_remaining_count = lkResult.remainingMatched.length;
-    if (!lkResult.matched.length) {
+    if (opts.dryRun && lkResult.missing.length) {
+      result.status = 'blocked';
+      result.error = 'some target rows were not found in quarantine';
+    } else if (opts.dryRun) {
+      result.status = 'ok';
+    } else if (!lkResult.matched.length) {
       result.status = 'blocked';
       result.error = 'no matching quarantine rows found';
     } else if (!lkResult.apply?.ok || lkResult.apply?.json?.error) {

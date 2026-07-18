@@ -27,9 +27,10 @@ def test_ceil_percent_from_price_uses_decimal_ceiling() -> None:
     assert ceil_percent_from_price(Decimal("1000"), Decimal("349")) == 66
 
 
-def test_limit_discount_step_caps_change_to_35_points() -> None:
-    assert limit_discount_step(current_discount=0, target_discount=55) == 35
-    assert limit_discount_step(current_discount=35, target_discount=55) == 55
+def test_limit_discount_step_caps_price_drop_below_default_quarantine_threshold() -> None:
+    assert limit_discount_step(current_discount=0, target_discount=55) == 33
+    assert limit_discount_step(current_discount=33, target_discount=55) == 55
+    assert limit_discount_step(current_discount=10, target_discount=55) == 39
     assert limit_discount_step(current_discount=70, target_discount=20) == 35
 
 
@@ -41,15 +42,16 @@ def test_wb_actions_payload_uses_limited_upload_discount() -> None:
                 "Базовая цена": "1100",
                 "Финальная скидка": 55,
                 "Дельта, п.п.": 55,
-                "Скидка к загрузке": 35,
-                "Дельта загрузки, п.п.": 35,
+                "Скидка к загрузке": 33,
+                "Дельта загрузки, п.п.": 33,
             }
         ]
     )
 
     assert len(changed_rows) == 1
     assert payload["discount_step_limit_pp"] == 35
-    assert payload["data"] == [{"nmID": 101, "price": 1100, "discount": 35}]
+    assert payload["quarantine_safe_price_drop_percent"] == 33
+    assert payload["data"] == [{"nmID": 101, "price": 1100, "discount": 33}]
     assert payload["target_discounts"] == {"101": 55}
 
 

@@ -26,6 +26,7 @@ from seller_agent.safety.approvals import (
 from seller_agent.tasks.status_preflight import run_status_preflight
 from seller_agent.tasks.wb_actions_discount_plan import (
     WB_MAX_DISCOUNT_STEP_PERCENTAGE_POINTS,
+    WB_QUARANTINE_SAFE_PRICE_DROP_PERCENT,
     WbActionsSnapshotLock,
     _lock_path,
     _price_value,
@@ -311,6 +312,7 @@ def _write_report(path: Path, result: dict[str, Any]) -> None:
         f"- regular rows: `{applied.get('regular_payload_rows_count', 0)}`",
         f"- staged rows: `{applied.get('staged_payload_rows_count', 0)}`",
         f"- max discount step: `{result.get('discount_step_limit_pp', WB_MAX_DISCOUNT_STEP_PERCENTAGE_POINTS)} п.п.`",
+        f"- max selling-price decrease per step: `{result.get('quarantine_safe_price_drop_percent', WB_QUARANTINE_SAFE_PRICE_DROP_PERCENT)}%`",
         f"- HTTP status: `{result['applied']['response'].get('httpStatus')}`",
         f"- upload ID: `{result['applied'].get('upload_id')}`",
         f"- skipped because of drift: `{result['drift'].get('skipped_due_to_drift_count', 0)}`",
@@ -386,7 +388,11 @@ def _upload_error_summary(details: dict[str, Any] | None) -> dict[str, Any]:
         if error_text:
             error_counts[error_text] = error_counts.get(error_text, 0) + 1
         lower_error = error_text.lower().replace("\xa0", " ")
-        if "more than twice lower" in lower_error or "lower them gradually" in lower_error:
+        if (
+            "more than twice lower" in lower_error
+            or "lower them gradually" in lower_error
+            or "price quarantine" in lower_error
+        ):
             quarantine_rows.append(
                 {
                     "nmID": row.get("nmID"),
@@ -922,6 +928,7 @@ def run_wb_actions_discount_apply(
         "mode": "apply",
         "overall_status": overall_status,
         "discount_step_limit_pp": WB_MAX_DISCOUNT_STEP_PERCENTAGE_POINTS,
+        "quarantine_safe_price_drop_percent": WB_QUARANTINE_SAFE_PRICE_DROP_PERCENT,
         "approved_plan_run_id": approved_id,
         "approved_id": approved_id,
         "scheme": scheme,

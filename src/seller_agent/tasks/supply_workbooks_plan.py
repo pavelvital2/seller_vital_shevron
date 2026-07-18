@@ -957,7 +957,7 @@ def _infer_pack_qty(title: str, fallback: Any = 1) -> int:
     title_l = (title or "").lower()
     fallback_int = max(1, _safe_int(fallback) or 1)
     if "петлиц" in title_l:
-        return 2
+        return 1
     if "комплект" in title_l:
         match = re.search(r"(\d+)\s*(?:шт|штук|предмет)", title_l)
         if match:

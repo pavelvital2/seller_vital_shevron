@@ -11,6 +11,11 @@ from seller_agent.reports.writer import ensure_dir, write_json
 
 
 OWNER_APPROVED_PREFIX = "owner_approved"
+WB_DEPARTMENTAL_MEDIA_POLICY_STATUSES = {
+    "allowed_verified",
+    "blocked_pending_watermarked_assets",
+    "not_applicable",
+}
 
 
 def _read_json(path: Path) -> Any:
@@ -38,6 +43,25 @@ def _split_hashtags(value: Any) -> list[str]:
     return [item.rstrip(",;") for item in (_normalize_text(item) for item in raw_items) if item.rstrip(",;")]
 
 
+def _search_queries(audit: dict[str, Any]) -> list[str]:
+    candidates: list[Any] = []
+    query_pack_terms = _get_nested(audit, "seo", "query_pack", "terms")
+    if isinstance(query_pack_terms, list):
+        candidates.extend(query_pack_terms)
+    for key in ("target_query_clusters", "confirmed_query_rows"):
+        rows = _get_nested(audit, "seo", key)
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            candidates.append(row.get("query") if isinstance(row, dict) else row)
+    result: list[str] = []
+    for value in candidates:
+        query = _normalize_text(value)
+        if query and query not in result:
+            result.append(query)
+    return result
+
+
 def _numbers(value: Any) -> list[float]:
     return [float(item.replace(",", ".")) for item in re.findall(r"\d+(?:[,.]\d+)?", _normalize_text(value))]
 
@@ -46,7 +70,9 @@ def _clean_size(value: Any, unit: str) -> str:
     text = _normalize_text(value)
     if not text:
         return ""
-    return text if text.endswith(unit) else f"{text} {unit}"
+    text = re.sub(r"\s+(?:каждый|каждое|каждая|каждые)\b", "", text, flags=re.IGNORECASE)
+    text = re.sub(rf"\s*{re.escape(unit)}\s*$", "", text, flags=re.IGNORECASE)
+    return f"{text.strip()} {unit}"
 
 
 def _as_int(value: Any, default: int = 0) -> int:
@@ -122,6 +148,24 @@ def _target_photo_set(audit: dict[str, Any], proposed: dict[str, Any]) -> list[d
     return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
 
 
+def _marketplace_photo_set(
+    audit: dict[str, Any], proposed: dict[str, Any], marketplace: str
+) -> list[dict[str, Any]]:
+    key = f"target_{marketplace}_photo_set"
+    value = proposed.get(key) or _get_nested(audit, "media", key) or []
+    if not isinstance(value, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for item in value:
+        if isinstance(item, dict):
+            result.append(item)
+            continue
+        position = _as_int(item)
+        if position:
+            result.append({"position": position, "source": f"{marketplace.upper()} {position}"})
+    return result
+
+
 def _media_assets(audit: dict[str, Any], proposed: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str]]:
     urls = _photo_url_map(audit)
     warnings: list[str] = []
@@ -158,16 +202,65 @@ def _physical(proposed: dict[str, Any], identity: dict[str, Any] | None = None) 
     if not isinstance(source, dict):
         source = proposed.get("target_physical_parameters")
     if not isinstance(source, dict):
+        source = proposed.get("physical")
+    if not isinstance(source, dict):
+        source = proposed.get("physical_parameters")
+    if not isinstance(source, dict):
         source = {}
+    ozon_attributes = proposed.get("ozon_attributes") if isinstance(proposed.get("ozon_attributes"), dict) else {}
+    wb_attributes = proposed.get("wb_attributes") if isinstance(proposed.get("wb_attributes"), dict) else {}
+    wb_characteristics = (
+        proposed.get("wb_characteristics") if isinstance(proposed.get("wb_characteristics"), dict) else {}
+    )
+    wb_dimensions = (
+        wb_characteristics.get("dimensions_cm")
+        if isinstance(wb_characteristics.get("dimensions_cm"), dict)
+        else {}
+    )
+    wb_dimensions_package = "*".join(
+        _normalize_text(wb_dimensions.get(key)) for key in ("length", "width", "height")
+    ) if all(wb_dimensions.get(key) is not None for key in ("length", "width", "height")) else ""
     errors: list[str] = []
-    product_size = _first_existing(source.get("product_size_mm"), source.get("product_size"), proposed.get("product_size_mm"))
-    ozon_package = _first_existing(source.get("ozon_package_mm"), source.get("ozon_package"))
-    wb_package = _first_existing(source.get("wb_package_cm"), source.get("wb_package"))
-    weight = _as_int(source.get("weight_g") or source.get("ozon_weight_g") or source.get("weight"), 0)
+    product_size = _first_existing(
+        source.get("product_size_mm"),
+        source.get("product_size_mm_each"),
+        source.get("product_size"),
+        proposed.get("product_size_mm"),
+        ozon_attributes.get("product_size_mm"),
+    )
+    ozon_package = _first_existing(
+        source.get("ozon_package_mm"),
+        source.get("ozon_package"),
+        source.get("package_size_ozon_mm"),
+        source.get("package_size_mm"),
+        ozon_attributes.get("package_dimensions_mm"),
+    )
+    wb_package = _first_existing(
+        source.get("wb_package_cm"),
+        source.get("wb_package"),
+        source.get("package_size_wb_cm"),
+        wb_attributes.get("package_dimensions_cm"),
+        wb_dimensions_package,
+    )
+    weight = _as_int(
+        source.get("weight_g")
+        or source.get("ozon_weight_g")
+        or source.get("package_weight_g")
+        or source.get("weight")
+        or ozon_attributes.get("package_weight_g"),
+        0,
+    )
+    item_weight = _as_int(
+        source.get("item_weight_g") or source.get("item_weight_g_each"),
+        weight,
+    )
     pack_qty = _as_int(
         source.get("pack_qty")
         or source.get("units_in_one_product")
+        or source.get("physical_item_count")
         or proposed.get("pack_qty")
+        or ozon_attributes.get("units_per_product")
+        or ozon_attributes.get("quantity_in_package")
         or identity.get("pack_qty"),
         1,
     )
@@ -184,7 +277,7 @@ def _physical(proposed: dict[str, Any], identity: dict[str, Any] | None = None) 
             "product_size_mm": _clean_size(product_size, "мм"),
             "package_dimensions_ozon_mm": _clean_size(ozon_package, "мм"),
             "package_dimensions_wb_cm": _clean_size(wb_package, "см"),
-            "item_weight_g": weight,
+            "item_weight_g": item_weight,
             "package_weight_g": weight,
             "pack_qty": pack_qty,
         },
@@ -204,6 +297,12 @@ def _content(proposed: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
         errors.append("title_missing")
     if not description:
         errors.append("description_missing")
+    ozon_description = _normalize_text(proposed.get("ozon_description"))
+    if ozon_description.lower() == "same_as_canonical_description":
+        ozon_description = description
+    wb_description = _normalize_text(proposed.get("wb_description"))
+    if wb_description.lower() == "same_as_canonical_description":
+        wb_description = description
     blocks = proposed.get("description_blocks")
     if not isinstance(blocks, list) or not blocks:
         blocks = [part.strip() for part in description.split("\n\n") if part.strip()]
@@ -213,8 +312,8 @@ def _content(proposed: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
             "ozon_title": _first_existing(proposed.get("ozon_title"), title),
             "wb_title": _first_existing(proposed.get("wb_title"), title),
             "canonical_description": description,
-            "ozon_description": _first_existing(proposed.get("ozon_description"), description),
-            "wb_description": _first_existing(proposed.get("wb_description"), description),
+            "ozon_description": _first_existing(ozon_description, description),
+            "wb_description": _first_existing(wb_description, description),
             "description_blocks": blocks,
         },
         errors,
@@ -225,8 +324,10 @@ def _colors(proposed: dict[str, Any]) -> list[str]:
     return _split_values(
         proposed.get("color")
         or proposed.get("colors")
+        or _get_nested(proposed, "physical", "colors")
         or _get_nested(proposed, "target_physical_parameters", "colors")
         or _get_nested(proposed, "target_physical_params", "colors")
+        or _get_nested(proposed, "physical_parameters", "colors")
     )
 
 
@@ -246,8 +347,10 @@ def _is_patch_product(identity: dict[str, Any], proposed: dict[str, Any], sku: s
 def _composition(proposed: dict[str, Any], *, is_patch: bool = False) -> list[str]:
     return _split_values(
         proposed.get("composition")
+        or _get_nested(proposed, "physical", "composition")
         or _get_nested(proposed, "target_physical_parameters", "composition")
         or _get_nested(proposed, "target_physical_params", "composition")
+        or _get_nested(proposed, "physical_parameters", "composition")
         or (["полиэстер"] if is_patch else ["полиэстер", "нейлон"])
     )
 
@@ -274,8 +377,10 @@ def _package_contents(pack_qty: str, *, is_patch: bool = False) -> str:
 def _material(proposed: dict[str, Any]) -> str:
     return _first_existing(
         proposed.get("material"),
+        _get_nested(proposed, "physical", "material"),
         _get_nested(proposed, "target_physical_parameters", "material"),
         _get_nested(proposed, "target_physical_params", "material"),
+        _get_nested(proposed, "physical_parameters", "material"),
         "Габардин",
     )
 
@@ -364,6 +469,8 @@ def build_passport_from_audit(audit: dict[str, Any], audit_path: Path) -> tuple[
         errors.append("colors_missing")
     color_name = _first_existing(
         proposed.get("color_name"),
+        _get_nested(proposed, "physical", "color_name"),
+        _get_nested(proposed, "ozon_attributes", "color_name"),
         _get_nested(proposed, "target_physical_parameters", "color_name"),
         _get_nested(proposed, "target_physical_params", "color_name"),
     )
@@ -371,16 +478,21 @@ def build_passport_from_audit(audit: dict[str, Any], audit_path: Path) -> tuple[
         errors.append("color_name_missing")
     material = _material(proposed)
     composition = _composition(proposed, is_patch=is_patch)
-    ozon_model_name = _first_existing(proposed.get("ozon_model_name"), _get_nested(proposed, "ozon_attributes", "Название модели"), _get_nested(proposed, "ozon_attributes", "model_name"))
-    hashtags = " ".join(
-        _split_hashtags(
-            _first_existing(
-                proposed.get("ozon_hashtags"),
-                _get_nested(proposed, "ozon_attributes", "#Хештеги"),
-                _get_nested(proposed, "ozon_attributes", "hashtags"),
-            )
-        )
+    ozon_model_name = _first_existing(
+        proposed.get("ozon_model_name"),
+        _get_nested(proposed, "ozon_attributes", "Название модели"),
+        _get_nested(proposed, "ozon_attributes", "model_name"),
+        _get_nested(proposed, "ozon_attributes", "model"),
+        _get_nested(proposed, "ozon_attributes", "9048_model"),
     )
+    hashtags_value = proposed.get("ozon_hashtags")
+    if isinstance(hashtags_value, str) and "#" not in hashtags_value:
+        hashtags_value = None
+    if not hashtags_value:
+        hashtags_value = _get_nested(proposed, "ozon_attributes", "#Хештеги")
+    if not hashtags_value:
+        hashtags_value = _get_nested(proposed, "ozon_attributes", "hashtags")
+    hashtags = " ".join(_split_hashtags(hashtags_value))
     wb_tags = _split_values(_get_nested(proposed, "wb_attributes", "wb_tags") or proposed.get("wb_tags"))
     media_assets, media_warnings = _media_assets(audit, proposed)
     warnings.extend(media_warnings)
@@ -400,6 +512,9 @@ def build_passport_from_audit(audit: dict[str, Any], audit_path: Path) -> tuple[
     )
     owner_review = audit.get("owner_review") if isinstance(audit.get("owner_review"), dict) else {}
     approved_at = _first_existing(owner_review.get("approved_at"), owner_review.get("final_review_sent_at"), datetime.now().isoformat(timespec="seconds"))
+    dangerous_actions = ["card_content_update", "seller_sku_update", "wb_media_update"]
+    if proposed.get("future_ozon_create"):
+        dangerous_actions.append("ozon_card_create")
     passport = {
         "$schema": "./master_product_passport_approved.schema.json",
         "approval": {
@@ -420,9 +535,23 @@ def build_passport_from_audit(audit: dict[str, Any], audit_path: Path) -> tuple[
             "ozon_offer_id_after_seller_sku_update": sku,
             "ozon_product_id": _first_existing(_get_nested(identity, "ozon", "product_id"), identity.get("ozon_product_id"), _get_nested(audit, "current_state", "ozon", "product_id")),
             "ozon_sku": _first_existing(_get_nested(identity, "ozon", "sku"), identity.get("ozon_sku"), _get_nested(audit, "current_state", "ozon", "sku")),
-            "wb_vendor_code": _first_existing(_get_nested(identity, "wb", "vendor_code"), identity.get("wb_vendor_code"), _get_nested(audit, "current_state", "wb", "vendor_code")),
+            "wb_vendor_code": _first_existing(
+                _get_nested(identity, "wb", "vendor_code"),
+                _get_nested(identity, "wb", "vendorCode"),
+                identity.get("wb_vendor_code"),
+                identity.get("wb_vendorCode"),
+                _get_nested(audit, "current_state", "wb", "vendor_code"),
+                _get_nested(audit, "current_state", "wb", "vendorCode"),
+            ),
             "wb_vendor_code_after_seller_sku_update": sku,
-            "wb_nm_id": _first_existing(_get_nested(identity, "wb", "nm_id"), identity.get("wb_nm_id"), _get_nested(audit, "current_state", "wb", "nm_id")),
+            "wb_nm_id": _first_existing(
+                _get_nested(identity, "wb", "nm_id"),
+                _get_nested(identity, "wb", "nmID"),
+                identity.get("wb_nm_id"),
+                identity.get("wb_nmID"),
+                _get_nested(audit, "current_state", "wb", "nm_id"),
+                _get_nested(audit, "current_state", "wb", "nmID"),
+            ),
             "wb_barcode": _first_existing(_get_nested(identity, "wb", "barcode"), identity.get("wb_barcode")),
         },
         "content": content,
@@ -441,20 +570,51 @@ def build_passport_from_audit(audit: dict[str, Any], audit_path: Path) -> tuple[
             "designer_tasks": audit.get("designer_tasks") or [],
             "target_assets": media_assets,
             "target_marketplace_photo_set": _target_photo_set(audit, proposed),
+            "target_ozon_photo_set": _marketplace_photo_set(audit, proposed, "ozon"),
+            "target_wb_photo_set": _marketplace_photo_set(audit, proposed, "wb"),
+            "wb_departmental_symbol_policy": (
+                (audit.get("media") or {}).get("wb_departmental_symbol_policy")
+                if isinstance(audit.get("media"), dict)
+                else None
+            ),
         },
         "seo": {
-            "search_queries": _get_nested(audit, "seo", "query_pack", "terms") or [],
+            "search_queries": _search_queries(audit),
             "ozon_hashtags": _split_hashtags(hashtags),
             "wb_tags": wb_tags,
         },
         "ozon": {"attributes": ozon_attrs},
         "wb": {"attributes": wb_attrs},
         "safety": {
-            "dangerous_actions": ["card_content_update", "seller_sku_update", "wb_media_update"],
+            "dangerous_actions": dangerous_actions,
             "approval_source": "owner-reviewed HTML and owner-approved Layer 2 audit",
         },
     }
     return passport, [], warnings
+
+
+def validate_wb_departmental_media_policy(passport: dict[str, Any]) -> dict[str, Any]:
+    """Validate WB media policy separately from non-media card changes."""
+    media = passport.get("media") if isinstance(passport.get("media"), dict) else {}
+    policy = (
+        media.get("wb_departmental_symbol_policy")
+        if isinstance(media.get("wb_departmental_symbol_policy"), dict)
+        else {}
+    )
+    status = _normalize_text(policy.get("media_apply_status"))
+    errors: list[str] = []
+    if not status:
+        errors.append("wb_departmental_symbol_policy_missing")
+    elif status not in WB_DEPARTMENTAL_MEDIA_POLICY_STATUSES:
+        errors.append(f"wb_departmental_symbol_policy_invalid_status:{status}")
+    elif status == "blocked_pending_watermarked_assets":
+        errors.append("wb_media_update_blocked_pending_watermarked_assets")
+    return {
+        "status": "blocked" if errors else "ok",
+        "media_apply_status": status or "missing",
+        "errors": errors,
+        "rule": policy.get("rule") or "",
+    }
 
 
 def run_promote_approved_card_passport(
@@ -549,7 +709,21 @@ def ensure_approved_passports_for_batch(*, data_dir: Path, internal_skus: list[s
     approved_dir = data_dir / "catalog" / "master_passport" / "approved"
     missing = [sku for sku in internal_skus if not (approved_dir / f"{sku}.json").exists()]
     if not missing:
-        return {"status": "ok", "missing_skus": [], "promotion": None}
+        media_policy = {
+            sku: validate_wb_departmental_media_policy(
+                _read_json(approved_dir / f"{sku}.json")
+            )
+            for sku in internal_skus
+        }
+        return {
+            "status": "ok",
+            "missing_skus": [],
+            "promotion": None,
+            "wb_media_policy": media_policy,
+            "wb_media_blocked_skus": [
+                sku for sku, result in media_policy.items() if result["status"] == "blocked"
+            ],
+        }
     promotion = run_promote_approved_card_passport(
         data_dir=data_dir,
         internal_skus=missing,
@@ -565,10 +739,21 @@ def ensure_approved_passports_for_batch(*, data_dir: Path, internal_skus: list[s
         if not (approved_dir / f"{sku}.json").exists()
     ]
     blocked = [row for row in rows if row.get("status") == "blocked"]
+    media_policy = {}
+    for sku in internal_skus:
+        passport_path = approved_dir / f"{sku}.json"
+        if passport_path.exists():
+            media_policy[sku] = validate_wb_departmental_media_policy(
+                _read_json(passport_path)
+            )
     return {
         "status": "ok" if not still_missing and not blocked else "blocked",
         "missing_skus": missing,
         "still_missing_skus": still_missing,
         "blocked": blocked,
         "promotion": promotion,
+        "wb_media_policy": media_policy,
+        "wb_media_blocked_skus": [
+            sku for sku, result in media_policy.items() if result["status"] == "blocked"
+        ],
     }

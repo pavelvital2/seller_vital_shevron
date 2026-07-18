@@ -529,7 +529,7 @@ ATTRIBUTE_MAPPINGS: list[dict[str, str]] = [
         "wb_characteristic_id": "179792",
         "wb_characteristic_name": "Количество предметов в упаковке",
         "wb_value_strategy": "Use concrete count of physical items in kit.",
-        "notes": "Petlitcy one product unit is two uncut loops, but pack_qty business meaning must be explicit.",
+        "notes": "Petlitcy are one uncut pair and count as one physical item; use pack_qty=1.",
     },
     {
         "section": "kit",

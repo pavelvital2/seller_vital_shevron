@@ -11,7 +11,9 @@ from zoneinfo import ZoneInfo
 from seller_agent.config import AppCredentials
 from seller_agent.core.run_manifest import manifest_from_summary, write_run_manifest
 from seller_agent.marketplaces.ozon.adapter import OzonSellerAdapter
+from seller_agent.marketplaces.wb.analytics_adapter import WbAnalyticsAdapter
 from seller_agent.marketplaces.wb.communications_adapter import WbCommunicationsAdapter
+from seller_agent.marketplaces.wb.fbw_supplies_adapter import WbFbwSuppliesAdapter
 from seller_agent.marketplaces.wb.finance_adapter import WbFinanceAdapter
 from seller_agent.marketplaces.wb.promotion_adapter import WbPromotionAdapter
 from seller_agent.marketplaces.wb.statistics_adapter import WbStatisticsAdapter
@@ -33,6 +35,17 @@ RUN_PREFIXES = [
     "wb_card_create_apply_",
     "restore_ozon_session_",
 ]
+
+ACTIVE_OZON_SUPPLY_STATES = [
+    "DATA_FILLING",
+    "READY_TO_SUPPLY",
+    "ACCEPTED_AT_SUPPLY_WAREHOUSE",
+    "IN_TRANSIT",
+    "ACCEPTANCE_AT_STORAGE_WAREHOUSE",
+    "REPORTS_CONFIRMATION_AWAITING",
+]
+ACTIVE_WB_SUPPLY_STATUS_IDS = {1, 2, 3, 4, 6}
+TARGET_PRODUCT_GROUPS = {"chev", "nash", "loop"}
 
 
 def _safe_read_json(path: Path) -> Any | None:
@@ -213,6 +226,17 @@ def _unified_catalog_section(data_dir: Path) -> dict[str, Any]:
     active_ozon = sum(1 for row in rows if _truthy(row.get("active_ozon")))
     active_wb = sum(1 for row in rows if _truthy(row.get("active_wb")))
     with_internal_sku = sum(1 for row in rows if str(row.get("internal_sku") or "").strip())
+    target_rows = [
+        row
+        for row in rows
+        if str(row.get("product_group") or "").strip().lower() in TARGET_PRODUCT_GROUPS
+    ]
+    target_with_internal_sku = sum(
+        1 for row in target_rows if str(row.get("internal_sku") or "").strip()
+    )
+    both_marketplaces = sum(
+        1 for row in rows if _truthy(row.get("active_ozon")) and _truthy(row.get("active_wb"))
+    )
     stat = path.stat()
     return {
         "status": "ok",
@@ -220,15 +244,21 @@ def _unified_catalog_section(data_dir: Path) -> dict[str, Any]:
         "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
         "products": len(rows),
         "with_internal_sku": with_internal_sku,
+        "target_products": len(target_rows),
+        "target_with_internal_sku": target_with_internal_sku,
+        "target_identification_complete": bool(target_rows) and target_with_internal_sku == len(target_rows),
+        "non_target_or_deferred_products": len(rows) - len(target_rows),
+        # Compatibility only. Do not use this legacy status as mapping completeness.
         "confirmed_products": mapping_counts.get("confirmed", 0),
+        "legacy_confirmed_status_products": mapping_counts.get("confirmed", 0),
         "ozon_only_products": mapping_counts.get("ozon_only", 0),
         "wb_only_products": mapping_counts.get("wb_only", 0),
         "mapping_status_counts": dict(sorted(mapping_counts.items())),
         "active_ozon_products": active_ozon,
         "active_wb_products": active_wb,
-        "both_marketplaces_products": sum(
-            1 for row in rows if _truthy(row.get("active_ozon")) and _truthy(row.get("active_wb"))
-        ),
+        "both_marketplaces_products": both_marketplaces,
+        "active_ozon_only_products": active_ozon - both_marketplaces,
+        "active_wb_only_products": active_wb - both_marketplaces,
     }
 
 
@@ -620,14 +650,32 @@ def _summarize_ozon_finance_expenses(
 
 def _summarize_wb_orders(rows: list[dict[str, Any]]) -> dict[str, Any]:
     active_rows = [row for row in rows if not _truthy(row.get("isCancel"))]
-    amount = sum(_first_number(row, ("finishedPrice", "priceWithDisc", "totalPrice")) for row in active_rows)
-    top_skus = Counter(str(row.get("supplierArticle") or row.get("vendorCode") or "").strip() for row in active_rows)
+    cancelled_rows = [row for row in rows if _truthy(row.get("isCancel"))]
+    price_keys = ("priceWithDisc", "finishedPrice", "totalPrice", "forPay")
+    amount = sum(_first_number(row, price_keys) for row in rows)
+    active_amount = sum(_first_number(row, price_keys) for row in active_rows)
+    cancelled_amount = sum(_first_number(row, price_keys) for row in cancelled_rows)
+    top_skus = Counter(str(row.get("supplierArticle") or row.get("vendorCode") or "").strip() for row in rows)
     top_skus.pop("", None)
     return {
         "total_rows": len(rows),
+        "total_orders": len(rows),
         "active_orders": len(active_rows),
-        "cancelled_orders": len(rows) - len(active_rows),
+        "cancelled_orders": len(cancelled_rows),
         "amount": _money(amount),
+        "active_amount": _money(active_amount),
+        "cancelled_amount": _money(cancelled_amount),
+        "price_basis": "priceWithDisc",
+        "amount_fields": {
+            "all_rows": {
+                key: _money(sum(_first_number(row, (key,)) for row in rows))
+                for key in ("totalPrice", "priceWithDisc", "finishedPrice", "forPay")
+            },
+            "active_rows": {
+                key: _money(sum(_first_number(row, (key,)) for row in active_rows))
+                for key in ("totalPrice", "priceWithDisc", "finishedPrice", "forPay")
+            },
+        },
         "top_skus": [{"sku": sku, "orders": count} for sku, count in top_skus.most_common(5)],
     }
 
@@ -642,18 +690,35 @@ def _summarize_wb_sales(rows: list[dict[str, Any]]) -> dict[str, Any]:
         else:
             sale_rows.append(row)
 
-    sales_amount = sum(_first_number(row, ("forPay", "finishedPrice", "priceWithDisc", "totalPrice")) for row in sale_rows)
-    returns_amount = sum(_first_number(row, ("forPay", "finishedPrice", "priceWithDisc", "totalPrice")) for row in return_rows)
+    price_keys = ("priceWithDisc", "finishedPrice", "totalPrice", "forPay")
+    sales_amount = sum(_first_number(row, price_keys) for row in sale_rows)
+    returns_amount = sum(_first_number(row, price_keys) for row in return_rows)
+    for_pay_amount = sum(_first_number(row, ("forPay",)) for row in sale_rows)
+    returns_for_pay_amount = sum(_first_number(row, ("forPay",)) for row in return_rows)
     return {
         "status": "ok",
         "source": "/api/v1/supplier/sales",
-        "source_note": "Оперативный предварительный отчет WB: продажа/возврат, 1 строка = 1 товар.",
+        "source_note": "Оперативный предварительный отчет WB: продажа/возврат, 1 строка = 1 товар; сумма для витрины рассчитана по priceWithDisc.",
         "total_rows": len(rows),
         "sales_rows": len(sale_rows),
         "return_rows": len(return_rows),
         "sales_amount": _money(sales_amount),
         "returns_amount": _money(returns_amount),
         "net_amount_estimate": _money(sales_amount - returns_amount),
+        "for_pay_amount": _money(for_pay_amount),
+        "returns_for_pay_amount": _money(returns_for_pay_amount),
+        "net_for_pay_estimate": _money(for_pay_amount - returns_for_pay_amount),
+        "price_basis": "priceWithDisc",
+        "amount_fields": {
+            "sale_rows": {
+                key: _money(sum(_first_number(row, (key,)) for row in sale_rows))
+                for key in ("totalPrice", "priceWithDisc", "finishedPrice", "forPay")
+            },
+            "return_rows": {
+                key: _money(sum(_first_number(row, (key,)) for row in return_rows))
+                for key in ("totalPrice", "priceWithDisc", "finishedPrice", "forPay")
+            },
+        },
     }
 
 
@@ -844,6 +909,73 @@ def _summarize_wb_stocks(
         "low_stock_threshold": low_stock_threshold,
         "low_stock_count": sum(1 for sku, qty in qty_by_sku.items() if sku in master_wb_codes and 0 < qty <= low_stock_threshold),
         "low_stock_sample": low_stock_sample,
+    }
+
+
+def _summarize_wb_analytics_stocks(
+    *,
+    stock_rows: list[dict[str, Any]],
+    catalog_rows: list[dict[str, Any]],
+    low_stock_threshold: int = 3,
+) -> dict[str, Any]:
+    qty_by_nm: dict[str, float] = {}
+    in_way_to_client = 0.0
+    in_way_from_client = 0.0
+    for row in stock_rows:
+        nm_id = str(row.get("nmId") or row.get("nm_id") or "").strip()
+        if not nm_id:
+            continue
+        qty_by_nm[nm_id] = qty_by_nm.get(nm_id, 0.0) + _first_number(row, ("quantity", "qty", "stock"))
+        in_way_to_client += _first_number(row, ("inWayToClient", "in_way_to_client"))
+        in_way_from_client += _first_number(row, ("inWayFromClient", "in_way_from_client"))
+
+    catalog_by_nm = {
+        str(row.get("wb_nm_id") or "").strip(): row
+        for row in catalog_rows
+        if str(row.get("wb_nm_id") or "").strip()
+    }
+    catalog_nm_ids = set(catalog_by_nm)
+    missing_nm_ids = sorted(catalog_nm_ids - set(qty_by_nm))
+
+    def product_row(nm_id: str, quantity: float | None = None) -> dict[str, Any]:
+        catalog_row = catalog_by_nm.get(nm_id, {})
+        result = {
+            "nm_id": nm_id,
+            "sku": str(catalog_row.get("wb_vendor_code") or "").strip(),
+            "internal_sku": _catalog_internal_sku(catalog_row),
+            "title": _catalog_title(catalog_row),
+        }
+        if quantity is not None:
+            result["quantity"] = int(quantity)
+        return result
+
+    zero_stock = [
+        product_row(nm_id, qty)
+        for nm_id, qty in sorted(qty_by_nm.items(), key=lambda item: (item[1], item[0]))
+        if nm_id in catalog_nm_ids and qty <= 0
+    ]
+    low_stock = [
+        product_row(nm_id, qty)
+        for nm_id, qty in sorted(qty_by_nm.items(), key=lambda item: (item[1], item[0]))
+        if nm_id in catalog_nm_ids and 0 < qty <= low_stock_threshold
+    ]
+    return {
+        "status": "ok",
+        "source": "/api/analytics/v1/stocks-report/wb-warehouses",
+        "source_note": "Актуальный WB Analytics endpoint; строки агрегированы по nmId по всем складам.",
+        "warehouse_rows": len(stock_rows),
+        "nm_rows": len(qty_by_nm),
+        "wb_catalog_nm_count": len(catalog_nm_ids),
+        "quantity_total": int(sum(qty_by_nm.values())),
+        "in_way_to_client": int(in_way_to_client),
+        "in_way_from_client": int(in_way_from_client),
+        "zero_stock_count": len(zero_stock),
+        "zero_stock_sample": zero_stock[:10],
+        "missing_in_stock_source_count": len(missing_nm_ids),
+        "missing_in_stock_source_sample": [product_row(nm_id) for nm_id in missing_nm_ids[:10]],
+        "low_stock_threshold": low_stock_threshold,
+        "low_stock_count": len(low_stock),
+        "low_stock_sample": low_stock[:10],
     }
 
 
@@ -1073,20 +1205,30 @@ def _collect_business_snapshot(
     if credentials.ozon_seller:
         ozon = OzonSellerAdapter(credentials.ozon_seller)
         metrics = ["revenue", "ordered_units"]
+        ozon_orders: dict[str, Any] = {
+            "status": "ok",
+            "source": "/v1/analytics/data",
+        }
         try:
-            business["ozon"]["orders"] = {
-                "status": "ok",
-                "source": "/v1/analytics/data",
-                "yesterday": _extract_ozon_analytics(
-                    ozon.fetch_analytics_data(
-                        date_from=periods["yesterday"],
-                        date_to=periods["yesterday"],
-                        metrics=metrics,
-                        dimensions=["day"],
-                    ),
-                    metrics,
+            ozon_orders["yesterday"] = _extract_ozon_analytics(
+                ozon.fetch_analytics_data(
+                    date_from=periods["yesterday"],
+                    date_to=periods["yesterday"],
+                    metrics=metrics,
+                    dimensions=["day"],
                 ),
-                "today": _extract_ozon_analytics(
+                metrics,
+            )
+        except Exception as exc:  # noqa: BLE001 - report must survive API permission/schema errors
+            ozon_orders.update(_source_error("/v1/analytics/data", exc))
+
+        if include_period_communications:
+            ozon_orders["today"] = _not_confirmed(
+                "v3 строится за завершенный вчерашний день и не запрашивает неполный сегодняшний период"
+            )
+        else:
+            try:
+                ozon_orders["today"] = _extract_ozon_analytics(
                     ozon.fetch_analytics_data(
                         date_from=periods["today"],
                         date_to=periods["today"],
@@ -1094,10 +1236,12 @@ def _collect_business_snapshot(
                         dimensions=["day"],
                     ),
                     metrics,
-                ),
-            }
-        except Exception as exc:  # noqa: BLE001 - report must survive API permission/schema errors
-            business["ozon"]["orders"] = _source_error("/v1/analytics/data", exc)
+                )
+            except Exception as exc:  # noqa: BLE001
+                ozon_orders["today"] = _source_error("/v1/analytics/data", exc)
+                if ozon_orders.get("status") == "ok":
+                    ozon_orders["status"] = "warning"
+        business["ozon"]["orders"] = ozon_orders
 
         try:
             product_ids = sorted(
@@ -1241,12 +1385,15 @@ def _collect_business_snapshot(
                 business["wb"]["finance_expenses"] = _source_error("/api/finance/v1/sales-reports/list", exc)
 
         try:
-            business["wb"]["stocks"] = _summarize_wb_stocks(
-                stock_rows=wb_stats.fetch_stocks_legacy(date_from="2019-01-01"),
+            business["wb"]["stocks"] = _summarize_wb_analytics_stocks(
+                stock_rows=WbAnalyticsAdapter(credentials.wb).fetch_wb_warehouse_stocks(),
                 catalog_rows=catalog_rows,
             )
         except Exception as exc:  # noqa: BLE001
-            business["wb"]["stocks"] = _source_error("/api/v1/supplier/stocks", exc)
+            business["wb"]["stocks"] = _source_error(
+                "/api/analytics/v1/stocks-report/wb-warehouses",
+                exc,
+            )
 
         try:
             feedbacks = wb_communications.fetch_unanswered_feedbacks_count()
@@ -1281,7 +1428,11 @@ def _collect_business_snapshot(
             "error": "missing credentials",
         }
         business["wb"]["ad_spend"] = {"status": "skipped", "source": "/adv/v3/fullstats", "error": "missing credentials"}
-        business["wb"]["stocks"] = {"status": "skipped", "source": "/api/v1/supplier/stocks", "error": "missing credentials"}
+        business["wb"]["stocks"] = {
+            "status": "skipped",
+            "source": "/api/analytics/v1/stocks-report/wb-warehouses",
+            "error": "missing credentials",
+        }
         business["wb"]["communications"] = {
             "status": "skipped",
             "source": "feedbacks-api.wildberries.ru",
@@ -1450,11 +1601,77 @@ def _actions_v3(actions: dict[str, Any], *, business: dict[str, Any] | None = No
     }
 
 
-def _supplies_v3() -> dict[str, Any]:
+def _supply_summary(*, source: str, status_counts: Counter[str], current_states: set[str]) -> dict[str, Any]:
+    current_total = sum(count for status, count in status_counts.items() if status in current_states)
     return {
-        "ozon": _not_confirmed("источник только для чтения по текущим статусам поставок еще не реализован"),
-        "wb": _not_confirmed("источник только для чтения по текущим статусам поставок еще не реализован"),
+        "status": "ok",
+        "source": source,
+        "has_current": current_total > 0,
+        "current_total": current_total,
+        "status_counts": dict(sorted(status_counts.items())),
     }
+
+
+def _supplies_v3(credentials: AppCredentials) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+
+    if credentials.ozon_seller:
+        try:
+            adapter = OzonSellerAdapter(credentials.ozon_seller)
+            order_ids = adapter.fetch_supply_order_ids(states=ACTIVE_OZON_SUPPLY_STATES)
+            orders = adapter.fetch_supply_orders(order_ids) if order_ids else []
+            counts = Counter(str(row.get("state") or "").strip() for row in orders)
+            ozon = _supply_summary(
+                source="/v3/supply-order/list + /v3/supply-order/get",
+                status_counts=counts,
+                current_states=set(ACTIVE_OZON_SUPPLY_STATES),
+            )
+            ozon.update(
+                {
+                    "forming": counts["DATA_FILLING"],
+                    "ready_to_ship": counts["READY_TO_SUPPLY"],
+                    "at_dropoff": counts["ACCEPTED_AT_SUPPLY_WAREHOUSE"],
+                    "in_transit": counts["IN_TRANSIT"],
+                    "at_acceptance_warehouse": counts["ACCEPTANCE_AT_STORAGE_WAREHOUSE"],
+                    "acceptance": counts["REPORTS_CONFIRMATION_AWAITING"],
+                }
+            )
+            result["ozon"] = ozon
+        except Exception as exc:  # noqa: BLE001
+            result["ozon"] = _source_error("Ozon supply-order API", exc)
+    else:
+        result["ozon"] = {"status": "skipped", "source": "Ozon supply-order API", "error": "missing credentials"}
+
+    if credentials.wb:
+        try:
+            supplies = WbFbwSuppliesAdapter(credentials.wb).fetch_supplies()
+            counts = Counter(str(row.get("statusID") or row.get("statusId") or "").strip() for row in supplies)
+            wb = _supply_summary(
+                source="supplies-api.wildberries.ru/api/v1/supplies",
+                status_counts=counts,
+                current_states={str(value) for value in ACTIVE_WB_SUPPLY_STATUS_IDS},
+            )
+            wb.update(
+                {
+                    "forming": counts["1"],
+                    "ready_to_ship": counts["2"] + counts["3"],
+                    "at_dropoff": counts["6"],
+                    "in_transit": 0,
+                    "at_acceptance_warehouse": 0,
+                    "acceptance": counts["4"],
+                    "source_note": (
+                        "WB API дает статусы: не запланировано, запланировано, отгрузка разрешена, "
+                        "выгружено на воротах, приемка и принято; отдельного статуса 'в пути' нет."
+                    ),
+                }
+            )
+            result["wb"] = wb
+        except Exception as exc:  # noqa: BLE001
+            result["wb"] = _source_error("WB FBW supplies API", exc)
+    else:
+        result["wb"] = {"status": "skipped", "source": "WB FBW supplies API", "error": "missing credentials"}
+
+    return result
 
 
 def _metric_money(value: Any) -> str:
@@ -1467,6 +1684,14 @@ def _metric_int(value: Any) -> str:
     if value in (None, "не подтверждено"):
         return "не подтверждено"
     return _format_int(value)
+
+
+def _metric_bool(value: Any) -> str:
+    if value is True:
+        return "да"
+    if value is False:
+        return "нет"
+    return "не подтверждено"
 
 
 def _project_health(preflight: dict[str, Any] | None, sessions: dict[str, Any]) -> dict[str, Any]:
@@ -1574,9 +1799,12 @@ def _write_report(path: Path, result: dict[str, Any]) -> None:
             "status",
             "products",
             "with_internal_sku",
-            "confirmed_products",
-            "ozon_only_products",
-            "wb_only_products",
+            "target_products",
+            "target_with_internal_sku",
+            "target_identification_complete",
+            "both_marketplaces_products",
+            "active_ozon_only_products",
+            "active_wb_only_products",
             "active_ozon_products",
             "active_wb_products",
             "modified_at",
@@ -1636,7 +1864,7 @@ def _orders_line(marketplace: str, orders: dict[str, Any], period: str) -> str:
             f"{_format_money(data.get('revenue'))}"
         )
     return (
-        f"{marketplace}: {_format_int(data.get('active_orders'))} заказов, "
+        f"{marketplace}: {_format_int(data.get('total_orders', data.get('active_orders')))} заказов, "
         f"{_format_money(data.get('amount'))}, отмены {_format_int(data.get('cancelled_orders'))}"
     )
 
@@ -1795,9 +2023,12 @@ def _write_seller_v2_report(path: Path, result: dict[str, Any]) -> None:
     )
     lines.append(
         f"- Единый каталог: товаров {_format_int(unified_catalog.get('products'))}, "
-        f"confirmed {_format_int(unified_catalog.get('confirmed_products'))}, "
-        f"Ozon-only {_format_int(unified_catalog.get('ozon_only_products'))}, "
-        f"WB-only {_format_int(unified_catalog.get('wb_only_products'))}; "
+        f"целевой ассортимент с internal_sku "
+        f"{_format_int(unified_catalog.get('target_with_internal_sku'))}/"
+        f"{_format_int(unified_catalog.get('target_products'))}, "
+        f"пары Ozon+WB {_format_int(unified_catalog.get('both_marketplaces_products'))}, "
+        f"только Ozon {_format_int(unified_catalog.get('active_ozon_only_products'))}, "
+        f"только WB {_format_int(unified_catalog.get('active_wb_only_products'))}; "
         f"источник `{unified_catalog.get('path', 'не подтверждено')}`."
     )
     lines.append(f"- Business status: `{business.get('business_status')}`.")
@@ -1962,12 +2193,16 @@ def _write_seller_v3_report(path: Path, result: dict[str, Any]) -> None:
 
     source_issues = []
     for label, section in (
+        ("Ozon заказы", ozon_orders),
         ("Ozon выкупы", ozon_buyouts),
         ("Ozon расходы", ozon_expenses),
         ("Ozon FBO отмены", ozon_fbo),
         ("Ozon отзывы/вопросы", ozon_communications),
+        ("Ozon остатки", ozon_stocks),
+        ("WB заказы", wb_orders),
         ("WB выкупы", wb_sales),
         ("WB расходы", wb_expenses),
+        ("WB остатки", wb_stocks),
         ("Ozon поставки", supplies_v3.get("ozon", {})),
         ("WB поставки", supplies_v3.get("wb", {})),
     ):
@@ -1998,10 +2233,12 @@ def _write_seller_v3_report(path: Path, result: dict[str, Any]) -> None:
         "| --- | ---: |",
         f"| Статус | {unified_catalog.get('status', 'не подтверждено')} |",
         f"| Товаров всего | {_metric_int(unified_catalog.get('products'))} |",
-        f"| С внутренним артикулом | {_metric_int(unified_catalog.get('with_internal_sku'))} |",
-        f"| Связанные Ozon+WB | {_metric_int(unified_catalog.get('confirmed_products'))} |",
-        f"| Только Ozon | {_metric_int(unified_catalog.get('ozon_only_products'))} |",
-        f"| Только WB | {_metric_int(unified_catalog.get('wb_only_products'))} |",
+        f"| Целевой ассортимент идентифицирован | {_metric_bool(unified_catalog.get('target_identification_complete'))} |",
+        f"| Целевых товарных записей с внутренним артикулом | {_metric_int(unified_catalog.get('target_with_internal_sku'))} из {_metric_int(unified_catalog.get('target_products'))} |",
+        f"| Связанные пары Ozon+WB | {_metric_int(unified_catalog.get('both_marketplaces_products'))} |",
+        f"| Только Ozon, активные | {_metric_int(unified_catalog.get('active_ozon_only_products'))} |",
+        f"| Только WB, активные | {_metric_int(unified_catalog.get('active_wb_only_products'))} |",
+        f"| Прочие/отложенные товарные записи | {_metric_int(unified_catalog.get('non_target_or_deferred_products'))} |",
         f"| Активны на Ozon | {_metric_int(unified_catalog.get('active_ozon_products'))} |",
         f"| Активны на WB | {_metric_int(unified_catalog.get('active_wb_products'))} |",
         f"| Обновлен | {unified_catalog.get('modified_at', 'не подтверждено')} |",
@@ -2010,7 +2247,7 @@ def _write_seller_v3_report(path: Path, result: dict[str, Any]) -> None:
         "",
         "| Метрика | Ozon | WB |",
         "| --- | ---: | ---: |",
-        f"| Заказы, шт. | {_metric_int(ozon_orders_day.get('ordered_units'))} | {_metric_int(wb_orders_day.get('active_orders'))} |",
+        f"| Заказы, шт. | {_metric_int(ozon_orders_day.get('ordered_units'))} | {_metric_int(wb_orders_day.get('total_orders', wb_orders_day.get('active_orders')))} |",
         f"| Заказы, ₽ | {_metric_money(ozon_orders_day.get('revenue'))} | {_metric_money(wb_orders_day.get('amount'))} |",
         f"| Выкупы, шт. | {_metric_int(ozon_buyouts.get('buyout_units')) if ozon_buyouts.get('status') == 'ok' else 'не подтверждено'} | {_metric_int(wb_sales_day.get('sales_rows')) if wb_sales.get('status') == 'ok' else 'не подтверждено'} |",
         f"| Выкупы, ₽ | {_metric_money(ozon_buyouts.get('buyout_amount')) if ozon_buyouts.get('status') == 'ok' else 'не подтверждено'} | {_metric_money(wb_sales_day.get('sales_amount')) if wb_sales.get('status') == 'ok' else 'не подтверждено'} |",
@@ -2096,13 +2333,14 @@ def _write_seller_v3_report(path: Path, result: dict[str, Any]) -> None:
         "",
         "| Метрика | Ozon | WB |",
         "| --- | ---: | ---: |",
-        "| Есть текущие поставки | не подтверждено | не подтверждено |",
-        "| Формируется | не подтверждено | не подтверждено |",
-        "| Готова к отгрузке | не подтверждено | не подтверждено |",
-        "| На точке отгрузки | не подтверждено | не подтверждено |",
-        "| В пути | не подтверждено | не подтверждено |",
-        "| На складе приемки | не подтверждено | не подтверждено |",
-        "| Приемка | не подтверждено | не подтверждено |",
+        f"| Есть текущие поставки | {_metric_bool((supplies_v3.get('ozon') or {}).get('has_current'))} | {_metric_bool((supplies_v3.get('wb') or {}).get('has_current'))} |",
+        f"| Всего текущих | {_metric_int((supplies_v3.get('ozon') or {}).get('current_total'))} | {_metric_int((supplies_v3.get('wb') or {}).get('current_total'))} |",
+        f"| Формируется | {_metric_int((supplies_v3.get('ozon') or {}).get('forming'))} | {_metric_int((supplies_v3.get('wb') or {}).get('forming'))} |",
+        f"| Готова к отгрузке | {_metric_int((supplies_v3.get('ozon') or {}).get('ready_to_ship'))} | {_metric_int((supplies_v3.get('wb') or {}).get('ready_to_ship'))} |",
+        f"| На точке отгрузки | {_metric_int((supplies_v3.get('ozon') or {}).get('at_dropoff'))} | {_metric_int((supplies_v3.get('wb') or {}).get('at_dropoff'))} |",
+        f"| В пути | {_metric_int((supplies_v3.get('ozon') or {}).get('in_transit'))} | {_metric_int((supplies_v3.get('wb') or {}).get('in_transit'))} |",
+        f"| На складе приемки | {_metric_int((supplies_v3.get('ozon') or {}).get('at_acceptance_warehouse'))} | {_metric_int((supplies_v3.get('wb') or {}).get('at_acceptance_warehouse'))} |",
+        f"| Приемка/подтверждение | {_metric_int((supplies_v3.get('ozon') or {}).get('acceptance'))} | {_metric_int((supplies_v3.get('wb') or {}).get('acceptance'))} |",
         "",
         "## Операционные Риски",
         "",
@@ -2167,7 +2405,7 @@ def run_daily_morning_report(
         else {}
     )
     actions_v3 = _actions_v3(actions, business=business) if seller_v3 else {}
-    supplies_v3 = _supplies_v3() if seller_v3 else {}
+    supplies_v3 = _supplies_v3(credentials) if seller_v3 else {}
     business_status = business.get("business_status") if seller_v2 or seller_v3 else "ok"
     decision_items = _decision_items(
         preflight=preflight,
@@ -2180,9 +2418,14 @@ def run_daily_morning_report(
         overall_status = "error"
     if (seller_v2 or seller_v3) and overall_status == "ok" and business_status != "ok":
         overall_status = "warning"
-    if seller_v3:
-        overall_status = "warning"
-
+    if seller_v3 and overall_status == "ok":
+        supply_statuses = {
+            str(section.get("status") or "")
+            for section in supplies_v3.values()
+            if isinstance(section, dict)
+        }
+        if supply_statuses - {"ok"}:
+            overall_status = "warning"
     if seller_v3:
         periods = business.get("periods", {})
         ozon_orders = business.get("ozon", {}).get("orders", {})
@@ -2193,9 +2436,12 @@ def run_daily_morning_report(
             (
                 "Единый каталог: "
                 f"{unified_catalog.get('products', 'н/д')} товаров, "
-                f"confirmed {unified_catalog.get('confirmed_products', 'н/д')}, "
-                f"Ozon-only {unified_catalog.get('ozon_only_products', 'н/д')}, "
-                f"WB-only {unified_catalog.get('wb_only_products', 'н/д')}."
+                f"целевой ассортимент с internal_sku "
+                f"{unified_catalog.get('target_with_internal_sku', 'н/д')}/"
+                f"{unified_catalog.get('target_products', 'н/д')}, "
+                f"пары Ozon+WB {unified_catalog.get('both_marketplaces_products', 'н/д')}, "
+                f"только Ozon {unified_catalog.get('active_ozon_only_products', 'н/д')}, "
+                f"только WB {unified_catalog.get('active_wb_only_products', 'н/д')}."
             ),
             "V3 уже показывает Ozon/WB рядом; неподключенные источники отмечены как `не подтверждено`.",
         ]
@@ -2207,7 +2453,7 @@ def run_daily_morning_report(
             f"Заказы вчера: {_orders_line('Ozon', ozon_orders, 'yesterday')}; {_orders_line('WB', wb_orders, 'yesterday')}.",
             f"Заказы сегодня: {_orders_line('Ozon', ozon_orders, 'today')}; {_orders_line('WB', wb_orders, 'today')}.",
             f"Каталог: {catalog.get('rows', 'unknown')} строк, matched {catalog.get('matched_rows', 'unknown')}.",
-            f"Единый каталог: {unified_catalog.get('products', 'unknown')} товаров, confirmed {unified_catalog.get('confirmed_products', 'unknown')}.",
+            f"Единый каталог: {unified_catalog.get('products', 'unknown')} товаров, пары Ozon+WB {unified_catalog.get('both_marketplaces_products', 'unknown')}.",
         ]
     else:
         executive_summary = [
@@ -2215,7 +2461,7 @@ def run_daily_morning_report(
             f"Preflight: {preflight_status}.",
             f"Сессии: {sessions['overall_status']}.",
             f"Каталог: {catalog.get('rows', 'unknown')} строк, matched {catalog.get('matched_rows', 'unknown')}.",
-            f"Единый каталог: {unified_catalog.get('products', 'unknown')} товаров, confirmed {unified_catalog.get('confirmed_products', 'unknown')}.",
+            f"Единый каталог: {unified_catalog.get('products', 'unknown')} товаров, пары Ozon+WB {unified_catalog.get('both_marketplaces_products', 'unknown')}.",
             f"Открытые рекомендации: {len(recommendations.get('open_items', []))}.",
         ]
         if actions.get("last_apply_summary"):

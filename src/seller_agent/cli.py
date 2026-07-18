@@ -44,6 +44,7 @@ from seller_agent.tasks.catalog_internal_sku_plan import run_internal_sku_plan
 from seller_agent.tasks.catalog_unified import run_build_unified_catalog
 from seller_agent.tasks.actions_apply import run_actions_apply
 from seller_agent.tasks.daily_morning_report import run_daily_morning_report
+from seller_agent.tasks.marketplace_period_report import run_marketplace_period_report
 from seller_agent.tasks.ozon_cpc_bids_apply import run_ozon_cpc_bids_apply
 from seller_agent.tasks.ozon_card_create_apply import run_ozon_card_create_apply
 from seller_agent.tasks.ozon_card_create_plan import run_ozon_card_create_plan
@@ -59,6 +60,8 @@ from seller_agent.tasks.inbox_workflow import (
     run_wb_inbox_triage,
 )
 from seller_agent.tasks.ozon_product_remove import run_ozon_product_remove_apply, run_ozon_product_remove_plan
+from seller_agent.tasks.ozon_production_work_plan import run_ozon_production_work_plan
+from seller_agent.tasks.ozon_stock_supply_monitor import run_ozon_stock_supply_monitor
 from seller_agent.tasks.pricing_status import run_pricing_status
 from seller_agent.tasks.product_passport_design import run_product_passport_design
 from seller_agent.tasks.reviews_questions import (
@@ -82,11 +85,13 @@ from seller_agent.tasks.wb_actions_discount_plan import run_wb_actions_discount_
 from seller_agent.tasks.wb_card_create_apply import run_wb_card_create_apply
 from seller_agent.tasks.wb_card_create_plan import run_wb_card_create_plan
 from seller_agent.tasks.wb_parser_warehouse_analytics import run_wb_parser_warehouse_analytics
+from seller_agent.tasks.wb_production_work_plan import run_wb_production_work_plan
 from seller_agent.tasks.wb_promotion_bid_parser_enriched_apply import run_wb_promotion_bid_parser_enriched_apply
 from seller_agent.tasks.wb_promotion_bid_parser_enriched_plan import run_wb_promotion_bid_parser_enriched_plan
 from seller_agent.tasks.wb_promotion_bid_plan import WbPromotionBidThresholds, run_wb_promotion_bid_plan
 from seller_agent.tasks.wb_promotion_bids_apply import run_wb_promotion_bids_apply
 from seller_agent.tasks.wb_promotion_report import run_wb_promotion_report
+from seller_agent.tasks.wb_stock_supply_monitor import run_wb_stock_supply_monitor
 from seller_agent.sessions.manager import install_systemd_units, restore_ozon_session, run_session_manager
 
 
@@ -957,6 +962,51 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Build seller-focused v3 report: yesterday 00:00-23:59 MSK, Ozon/WB side-by-side.",
     )
+
+    period_report = subparsers.add_parser(
+        "marketplace-period-report",
+        help="Build a read-only Ozon or WB report for a selected period.",
+    )
+    period_report.add_argument("--data-dir", default="data", help="Project data directory.")
+    period_report.add_argument("--run-id", default=None, help="Optional stable run id.")
+    period_report.add_argument("--marketplace", choices=("ozon", "wb"), required=True)
+    period_report.add_argument("--report-type", choices=("short", "financial", "full"), required=True)
+    period_report.add_argument("--date-from", required=True, help="Start date, YYYY-MM-DD.")
+    period_report.add_argument("--date-to", required=True, help="End date, YYYY-MM-DD.")
+
+    wb_stock_supply = subparsers.add_parser(
+        "wb-stock-supply-monitor",
+        help="Build a fresh read-only WB warehouse stock and active supply report.",
+    )
+    wb_stock_supply.add_argument("--data-dir", default="data", help="Project data directory.")
+    wb_stock_supply.add_argument("--run-id", default=None, help="Optional stable run id.")
+
+    ozon_stock_supply = subparsers.add_parser(
+        "ozon-stock-supply-monitor",
+        help="Build a fresh read-only Ozon FBO stock and active supply report.",
+    )
+    ozon_stock_supply.add_argument("--data-dir", default="data", help="Project data directory.")
+    ozon_stock_supply.add_argument("--run-id", default=None, help="Optional stable run id.")
+
+    ozon_work_plan = subparsers.add_parser(
+        "ozon-production-work-plan",
+        help="Build a read-only Ozon production workbook by capacity or coverage days.",
+    )
+    ozon_work_plan.add_argument("--data-dir", default="data", help="Project data directory.")
+    ozon_work_plan.add_argument("--run-id", default=None, help="Optional stable run id.")
+    ozon_work_plan.add_argument("--mode", choices=("capacity", "coverage_days"), required=True)
+    ozon_work_plan.add_argument("--value", type=int, required=True)
+    ozon_work_plan.add_argument("--cluster-count", type=int, required=True)
+
+    wb_work_plan = subparsers.add_parser(
+        "wb-production-work-plan",
+        help="Build a read-only WB production workbook by capacity or coverage days.",
+    )
+    wb_work_plan.add_argument("--data-dir", default="data", help="Project data directory.")
+    wb_work_plan.add_argument("--run-id", default=None, help="Optional stable run id.")
+    wb_work_plan.add_argument("--mode", choices=("capacity", "coverage_days"), required=True)
+    wb_work_plan.add_argument("--value", type=int, required=True)
+    wb_work_plan.add_argument("--cluster-count", type=int, required=True)
 
     supply_workbooks = subparsers.add_parser(
         "plan-supply-workbooks",
@@ -2612,6 +2662,61 @@ def main(argv: list[str] | None = None) -> int:
             refresh_preflight=not args.skip_preflight_refresh,
             seller_v2=args.seller_v2,
             seller_v3=args.seller_v3,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
+
+    if args.command == "marketplace-period-report":
+        result = run_marketplace_period_report(
+            credentials=load_credentials(),
+            data_dir=Path(args.data_dir),
+            marketplace=args.marketplace,
+            report_type=args.report_type,
+            date_from=args.date_from,
+            date_to=args.date_to,
+            run_id=args.run_id,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
+
+    if args.command == "wb-stock-supply-monitor":
+        result = run_wb_stock_supply_monitor(
+            credentials=load_credentials(),
+            data_dir=Path(args.data_dir),
+            run_id=args.run_id,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
+
+    if args.command == "ozon-stock-supply-monitor":
+        result = run_ozon_stock_supply_monitor(
+            credentials=load_credentials(),
+            data_dir=Path(args.data_dir),
+            run_id=args.run_id,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
+
+    if args.command == "ozon-production-work-plan":
+        result = run_ozon_production_work_plan(
+            credentials=load_credentials(),
+            data_dir=Path(args.data_dir),
+            run_id=args.run_id,
+            mode=args.mode,
+            value=args.value,
+            cluster_count=args.cluster_count,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
+
+    if args.command == "wb-production-work-plan":
+        result = run_wb_production_work_plan(
+            credentials=load_credentials(),
+            data_dir=Path(args.data_dir),
+            run_id=args.run_id,
+            mode=args.mode,
+            value=args.value,
+            cluster_count=args.cluster_count,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["overall_status"] in {"ok", "warning"} else 2

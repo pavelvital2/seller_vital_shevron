@@ -32,7 +32,7 @@ Owner-approved HTML по карточке является review-пакетом
 | Смена артикулов продавца Ozon/WB на внутренний артикул | `data/planning/card_ops/02_seller_sku_update_ozon_wb.md` | автоматизировано: `plan-seller-sku-update`, `apply-seller-sku-update` |
 | Изменение параметров существующих карточек Ozon/WB | `data/planning/card_ops/03_card_content_update_ozon_wb.md` | быстрый путь: `apply-approved-card`; batch-путь: `plan-approved-cards`, затем `apply-approved-cards --plan-run-id`; verify-only: `verify-card-content-update`; ручной debug-путь: `plan-card-content-update`, `apply-card-content-update` |
 | Promotion owner-approved Layer 2 audit/HTML в Layer 3 passport | этот файл | автоматизировано: `promote-approved-card-passport`; также встроено как preflight в `apply-approved-cards` |
-| Создание карточки на Ozon из owner-approved HTML / Layer 3 passport | `data/planning/card_ops/04_ozon_card_create_later.md` | автоматизировано: `plan-ozon-card-create`, `apply-ozon-card-create`; встроено в `apply-approved-cards` при `--ozon-create-min-price`; WB price fallback требует manual review |
+| Создание карточки на Ozon из owner-approved HTML / Layer 3 passport | `data/planning/card_ops/04_ozon_card_create_later.md` | автоматизировано: `plan-ozon-card-create`, `apply-ozon-card-create`; встроено в `apply-approved-cards` только при явном `safety.dangerous_actions=ozon_card_create` и `--ozon-create-min-price`; WB price fallback требует manual review |
 | Удаление не созданной Ozon-карточки без SKU или архивирование созданной карточки | `data/planning/card_ops/05_ozon_product_remove.md` | автоматизировано: `plan-ozon-product-remove`, `apply-ozon-product-remove` |
 
 ## Общие read-only команды перед карточными write-операциями

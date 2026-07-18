@@ -1,6 +1,6 @@
 ---
 name: marketplace-supply-planning
-description: "Use for Ozon/Wildberries stock and supply planning: current stocks, 90-day or quarterly sales, average daily sales, localization, destination clusters, production constraints, multiples of 8 and Excel supply workbooks."
+description: "Use for Ozon/Wildberries stock and supply planning: current stocks, 90-day or quarterly sales, average daily sales, localization, destination clusters, product-type production multiples and Excel supply workbooks."
 ---
 
 # Marketplace Supply Planning
@@ -22,8 +22,16 @@ description: "Use for Ozon/Wildberries stock and supply planning: current stocks
   goods: chevrons, patches, petlitcy, and kits made from them.
 - Exclude hats, pouches, panamas, aprons, false epaulettes, and other
   non-manufactured goods from production/supply workbooks.
-- Production quantity per article must be a multiple of 8. Current production
-  capacity is 200 physical pieces per day until the owner changes it.
+- For the WB `В работу` workflow, use production multiples by product type:
+  sleeve chevrons `8`, call-sign kits `6` kits, chest chevrons `12`, back
+  chevrons `2`, cap chevrons `9`. If the type cannot be determined, keep the
+  row in the plan with the owner-approved default multiple `8` and show a
+  classification warning. Capacity input is measured in physical pieces;
+  kits consume `marketplace_units * pack_qty` physical pieces.
+- One marketplace unit of petlitcy is one physical production item: the two
+  visible petlitcy are embroidered as one uncut pair. Use `pack_qty=1` for
+  physical supply and production counts, even if a marketplace title says
+  `2 шт.`.
 - For WB supply-creation workbooks, include WB `barcode` plus quantity. If an
   external file has only `vendorCode` and quantity, enrich it from fresh WB
   Content API cards first; use `data/catalog/wb/processed/wb_catalog.csv` only
@@ -33,15 +41,104 @@ description: "Use for Ozon/Wildberries stock and supply planning: current stocks
   `GET /api/v1/supplies/{supplyID}/goods`, and
   `GET /api/v1/supplies/{supplyID}/package`. Do not use FBS
   `marketplace-api /api/v3/supplies` as the source for warehouse inbound.
+- For a recently delivered WB supply, do not answer "stock at warehouse" from
+  `stocks-report/wb-warehouses.quantity` alone. While the supply has
+  `statusID=4` (acceptance), show the FBW supply figures separately:
+  `quantity`, `acceptedQuantity`, `readyForSaleQuantity`, and
+  `unloadingQuantity`. Do not add the stock report to supply quantities because
+  the sources can overlap or refresh at different times. Recheck the warehouse
+  stock after `statusID=5` if the owner needs final sellable stock.
+- A WB stock-and-supply report must include every registered FBW supply in an
+  active pre-completion status, including `statusID=3` (`Отгрузка разрешена`),
+  not only supplies already in transit or acceptance. Group supplies by status
+  and show supply ID, warehouse, creation date, planned supply date, marketplace
+  units, accepted units and ready-for-sale units. Do not present allowed-to-ship
+  or acceptance quantities as current sellable stock.
+- Confirmed on 2026-07-18: during `statusID=4`, WB
+  `stocks-report.inWayFromClient` can temporarily contain accepted inbound FBW
+  supply units, despite the LK label "В пути от покупателя". Detect this by
+  matching `nmId` against `/supplies/{id}/goods`; do not classify the whole
+  value as buyer returns. For the Electrostal case, 313 units matched all 23
+  supply nmIds and another 3 of those units were already `inWayToClient`,
+  exactly reconciling to `acceptedQuantity=316`.
+- If `inWayFromClient` spikes implausibly, compare it with the previous saved
+  warehouse snapshot before calling the difference returns. In the
+  Electrostal incident, `quantity/inWayFromClient/inWayToClient` changed from
+  `383/22/1` to `9/401/3` while the combined tracked mass changed only from
+  `406` to `413`. This is a WB state reclassification/warehouse incident, not
+  evidence of hundreds of buyer returns. Report the cause as unconfirmed until
+  WB provides transaction-level movement or the warehouse status normalizes.
 - For Ozon FBO supply orders, use the `supply-order` chain documented in
   `data/reference/api_docs/ozon/endpoints/supply_order.md`:
   `/v3/supply-order/list`, `/v3/supply-order/get`,
   `/v1/supply-order/details`, `/v1/supply-order/bundle`.
+- For an Ozon stock monitor, keep three layers separate: general FBO
+  `/v4/product/info/stocks`, warehouse `/v2/analytics/stock_on_warehouses`,
+  and active supply-order bundles. Reconcile `general present` against
+  `warehouse free_to_sell + warehouse reserved`, not against free stock alone.
+  `promised_amount` can overlap the active supply-order quantity and must not
+  be added again.
+- Show unresolved Ozon order states, but count confirmed inbound only for
+  `READY_TO_SUPPLY`, `ACCEPTED_AT_SUPPLY_WAREHOUSE`, `IN_TRANSIT`, and
+  `ACCEPTANCE_AT_STORAGE_WAREHOUSE`. Report-stage orders can already overlap
+  sellable stock. Exclude `order_tags.is_virtual=true` duplicates from totals.
+- For the Ozon `В работу` workflow, calculate demand at `offer_id x destination
+  cluster` granularity. Use `/v2/cluster/list` as the authoritative bridge:
+  `financial_data.cluster_to` for demand, `data.fulfillments[].name` for
+  warehouse stock, and `macrolocal_cluster_id` for confirmed inbound. Never
+  subtract federal stock or inbound from every cluster.
+- Rank Ozon destination clusters by summed positive physical deficit after
+  subtracting only `free_to_sell` and confirmed inbound in the same cluster.
+  Keep `reserved` and `promised` visible but do not treat them as free stock;
+  `promised` can overlap supply-order. Let the owner choose `1..20` clusters.
+- Ozon `В работу` uses the same production multiples as WB: sleeve `8`,
+  call-sign kits `6` marketplace kits, chest `12`, back `2`, cap `9`, unknown
+  type `8` with a control warning. Capacity is measured in physical pieces;
+  local approval is checksum-bound and never creates an Ozon supply.
+- Live Ozon Seller API verified 2026-07-14 returns `order_ids`, `orders` and
+  bundle `items` at the response top level. Use `last_id`, not `offset`, for
+  supply-order list pagination; bundle requests require `bundle_ids` and
+  `limit <= 100`. Keep legacy nested `result` parsing only as compatibility.
+- For historical physical inbound counts, group by Ozon `created_date` and WB
+  `createDate` in the owner timezone. Exclude Ozon orders with
+  `order_tags.is_virtual=true`: they redistribute goods already present in the
+  original supply identified by `original_supply_id` and otherwise duplicate
+  physical quantities.
 - Use the штатный CLI entrypoint before one-off scripts:
   `PYTHONPATH=src /home/Codex/agent-tools/python/bin/python -m seller_agent.cli plan-supply-workbooks`.
   As of 2026-06-29 it has live read-only adapters for Ozon stocks/FBO
   postings/supply-order and WB stocks/sales/content/FBW supplies, writes raw
   snapshots, processed CSV, Markdown report, RunManifest and Excel workbooks.
+- For the WB-only owner flow use
+  `seller_agent.cli wb-production-work-plan --mode capacity --value N
+  --cluster-count C` or `--mode coverage_days --value N --cluster-count C`,
+  where `C` is `1..6`. It uses the current Analytics stocks
+  report, buyer geography from Statistics sales, Content API cards/barcodes,
+  active FBW inbound and unified `pack_qty`. It creates `Артикулы`,
+  `ВБ регионы`, `Контроль`; it never creates a WB supply.
+- In capacity mode calculate demand to a 30-day target and allocate no more
+  than the entered physical capacity. In coverage mode use the owner-entered
+  days. Demand forecast uses 90 full days with increased weight for the last
+  30 days. Calculate each `product x WB destination cluster` independently:
+  subtract only that product's regional sellable `quantity` and confirmed
+  inbound statuses `2/3/4/6` to the same cluster. Never subtract store-wide
+  stock from cluster demand and never count `inWayFromClient` as sellable
+  stock. Rank clusters by summed positive physical deficit, then recent sales,
+  and select the owner-requested top `C` before capacity allocation.
+- Verified live on 2026-07-18: three WB `statusID=3` supplies were mapped by
+  destination warehouse to Shushary, Volgograd and Novosemeykino and removed
+  demand only for matching product-cluster pairs. A zero inbound value among
+  final deficit rows can therefore mean inbound-covered products were excluded;
+  verify against the saved `wb_active_inbound.json` before reporting that
+  registered supplies were missed.
+- WB historical Statistics rows can retain an old `supplierArticle` after the
+  seller SKU is changed. Normalize each sale through stable `nmId` to the
+  current Content API `vendorCode` before catalog mapping and aggregation;
+  otherwise confirmed products are falsely reported as unmapped.
+- If a warehouse has a strong `quantity`/`inWayFromClient` reclassification
+  anomaly, exclude affected nmID+region rows from automatic production and
+  put them on `Контроль`; do not manufacture against an unverified stock
+  deficit.
 - Ozon Seller API official Swagger is saved at
   `data/reference/api_docs/ozon/openapi/seller_swagger_20260629.json` after a
   CDP/LK docs check. For `/v3/supply-order/list`, use official string enums

@@ -1,6 +1,6 @@
 # Vital Shevron Project Map
 
-Дата: 2026-07-05
+Дата: 2026-07-18
 
 ```text
 /home/pavel/projects/seller_vital_shevron
@@ -194,7 +194,11 @@
   выводит себестоимость, доступные цены, action-price, целевые net-пороги и
   warning-коды; команда `pricing-status` пишет runtime artifacts в
   `data/pricing/` и `data/runs/`, а `--refresh-api` сохраняет свежие snapshots
-  в `data/runs/<date>/<run_id>/raw/`.
+  Ozon/WB в `data/runs/<date>/<run_id>/raw/`.
+- `scripts/pricing/apply_ozon_min_price_plan.py` - approved apply точного
+  Ozon `min_price` плана: checksum с нормализацией `pack_qty`, fresh snapshot,
+  partial drift-check, сохранение `price`/`old_price`, verify и idempotency
+  marker; не меняет Elastic или другие акции;
 - `src/seller_agent/marketplaces/wb/prices_adapter.py` - read-only adapter
   WB Discounts/Prices API для `GET /api/v2/list/goods/filter`.
 - `src/seller_agent/marketplaces/parser_data_api.py` - read-only клиент
@@ -207,6 +211,21 @@
   фильтрует Vital Shevron по `supplier_id=4516781`, сохраняет производные
   CSV/Markdown/summary/RunManifest, включая `wb_parser_signals.csv` для
   карточных SEO-сигналов, и доступна командой `wb-parser-warehouse-analytics`.
+- `src/seller_agent/tasks/wb_stock_supply_monitor.py` - read-only монитор
+  складских остатков и всех активных FBW-поставок WB. Команда
+  `wb-stock-supply-monitor` объединяет Analytics stocks-report и FBW Supplies
+  API, считает физические изделия по `pack_qty`, сохраняет предыдущие снимки и
+  выявляет переклассификацию `quantity/inWayFromClient` без объявления ее
+  возвратами.
+- `src/seller_agent/tasks/ozon_stock_supply_monitor.py` - read-only монитор
+  общего FBO present/reserved, складского free/reserved/promised и активных
+  Ozon supply-order с bundle-составом, физическими изделиями, virtual-order
+  dedup и сверкой `present = free + reserved`.
+- `src/seller_agent/tasks/wb_production_work_plan.py` - WB-only read-only
+  генератор Excel `В работу`: режимы по физической производственной мощности
+  и дням покрытия, спрос `90/30` дней, регионы покупателей, актуальные
+  Analytics-остатки, confirmed FBW inbound, кратности `8/6/12/2/9`, default
+  `8`, anomaly/control gate и локальное checksum-bound решение владельца.
 - `src/seller_agent/tasks/card_content_signals.py` - read-only сбор
   карточных signals; `collect-card-signals --marketplace wb --parser-source
   latest` использует latest `wb_parser_signals.csv` без подмешивания Ozon
@@ -217,7 +236,9 @@
 - `src/seller_agent/bot/commands.py` - Telegram MVP command layer:
   `/start`, `/menu`, `/help`, `/status`, `/today`, `/reviews`,
   `/approvals`, `/catalog`, `/runs`, `/elastic`, `/ozon-actions`,
-  `/wb-actions`, `/wb-analytics`, `/ozon-inbox`, `/wb-inbox`; `/start` и
+  `/wb-actions`, `/wb-actions-manual`, `/wb-analytics`,
+  `/wb-stock-supplies`, `/wb-work-plan`, `/ozon-stock-supplies`, `/ozon-inbox`,
+  `/wb-inbox`; `/start` и
   `/menu` показывают первый экран reply-клавиатуры: `Статус`, `Помощь`,
   `Общий вчерашний отчет`, `Озон`, `Вайлдберриз`;
   `/catalog` показывает последний
@@ -233,7 +254,8 @@
   загрузка токена из внешнего файла/env, `sendMessage` с inline-keyboard,
   `answerCallbackQuery`, безопасный `sendDocument` для `artifacts.report`,
   одноразовый `getUpdates` polling с `message` и `callback_query`, controlled
-  `poll-loop`, allowlist, lock-file, state offset под `.sessions/telegram/`;
+  `poll-loop`, allowlist, lock-file, state offset и временные conversation
+  stages по `chat_id + thread_id` под `.sessions/telegram/`;
   marketplace write допускается только через узкие approval/callback flows.
 - `/elastic` - Telegram-команда Ozon Elastic: свежий dry-run, report и
   inline-кнопка apply. Callback `oe_apply:<plan_run_id>` запускает
@@ -249,6 +271,11 @@
   runtime job `wb-actions-discount-apply` только для показанного plan run через
   `JobService`, `WorkflowRunner`, staged quarantine workaround, fresh
   preflight/drift-check/verify.
+- `/wb-actions-manual` / кнопка `Ручная акция` - многошаговый WB flow:
+  именованный ввод `порог -> после порога -> вне акций`, отдельное
+  подтверждение параметров, fresh dry-run, затем отдельные решения
+  `Применить скидки` или `Отклонить`. Apply использует тот же
+  `wba_apply:<plan_run_id>` и штатный safety-контур; отмена и отклонение no-op.
 - `src/seller_agent/tasks/inbox_workflow.py` - раздельные Telegram/CLI
   inbox-workflows для входящих Ozon/WB: `ozon-inbox`, `apply-ozon-inbox`,
   `wb-inbox`, `apply-wb-inbox`. Ozon route объединяет отзывы/вопросы,
@@ -261,6 +288,27 @@
   свежий read-only отчет по видимости, позициям, daily changes, seller changes
   и слабым кандидатам с остатком через Parser Data API. Изменений в WB не
   выполняет.
+- `/wb-stock-supplies` и кнопка `Остатки и поставки` - свежий read-only отчет
+  по остаткам складов, всем активным FBW-поставкам, приемке, физическим
+  изделиям и аномалиям состояний WB. Статус `Отгрузка разрешена` включается
+  обязательно; объемы поставок не смешиваются с доступным остатком.
+- `/ozon-stock-supplies` и кнопка `Остатки и поставки Ozon` - свежий
+  read-only отчет общего и складского FBO-остатка, резерва, promised и
+  активных supply-order. Источники не складываются, virtual orders исключены.
+- `/ozon-work-plan` и кнопка `В работу Ozon` - выбор физической мощности или
+  дней покрытия и количества кластеров, кластерный расчет по
+  `cluster_to / fulfillment warehouse / macrolocal_cluster_id`, Excel
+  `Артикулы / Ozon кластеры / Контроль` и локальное checksum-bound решение.
+  Поставку Ozon не создает.
+- `/wb-work-plan` и кнопка `В работу` - диалог выбора физической мощности или
+  дней покрытия и количества кластеров `1..6`, fresh read-only расчет по
+  локальному остатку и inbound каждой пары `товар x кластер`, Excel
+  `Артикулы / ВБ регионы / Контроль`. Локальное утверждение или отклонение
+  привязано к checksum и не создает поставку WB.
+- `/period-report` и кнопки `Отчёт за период` в меню Ozon/WB - read-only
+  выбор вида и периода с подтверждением. Task
+  `src/seller_agent/tasks/marketplace_period_report.py` формирует Markdown,
+  Excel, JSON и RunManifest; комплекты переводятся в изделия через `pack_qty`.
 - `src/seller_agent/tasks/telegram_report_sender.py` - maintenance helper
   `send-telegram-report`: отправляет owner-facing summary и безопасно
   прикрепляет сохраненный report-файл из `data/runs`/`data/reports`; блокирует
@@ -331,8 +379,8 @@
   `workflow_adapter_not_implemented`, чтобы новые агенты не продолжали
   одноразовые ручные apply-скрипты.
 - `src/seller_agent/marketplaces/wb/finance_adapter.py` - read-only адаптер
-  WB Finance API для ежедневных финансовых отчетов реализации
-  `/api/finance/v1/sales-reports/list`.
+  WB Finance API для сводных отчётов `/api/finance/v1/sales-reports/list` и
+  детализации `/api/finance/v1/sales-reports/detailed` с `rrdId` pagination.
 - `src/seller_agent/tasks/wb_promotion_report.py` - read-only отчет по WB
   продвижению через Promotion API.
 - `src/seller_agent/tasks/wb_promotion_bid_plan.py` - dry-run план изменений
@@ -378,7 +426,8 @@
   `nmID/price/discount` targets из staged WB actions apply, находит внутренние
   LK `id` строк карантина, вызывает `POST /quarantine/goods`, сохраняет
   redacted результат без токенов. Использовать только внутри approved
-  write-контура скидок.
+  write-контура скидок. Режим `--dry-run` только читает и сопоставляет exact
+  targets без POST.
 - `scripts/search_queries/collect_seo_query_pack_sources.js` - read-only
   helper для свежего сбора top-query источников Ozon/WB под карточный
   `seo_query_pack`; Ozon использует CDP guard порта `9544`, WB использует
@@ -396,9 +445,11 @@
   read-only Telegram polling service с live `/today` и `/status`; включать
   только после runtime allowlist `.sessions/telegram/vital_shevron_telegram_bot.env`.
 - `deploy/systemd/user/vital-shevron-telegram-job-worker.service`
-- `deploy/systemd/user/vital-shevron-telegram-job-worker.timer` -
-  подготовленные, но не включенные шаблоны runtime worker для выполнения
-  queued Telegram job-ов через `bot run-job-loop`.
+- `deploy/systemd/user/vital-shevron-telegram-job-worker.timer` - runtime
+  worker для выполнения queued Telegram job-ов через `bot run-job-loop`;
+  с 2026-07-18 установлен, enabled/active в user systemd вместе с
+  `--runtime-jobs` в основном Telegram bot unit; read-only `/status` smoke
+  завершился success и доставил text/report владельцу.
 
 Ozon CDP port по умолчанию: `9544`.
 
@@ -479,15 +530,19 @@ Ozon CDP port по умолчанию: `9544`.
 - `data/planning/runtime_job_store_plan.md` - план runtime hardening:
   SQLite Job Store, JobService/JobRunner, TaskRegistry v2, Telegram update
   deduplication, atomic approvals/resource leases и перевод Telegram в
-  dispatcher job-ов. Этапы 1-2 начаты в `feature/runtime-job-store`:
-  добавлены `JobStore`, `JobService`, `JobRunner`, CLI `jobs`, optional
-  Telegram `--runtime-jobs` для `/status`/`/today`, `bot run-job-next`
-  notifier, `bot run-job-loop`, apply handler-ы основных Ozon/WB контуров в
-  `WorkflowRunner` и tests.
+  dispatcher job-ов. Runtime MVP реализован: добавлены `JobStore`,
+  `JobService`, `JobRunner`, CLI `jobs`, Telegram `--runtime-jobs`, notifier,
+  worker loop, approvals/resource leases и handler-ы основных Ozon/WB
+  контуров. С 2026-07-18 Job Worker timer установлен и active/enabled;
+  основной bot работает с `runtime/runtime.db`.
 - `data/planning/development_work_checkpoint.md` - текущий checkpoint работ по
-  развитию проекта перед возвратом к карточкам: что уже реализовано в runtime,
-  что отложено и откуда продолжать карточный контур.
+  развитию проекта после полной ревизии 2026-07-18: runtime, карточки, отчеты,
+  поставки, незакрытые направления и точка возврата к `Цены и маржа`.
+- `data/planning/revision_2026-07-18.md` - полная ревизия текущего checkpoint:
+  scope, tests, TaskRegistry, API preflight, runtime/systemd, исправления,
+  остаточные риски и точка продолжения.
 - `data/planning/daily_morning_report_runbook.md`
+- `data/planning/marketplace_period_report_runbook.md`
 - `data/planning/reviews_questions_runbook.md`
 - `data/planning/ozon_messenger_runbook.md` - Ozon Messenger/уведомления:
   ежедневный triage вопросов покупателей, важных сообщений площадки и шума,
@@ -501,6 +556,10 @@ Ozon CDP port по умолчанию: `9544`.
 - `data/planning/wb_promotion_runbook.md`
 - `data/planning/wb_actions_runbook.md`
 - `data/planning/pricing_runbook.md`
+- `data/planning/pricing_margin_button_plan.md` - сохраненная, пока не
+  реализованная концепция кнопки `Цены и маржа`: себестоимость, маржа,
+  минимальная/скидочная/базовая цена, финансовые срезы 15/30 дней и безопасный
+  `dry-run -> approval -> Job Worker -> verify`.
 - `data/planning/ozon_parser_positions_runbook.md`
 - `data/planning/wb_parser_positions_runbook.md`
 - `data/planning/search_queries_runbook.md`

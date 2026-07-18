@@ -323,6 +323,7 @@ function printableResult(result) {
   const result = {
     source: 'ozon_lk_cdp_internal_api',
     endpoint: '/api/v2/review/detail',
+    side_effect_risk: 'confirmed: opening review detail can change interaction_status from NOT_VIEWED to VIEWED',
     cdpUrl,
     expectedStore,
     ok: false,

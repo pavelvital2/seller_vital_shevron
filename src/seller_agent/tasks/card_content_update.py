@@ -810,11 +810,9 @@ def _verify_one(
     sku = _normalize_text(identity.get("internal_sku"))
     row: dict[str, Any] = {"internal_sku": sku, "identity": identity, "status": "ok", "errors": [], "marketplaces": {}}
 
-    ozon_offer_id = _normalize_text(
-        identity.get("ozon_offer_id_after_seller_sku_update")
-        or identity.get("ozon_offer_id")
-        or (passport.get("ozon") or {}).get("offer_id_after_seller_sku_update")
-    )
+    # Target offer IDs do not prove that an Ozon card exists, especially for
+    # WB-only passports that may be prepared for a future Ozon create.
+    ozon_offer_id = _normalize_text(identity.get("ozon_offer_id"))
     if ozon_offer_id:
         current_ozon = None
         if credentials.ozon_seller and not skip_api:

@@ -434,6 +434,25 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         telegram_button_label="/today",
     ),
     RegisteredTask(
+        name="marketplace-period-report",
+        command="marketplace-period-report",
+        title="Marketplace period report",
+        description="Build a read-only Ozon or WB report for an owner-selected period.",
+        mode="read_only",
+        risk="low",
+        marketplaces=("ozon", "wb"),
+        runbook_path="data/planning/marketplace_period_report_runbook.md",
+        requires_credentials=True,
+        telegram_enabled=True,
+        telegram_button_label="/period-report",
+        parameter_schema={
+            "marketplace": {"type": "string", "enum": ["ozon", "wb"], "required": True},
+            "report_type": {"type": "string", "enum": ["short", "financial", "full"], "required": True},
+            "date_from": {"type": "string", "format": "date", "required": True},
+            "date_to": {"type": "string", "format": "date", "required": True},
+        },
+    ),
+    RegisteredTask(
         name="wb-parser-warehouse-analytics",
         command="wb-parser-warehouse-analytics",
         title="WB parser warehouse analytics",
@@ -447,6 +466,80 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         runbook_path="data/planning/wb_parser_positions_runbook.md",
         telegram_enabled=True,
         telegram_button_label="/wb-analytics",
+    ),
+    RegisteredTask(
+        name="wb-stock-supply-monitor",
+        command="wb-stock-supply-monitor",
+        title="WB stock and supply monitor",
+        description=(
+            "Build a fresh read-only WB report for warehouse stocks, all active FBW supplies, "
+            "acceptance progress, physical pieces and state anomalies."
+        ),
+        mode="read_only",
+        risk="low",
+        marketplaces=("wb",),
+        runbook_path="data/planning/supply_planning_runbook.md",
+        requires_credentials=True,
+        telegram_enabled=True,
+        telegram_button_label="/wb-stock-supplies",
+    ),
+    RegisteredTask(
+        name="ozon-stock-supply-monitor",
+        command="ozon-stock-supply-monitor",
+        title="Ozon stock and supply monitor",
+        description=(
+            "Build a fresh read-only Ozon report for general FBO stock, warehouse stock, "
+            "active supply orders, physical pieces and source reconciliation."
+        ),
+        mode="read_only",
+        risk="low",
+        marketplaces=("ozon",),
+        runbook_path="data/planning/supply_planning_runbook.md",
+        requires_credentials=True,
+        telegram_enabled=True,
+        telegram_button_label="/ozon-stock-supplies",
+    ),
+    RegisteredTask(
+        name="ozon-production-work-plan",
+        command="ozon-production-work-plan",
+        title="Ozon production work plan",
+        description=(
+            "Build a read-only Ozon production workbook by physical capacity or coverage days, "
+            "selecting the owner-requested number of destination clusters by cluster-local net need."
+        ),
+        mode="read_only",
+        risk="low",
+        marketplaces=("ozon",),
+        runbook_path="data/planning/supply_planning_runbook.md",
+        requires_credentials=True,
+        telegram_enabled=True,
+        telegram_button_label="/ozon-work-plan",
+        parameter_schema={
+            "mode": {"type": "string", "enum": ["capacity", "coverage_days"], "required": True},
+            "value": {"type": "integer", "minimum": 1, "required": True},
+            "cluster_count": {"type": "integer", "minimum": 1, "maximum": 20, "required": True},
+        },
+    ),
+    RegisteredTask(
+        name="wb-production-work-plan",
+        command="wb-production-work-plan",
+        title="WB production work plan",
+        description=(
+            "Build a read-only WB production workbook by available physical capacity "
+            "or owner-selected stock coverage days, with automatic destination-region allocation."
+        ),
+        mode="read_only",
+        risk="low",
+        marketplaces=("wb",),
+        runbook_path="data/planning/supply_planning_runbook.md",
+        requires_credentials=True,
+        telegram_enabled=True,
+        telegram_button_label="/wb-work-plan",
+        parameter_schema={
+            "mode": {"type": "string", "enum": ["capacity", "coverage_days"], "required": True},
+            "value": {"type": "integer", "minimum": 1, "required": True},
+            "cluster_count": {"type": "integer", "minimum": 1, "maximum": 6, "required": True},
+        },
     ),
     RegisteredTask(
         name="supply-workbooks-plan",

@@ -254,8 +254,7 @@ get_status(job_id) -> JobStatus
 
 Еще не сделано:
 
-- Telegram routing через JobService;
-- worker/timer;
+- Telegram routing через JobService для всех оставшихся длительных команд;
 - отдельные безопасные verify handlers для inbox/Messenger cleanup и
   оставшихся apply-контуров, где verify пока основан на общем dry-run;
 
@@ -374,7 +373,7 @@ worker/job runner -> result -> send final report
 - `bot run-job-loop --max-iterations N` выполняет управляемый worker loop,
   останавливается на пустой очереди и подходит для будущего systemd/timer;
 - `deploy/systemd/user/vital-shevron-telegram-job-worker.service|timer` -
-  подготовленные, но не включенные шаблоны worker timer;
+  repository templates установленного и включенного worker timer;
 - `/jobs`, `/job_<id>`, `/cancel_<id>` показывают и безопасно отменяют только
   `created/queued` runtime job;
 - `/status` + `--live-status --runtime-jobs` создает job
@@ -387,14 +386,31 @@ worker/job runner -> result -> send final report
   `wb-actions-discount-apply` через `JobService`;
 - повторный Telegram `update_id` не создает второй job.
 
-Ограничение: systemd-шаблоны worker/timer подготовлены, но не включены и не
-запущены. До включения после постановки в очередь job нужно выполнить вручную
-через `bot run-job-next` или `bot run-job-loop --max-iterations N`. Основные
+С 2026-07-18 по явному решению владельца systemd worker/timer вводится в
+эксплуатацию вместе с `--runtime-jobs` в основном bot unit. Перед включением
+проверяется пустая активная очередь и отсутствие approvals в
+`applying/applying_unknown`; после включения выполняется read-only smoke и
+проверяется доставка Telegram-результата. Основные
 apply handler-ы уже есть в `WorkflowRunner`; Ozon Elastic и WB actions callbacks
 переключены на `JobService`. Следующие callbacks (`Ozon все акции`,
 promotion bids, карточные batch apply) переключать позже по одному. Callback-и
 Ozon Elastic/WB actions пока выполняются синхронно внутри polling; полный
 callback dedup через `telegram_updates` остается отдельным следующим слоем.
+
+Live deployment 2026-07-18:
+
+- `vital-shevron-telegram-job-worker.timer` установлен, `enabled` и `active`;
+- `vital-shevron-telegram-bot.service` установлен с `--runtime-jobs` и
+  `runtime/runtime.db`;
+- пустая очередь прошла one-shot worker smoke с `ran_jobs=0` и exit code `0`;
+- синтетический безопасный Telegram `/status` update создал
+  `job_status-preflight_20260718T171356Z_126c9b38`;
+- Worker завершил job со статусом `success` и успешно отправил Telegram text и
+  report-document;
+- после успешной доставки связанный `telegram_updates.processing_status`
+  закрывается как `completed`, при ошибке отправки - как
+  `notification_failed`;
+- marketplace write в smoke не выполнялся.
 
 ### Этап 6. Атомарные approvals и resource leases
 
