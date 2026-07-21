@@ -13,7 +13,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from seller_agent.bot.dispatcher import dispatch_callback, dispatch_message
-from seller_agent.bot.runtime_jobs import dispatch_runtime_job_message
+from seller_agent.bot.runtime_jobs import dispatch_runtime_job_callback, dispatch_runtime_job_message
 from seller_agent.config import read_non_empty_lines
 from seller_agent.core.job_store import DEFAULT_RUNTIME_DB
 
@@ -319,7 +319,7 @@ def poll_once(
             if callback_id:
                 try:
                     callback_text = "Принято. Выполняю действие..."
-                    if data in {"wbam_cancel", "mpr_cancel", "wbwp_cancel"} or data.startswith(
+                    if data in {"wbam_cancel", "mpr_cancel", "wbwp_cancel", "opm_cancel"} or data.startswith(
                         ("wbam_reject:", "wbwp_reject:")
                     ):
                         callback_text = "Отменено."
@@ -329,6 +329,8 @@ def poll_once(
                         callback_text = "Выбрано."
                     elif data.startswith("mpr_run:"):
                         callback_text = "Формирую read-only отчёт..."
+                    elif data.startswith("opm_period:"):
+                        callback_text = "Период выбран."
                     elif data.startswith("wbwp_mode:"):
                         callback_text = "Выбрано."
                     elif data.startswith("wbwp_run:"):
@@ -350,7 +352,18 @@ def poll_once(
             thread_id = _maybe_int(message_obj.get("message_thread_id"))
             conversation_key = _conversation_key(chat_id, thread_id)
             conversations.pop(conversation_key, None)
-            command_result = dispatch_callback(data, data_dir=data_dir)
+            command_result = None
+            if runtime_jobs and update_id is not None:
+                command_result = dispatch_runtime_job_callback(
+                    data,
+                    update_id=update_id,
+                    chat_id=chat_id,
+                    thread_id=thread_id,
+                    data_dir=data_dir,
+                    runtime_db=runtime_db,
+                )
+            if command_result is None:
+                command_result = dispatch_callback(data, data_dir=data_dir)
             if command_result.conversation_state:
                 conversations[conversation_key] = command_result.conversation_state
             send_results = send_telegram_text(
@@ -406,6 +419,7 @@ def poll_once(
                 runtime_db=runtime_db,
                 live_today=live_today,
                 live_status=live_status,
+                conversation_state=conversations.get(conversation_key),
             )
         if command_result is None:
             command_result = dispatch_message(

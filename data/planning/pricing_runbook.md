@@ -735,3 +735,165 @@ WB: variable costs 52.28%, retained share 47.72%, fixed logistics 92 руб.
 
 Полный аудит:
 `data/reports/pricing_commission_model_audit_2026-07-17.md`.
+
+## Telegram-калькулятор `Ozon -> Цены и маржа`
+
+Первый read-only вариант реализован 2026-07-18. CLI-эквивалент:
+
+```bash
+python -m seller_agent.cli ozon-pricing-margin \
+  --unit-cost 85 --target-margin 60 --period-days 30
+```
+
+Кнопка выбирает `15/30` завершенных дней, принимает себестоимость и маржу
+одного физического изделия и передает задачу `ozon-pricing-margin` в Job
+Worker. Источники: Ozon `/v3/finance/transaction/list`, `/v1/analytics/data`,
+`/v5/product/info/prices` и `pack_qty` из unified catalog.
+
+Логистика считается средним фиксированным расходом на проданный
+товар/комплект. Остальные фактические удержания входят в переменную долю и не
+добавляются повторно. Для защиты от занижения используется максимум
+исторической переменной доли и максимальной текущей комиссии FBO; этот
+показатель не называется комиссией.
+
+Отчет показывает расходы на товар/комплект и физическое изделие, ценовую сетку
+и текущие Ozon-цены. Первый вариант не меняет цены, не сохраняет себестоимость
+как действующую политику и не является approved dry-run.
+
+## Согласованная ценовая сетка Ozon от 2026-07-19
+
+Владелец согласовал следующую практическую сетку Ozon по числу физических
+изделий в товаре. Поля Ozon: `min_price` - минимальная цена, `price` - обычная
+цена со скидкой, `old_price` - базовая зачеркнутая цена.
+
+| `pack_qty` | `min_price`, руб. | `price`, руб. | `old_price`, руб. |
+| ---: | ---: | ---: | ---: |
+| 1 | 530 | 650 | 1300 |
+| 2 | 860 | 1100 | 2200 |
+| 3 | 1180 | 1450 | 2900 |
+| 4 | 1500 | 1800 | 3600 |
+| 5 | 1820 | 2200 | 4400 |
+
+Минимальные цены этой сетки уже применены и проверены 2026-07-17. Решение от
+2026-07-19 сохраняет целевые `price` и `old_price`; само сохранение правила не
+является dry-run или изменением цен в Ozon.
+
+Область будущего применения:
+
+- товары в `Эластичном бустинге` - сетку можно планировать при обязательной
+  проверке, что цена для покупателя в акции не изменилась;
+- нагрудные позывные и комплекты позывных - та же сетка, без увеличения CPC,
+  поскольку это целевой спрос на конкретный позывной;
+- остальные товары вне `Эластичного бустинга` - только выборочно после анализа
+  parser-позиций, продаж, остатков и текущего продвижения.
+
+Для `pack_qty=1` разница между `price=650` и `min_price=530` составляет
+`18,46%` от `price`, а не полные `20%`. Это осознанно согласованное округление
+владельца. Сетка не отменяет результат аудита модели: примененный `min_price`
+не является подтверждением маржи `60 руб.` на изделие при любых будущих
+расходах площадки.
+
+### Подтвержденный price + CPC apply 2026-07-19
+
+Точный пакет `ozon_price_cpc_growth_plan_20260719T085254` применен через
+специализированный маршрут:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  scripts/pricing/apply_ozon_price_cpc_growth.py \
+  --plan-run-id ozon_price_cpc_growth_plan_20260719T085254 \
+  --confirmed-by-user
+```
+
+Обязательная последовательность маршрута:
+
+```text
+checksum -> API-only preflight -> fresh price drift-check -> price apply ->
+price verify -> fresh CPC drift-check -> numeric bid apply -> bid verify
+```
+
+Результат `ozon_price_cpc_growth_apply_20260719T092740`:
+
+- Seller API принял без ошибок `283/283` повышений `price/old_price`;
+- fresh drift по ценам: `0`, verify: `283/283`;
+- Performance API применил `63` повышения и `7` снижений CPC-ставок;
+- drift/skipped по числовым ставкам: `0`, verify: `70/70`;
+- `5` кандидатов на исключение из CPC не применялись: нужен отдельный
+  подтвержденный API-маршрут удаления товара из кампании.
+
+Для ростовых строк новая CPC-ставка разрешена только после подтверждения
+целевой цены соответствующего `offer_id`. Снижение ставки по высокой ДРР от
+ценового шага не зависит. Повторный запуск того же approved package блокируется
+apply-marker.
+
+Post-verify Elastic показал важное ограничение: из `173` строк, помеченных
+предыдущим Elastic-срезом как активные, у `3` live Seller API уже не возвращал
+Elastic ни до, ни после apply. У всех `170` реально активных строк состояние
+акции и `marketing_seller_price` не изменилось. Три уже неактивные строки
+получили только согласованную обычную цену: `chev_nr_bpla_pict0023` и
+`pict0086` - `550 -> 650`, `chev_kit2_pz_text0014` - `1000 -> 1100`; CPC для
+них не повышался. В будущих планах роль `elastic_active` нужно подтверждать
+свежим Seller API, а не только предыдущим CSV-срезом.
+
+Артефакты:
+
+```text
+data/runs/2026-07-19/ozon_price_cpc_growth_apply_20260719T092740/
+```
+
+### Подтвержденный price-only apply 2026-07-21
+
+После роста числа участников Ozon Elastic подготовлен и применен точный пакет
+`ozon_price_alignment_plan_20260721T135110` на `120` товаров:
+
+- этап A: `45` активных Elastic со старыми обычными ценами и `19` позывных;
+- этап B: `56` товаров, отобранных по продажам за 30 завершенных дней и
+  актуальному FBO-остатку;
+- `119` одиночных товаров: `price 550 -> 650`, `old_price 1100 -> 1300`;
+- `1` комплект из двух изделий: `price 1000 -> 1100`,
+  `old_price 2000 -> 2200`.
+
+Команды:
+
+```bash
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  scripts/pricing/plan_ozon_price_alignment.py \
+  --elastic-run-id ozon_elastic_plan_20260721T134516 \
+  --target-size 120
+
+PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
+  scripts/pricing/apply_ozon_price_alignment.py \
+  --plan-run-id ozon_price_alignment_plan_20260721T135110 \
+  --confirmed-by-user
+```
+
+Price-only payload для `/v1/product/import/prices` содержал только:
+
+```text
+offer_id, price, old_price, currency_code
+```
+
+Поля `min_price`, `min_price_for_auto_actions_enabled`,
+`manage_elastic_boosting_through_price` и другие настройки автоакций в запрос
+не передавались. Результат apply
+`ozon_price_alignment_apply_20260721T141852`:
+
+- API принял без ошибок `120/120` строк;
+- fresh drift: `0`;
+- verify: `120/120`;
+- изменений `min_price`: `0`;
+- изменений состава Elastic или цены покупателя у активных Elastic: `0`.
+
+Подтвержденный безопасный порядок для следующих price-only пакетов:
+
+```text
+checksum -> API-only preflight -> fresh price + Elastic drift-check ->
+stage A apply -> price/min_price/Elastic/buyer-price verify ->
+stage B fresh drift-check -> apply -> полный verify
+```
+
+Артефакты:
+
+```text
+data/runs/2026-07-21/ozon_price_alignment_apply_20260721T141852/
+```

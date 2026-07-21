@@ -1,6 +1,6 @@
 # Telegram Bot MVP Runbook
 
-Дата актуализации: 2026-07-18
+Дата актуализации: 2026-07-20
 
 ## Итог
 
@@ -14,11 +14,13 @@ command layer. Adapter умеет отправить preview-ответ, оди�
 входящие updates через Telegram Bot API, работать в controlled polling loop,
 обрабатывать `callback_query` и прикреплять безопасный файл отчета из
 `artifacts`. Live read-only `/today` и `/status` по умолчанию запускаются через
-`WorkflowRunner` для совместимости. С 2026-06-30 добавлен опциональный режим
-`--runtime-jobs`: polling ставит `/today` и `/status` в SQLite `JobStore`,
-дедуплицирует `telegram_updates.update_id` и сразу возвращает `job_id`; запуск
-очереди и отправка результата выполняются отдельной командой
-`bot run-job-next` или будущим worker/timer.
+`WorkflowRunner` для совместимости preview. В production включен режим
+`--runtime-jobs`: polling ставит все бизнес-операции в SQLite `JobStore`,
+дедуплицирует message и callback по `telegram_updates.update_id` и сразу
+возвращает `job_id`; выполнение и отправка результата делает отдельный Job
+Worker. В polling остаются только меню, ввод и проверка параметров, локальный
+просмотр `/jobs`, `/runs`, `/approvals`, `/catalog`, отмена queued job и
+локальная фиксация решения по уже сформированному файлу `В работу`.
 
 С 2026-06-30 подключены точечные write-кнопки: Ozon Elastic и WB акции
 `70-55-55`. С 2026-07-05 добавлен второй Ozon-контур `Ozon все акции`.
@@ -52,14 +54,14 @@ polling state `.sessions/telegram/vital_shevron_bot_state.json`, раздель�
 периода. Polling сохраняет состояние как после message, так и после callback,
 который переводит диалог к вводу даты.
 
-С 2026-07-05 callback-и `oe_apply:<plan_run_id>` и
-`wba_apply:<plan_run_id>` больше не вызывают marketplace apply-функции
-напрямую из bot command layer. Они создают и сразу запускают runtime job через
-`JobService`; `WorkflowRunner` затем вызывает профильный apply handler. Это
-дает единый `job_id`, общий status/result слой и сохраняет существующую
-safety-цепочку. Callback пока выполняется синхронно внутри polling-процесса;
-полный callback dedup по `telegram_updates.update_id` остается следующим
-runtime-слоем.
+С 2026-07-20 финальные callback-и отчетов, файлов `В работу`, dry-run и apply
+не выполняют бизнес-логику внутри polling. Они только создают runtime job.
+Через Worker проходят `marketplace-period-report`, Ozon/WB stock monitor,
+production work plans, WB parser analytics, Ozon/WB inbox, Ozon Elastic,
+Ozon all-actions, WB fixed/manual actions и все пять соответствующих apply
+маршрутов. Write-job сохраняют профильные `source_plan_task`, approval
+checksum, resource locks, fresh check и verify. Worker notifier возвращает
+бизнес-сводку, безопасный `report` и следующую inline-кнопку.
 
 С 2026-07-05 добавлен минимальный первый экран Telegram-бота через persistent
 reply-клавиатуру. `/start` и `/menu` показывают кнопки `Статус`, `Помощь`,
@@ -508,13 +510,13 @@ cookies, storage state и файлы вне разрешенных директ�
 - Исключение: `/wb-inbox` + inline-кнопка WB inbox применяет только конкретный
   показанный пакет WB отзывов и вопросов. WB новости/уведомления читаются
   read-only из `news-v2`; write/mark-read по ним пока не выполняется.
-- MVP запускает из Telegram только live read-only `/today` и `/status`, если
-  явно включены `--live-today` и `--live-status`. Остальные команды показывают
-  уже сохраненные runtime-данные.
-- При `--runtime-jobs` live `/today` и `/status` не выполняются внутри polling:
-  Telegram update регистрируется в `telegram_updates`, повторный `update_id`
-  не создает второй job, а выполнение переносится на `jobs run-next` /
-  будущий worker.
+- При `--runtime-jobs` все API/LK операции, расчеты, dry-run и apply не
+  выполняются внутри polling: Telegram update регистрируется в
+  `telegram_updates`, повторный `update_id` не создает второй job, а Worker
+  обрабатывает очередь FIFO и отправляет результат в исходный chat/thread.
+- Навигация, ввод/валидация параметров, `/jobs`, `/job_*`, `/cancel_*`,
+  локальный поиск каталога и локальное решение `утвердить/отклонить` для файла
+  `В работу` остаются мгновенными и не обращаются к API маркетплейса.
 - Постоянный polling требует allowlist и lock-file; второй экземпляр polling
   должен завершаться с ошибкой lock.
 - После изменения кода Telegram-команд или задач, которые бот импортирует
@@ -595,3 +597,17 @@ inbound в том же кластере; общий остаток магази�
 дефицит.
 Решение после просмотра Excel привязано к checksum файла. Ни формирование,
 ни локальное утверждение не создают поставку и не выполняют write в WB.
+
+## Ozon `Цены и маржа`
+
+Кнопка `Ozon -> Цены и маржа Ozon` запускает read-only диалог:
+
+1. выбор периода расходов `15` или `30` завершенных дней;
+2. ввод себестоимости одного физического изделия;
+3. ввод целевой маржи одного физического изделия;
+4. постановка `ozon-pricing-margin` в Job Worker;
+5. Telegram summary и Excel с расходами, ценовой сеткой и товарами.
+
+В чат отдельно выводятся расходы Ozon на проданный товар/комплект и на одно
+физическое изделие. Цена в кабинете не меняется; callback подтверждения apply
+в первом варианте отсутствует.

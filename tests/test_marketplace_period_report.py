@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from pathlib import Path
 
 from seller_agent.config import AppCredentials, OzonSellerCredentials, WbCredentials
@@ -73,6 +74,9 @@ def test_ozon_period_report_counts_physical_pieces(tmp_path: Path, monkeypatch) 
                 }
             }
 
+        def fetch_returns(self, **kwargs):  # type: ignore[no-untyped-def]
+            return []
+
     monkeypatch.setattr(module, "OzonSellerAdapter", FakeOzon)
     result = run_marketplace_period_report(
         credentials=AppCredentials(OzonSellerCredentials("id", "key"), None, None),
@@ -92,6 +96,71 @@ def test_ozon_period_report_counts_physical_pieces(tmp_path: Path, monkeypatch) 
     assert metrics["net_per_piece"] == 90.0
     assert Path(result["artifacts"]["report"]).exists()
     assert Path(result["artifacts"]["xlsx"]).exists()
+
+
+def test_ozon_period_report_does_not_count_finance_service_rows_as_returns(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from seller_agent.tasks import marketplace_period_report as module
+
+    _write_catalog(tmp_path / "catalog" / "unified" / "products.csv")
+    repetitions = [3] * 8 + [4] * 3 + [2] * 2
+    finance_returns = []
+    for posting_index, row_count in enumerate(repetitions, start=1):
+        for operation_index in range(row_count):
+            finance_returns.append(
+                {
+                    "operation_id": f"operation-{posting_index}-{operation_index}",
+                    "operation_type": "OperationItemReturn",
+                    "operation_date": "2026-07-16T12:00:00Z",
+                    "amount": -10,
+                    "posting": {"posting_number": f"posting-{posting_index}"},
+                    "items": [{"sku": 100, "quantity": 1}],
+                }
+            )
+    assert len(finance_returns) == 40
+    assert module._ozon_finance_return_metrics(finance_returns)["total"] == 13
+
+    class FakeOzon:
+        def __init__(self, credentials) -> None:  # type: ignore[no-untyped-def]
+            self.credentials = credentials
+
+        def fetch_finance_transactions(self, **kwargs):  # type: ignore[no-untyped-def]
+            return finance_returns
+
+        def fetch_analytics_data(self, **kwargs):  # type: ignore[no-untyped-def]
+            return {"result": {"data": []}}
+
+        def fetch_returns(self, **kwargs):  # type: ignore[no-untyped-def]
+            return [
+                {
+                    "id": str(index),
+                    "type": "Cancellation" if index <= 11 else "ClientReturn",
+                    "product": {"offer_id": "kit2", "quantity": 1},
+                }
+                for index in range(1, 14)
+            ]
+
+    monkeypatch.setattr(module, "OzonSellerAdapter", FakeOzon)
+    result = run_marketplace_period_report(
+        credentials=AppCredentials(OzonSellerCredentials("id", "key"), None, None),
+        data_dir=tmp_path,
+        marketplace="ozon",
+        report_type="financial",
+        date_from="2026-07-16",
+        date_to="2026-07-16",
+        run_id="marketplace_period_report_ozon_returns_test",
+    )
+
+    metrics = result["metrics"]
+    assert metrics["returns"] == 13
+    assert metrics["return_cancellations"] == 11
+    assert metrics["client_returns"] == 2
+    assert metrics["return_unknown"] == 0
+
+    report_data = Path(result["artifacts"]["json"])
+    persisted = json.loads(report_data.read_text(encoding="utf-8"))
+    assert persisted["expenses"]["Возвраты"] == 400.0
 
 
 def test_wb_period_report_uses_finance_details_and_ads(tmp_path: Path, monkeypatch) -> None:

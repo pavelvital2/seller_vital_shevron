@@ -204,13 +204,29 @@ def _review_media_fields(item: dict[str, Any]) -> dict[str, Any]:
                 if isinstance(row, str) and row.startswith(("http://", "https://")):
                     media_urls.append(row)
                 elif isinstance(row, dict):
-                    url = row.get("url") or row.get("src") or row.get("link")
+                    url = (
+                        row.get("fullSize")
+                        or row.get("full_size")
+                        or row.get("url")
+                        or row.get("src")
+                        or row.get("link")
+                        or row.get("miniSize")
+                        or row.get("mini_size")
+                    )
                     if isinstance(url, str) and url.startswith(("http://", "https://")):
                         media_urls.append(url)
         elif isinstance(value, str) and value.startswith(("http://", "https://")):
             media_urls.append(value)
         elif isinstance(value, dict):
-            url = value.get("url") or value.get("src") or value.get("link")
+            url = (
+                value.get("fullSize")
+                or value.get("full_size")
+                or value.get("url")
+                or value.get("src")
+                or value.get("link")
+                or value.get("miniSize")
+                or value.get("mini_size")
+            )
             if isinstance(url, str) and url.startswith(("http://", "https://")):
                 media_urls.append(url)
     return {

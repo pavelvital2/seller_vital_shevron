@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta
+from decimal import Decimal, InvalidOperation
 import json
 from pathlib import Path
 import re
@@ -40,6 +41,7 @@ SUPPORTED_COMMANDS = {
     "/ozon-actions",
     "/ozon-stock-supplies",
     "/ozon-work-plan",
+    "/ozon-pricing-margin",
     "/ozon",
     "/period-report",
     "/period-report-ozon",
@@ -69,6 +71,7 @@ TELEGRAM_TITLES = {
     "/ozon-actions": "Ozon все акции",
     "/ozon-stock-supplies": "Остатки и поставки Ozon",
     "/ozon-work-plan": "В работу Ozon",
+    "/ozon-pricing-margin": "Цены и маржа Ozon",
     "/period-report": "Отчёт за период",
     "/period-report-ozon": "Ozon: отчёт за период",
     "/period-report-wb": "Wildberries: отчёт за период",
@@ -125,6 +128,16 @@ def handle_telegram_command(
     ):
         return _ozon_work_plan_clusters(message, state=active_conversation)
     if (
+        active_conversation.get("stage") == "ozon_pricing_cost_input"
+        and not _is_explicit_command_or_button(message)
+    ):
+        return _ozon_pricing_cost_input(message, state=active_conversation)
+    if (
+        active_conversation.get("stage") == "ozon_pricing_margin_input"
+        and not _is_explicit_command_or_button(message)
+    ):
+        return _ozon_pricing_margin_runtime_required(message, state=active_conversation)
+    if (
         active_conversation.get("stage") == "wb_manual_scheme_input"
         and not _is_explicit_command_or_button(message)
     ):
@@ -160,6 +173,8 @@ def handle_telegram_command(
         return _ozon_stock_supplies(data_dir=data_dir, credentials=credentials)
     if command in {"/ozon-work-plan", "/ozon_work_plan"}:
         return _ozon_work_plan_start()
+    if command in {"/ozon-pricing-margin", "/ozon_pricing_margin"}:
+        return _ozon_pricing_margin_start()
     if command in {"/wb-actions", "/wb_actions", "/wb-actions-70-55-55"}:
         return _wb_actions_plan(data_dir=data_dir, credentials=credentials)
     if command in {"/wb-actions-manual", "/wb_actions_manual"}:
@@ -264,6 +279,10 @@ def handle_telegram_callback(
         return _period_report_run_callback(data, data_dir=data_dir, credentials=credentials)
     if data == "mpr_cancel":
         return _period_report_cancel()
+    if data.startswith("opm_period:"):
+        return _ozon_pricing_margin_period_callback(data)
+    if data == "opm_cancel":
+        return _ozon_pricing_margin_cancel()
     if data.startswith("ozwp_mode:"):
         return _ozon_work_plan_mode_callback(data)
     if data.startswith("ozwp_run:"):
@@ -339,6 +358,7 @@ OZON_MENU_KEYBOARD: dict[str, Any] = {
         [{"text": "Отчёт за период Ozon"}],
         [{"text": "Остатки и поставки Ozon"}],
         [{"text": "В работу Ozon"}],
+        [{"text": "Цены и маржа Ozon"}],
         [{"text": "Ozon входящие"}],
         [{"text": "Назад"}],
     ],
@@ -391,6 +411,7 @@ def _ozon_menu() -> TelegramCommandResult:
             "- Отчёт за период - краткий, финансовый или полный отчёт Ozon.\n"
             "- Остатки и поставки - свежий FBO-остаток по складам и активные поставки Ozon.\n"
             "- В работу - производственный план Ozon по потребности выбранного числа кластеров.\n"
+            "- Цены и маржа - read-only расчёт расходов и ценовой сетки Ozon.\n"
             "- Ozon входящие - отзывы, вопросы, чаты и уведомления."
         ),
         reply_markup=OZON_MENU_KEYBOARD,
@@ -604,6 +625,134 @@ def _ozon_work_plan_start() -> TelegramCommandResult:
                 [{"text": "Отменить", "callback_data": "ozwp_cancel"}],
             ]
         },
+    )
+
+
+def _ozon_pricing_margin_start() -> TelegramCommandResult:
+    return TelegramCommandResult(
+        command="/ozon-pricing-margin",
+        ok=True,
+        mode="input",
+        text=(
+            "Ozon: цены и маржа\n\n"
+            "Выберите период, по которому бот рассчитает фактические расходы Ozon FBO. "
+            "Используются только завершённые дни до вчерашнего включительно.\n\n"
+            "Первый вариант работает в режиме read-only: цены в Ozon не изменяются."
+        ),
+        reply_markup={
+            "inline_keyboard": [
+                [
+                    {"text": "15 дней", "callback_data": "opm_period:15"},
+                    {"text": "30 дней", "callback_data": "opm_period:30"},
+                ],
+                [{"text": "Отменить", "callback_data": "opm_cancel"}],
+            ]
+        },
+    )
+
+
+def _ozon_pricing_margin_period_callback(data: str) -> TelegramCommandResult:
+    raw_days = data.removeprefix("opm_period:").strip()
+    period_days = int(raw_days) if raw_days.isdigit() else 0
+    if period_days not in {15, 30}:
+        return _ozon_pricing_margin_invalid("Период повреждён. Запустите «Цены и маржа Ozon» заново.")
+    return TelegramCommandResult(
+        command="/ozon-pricing-margin",
+        ok=True,
+        mode="input",
+        text=(
+            f"Ozon: цены и маржа\n\nПериод расходов: `{period_days} дней`.\n\n"
+            "Введите себестоимость одного физического изделия в рублях.\n\n"
+            "Пример: `85`. Для комплекта бот умножит эту сумму на `pack_qty`."
+        ),
+        reply_markup={"inline_keyboard": [[{"text": "Отменить", "callback_data": "opm_cancel"}]]},
+        conversation_state={"stage": "ozon_pricing_cost_input", "period_days": period_days},
+    )
+
+
+def _ozon_pricing_cost_input(message: str, *, state: dict[str, Any]) -> TelegramCommandResult:
+    period_days = _int_value(state.get("period_days"))
+    cost = _owner_decimal(message)
+    if period_days not in {15, 30}:
+        return _ozon_pricing_margin_invalid("Период расчёта потерян. Запустите расчёт заново.")
+    if cost is None or cost <= 0 or cost > Decimal("100000"):
+        return TelegramCommandResult(
+            command="/ozon-pricing-margin",
+            ok=False,
+            mode="input",
+            blocked_reason="invalid_ozon_unit_cost",
+            text=(
+                "Ozon: цены и маржа\n\n"
+                "Введите положительную себестоимость одного физического изделия в рублях. "
+                "Допустимы целые и дробные значения, например `85` или `85,50`."
+            ),
+            reply_markup={"inline_keyboard": [[{"text": "Отменить", "callback_data": "opm_cancel"}]]},
+            conversation_state=state,
+        )
+    cost_text = _decimal_text(cost)
+    return TelegramCommandResult(
+        command="/ozon-pricing-margin",
+        ok=True,
+        mode="input",
+        text=(
+            f"Ozon: цены и маржа\n\nСебестоимость изделия: `{cost_text} руб.`\n\n"
+            "Введите желаемую маржу с одного физического изделия в рублях.\n\n"
+            "Пример: `60`. После ввода Job Worker соберёт расходы Ozon и сформирует расчёт."
+        ),
+        reply_markup={"inline_keyboard": [[{"text": "Отменить", "callback_data": "opm_cancel"}]]},
+        conversation_state={
+            "stage": "ozon_pricing_margin_input",
+            "period_days": period_days,
+            "unit_cost": cost_text,
+        },
+    )
+
+
+def _ozon_pricing_margin_runtime_required(message: str, *, state: dict[str, Any]) -> TelegramCommandResult:
+    margin = _owner_decimal(message)
+    if margin is None or margin < 0 or margin > Decimal("100000"):
+        return TelegramCommandResult(
+            command="/ozon-pricing-margin",
+            ok=False,
+            mode="input",
+            blocked_reason="invalid_ozon_target_margin",
+            text=(
+                "Ozon: цены и маржа\n\n"
+                "Введите неотрицательную маржу на одно физическое изделие в рублях, например `60`."
+            ),
+            reply_markup={"inline_keyboard": [[{"text": "Отменить", "callback_data": "opm_cancel"}]]},
+            conversation_state=state,
+        )
+    return TelegramCommandResult(
+        command="/ozon-pricing-margin",
+        ok=False,
+        mode="input",
+        blocked_reason="runtime_jobs_required",
+        text=(
+            "Расчёт должен быть поставлен в Job Worker. В preview-режиме очередь отключена; "
+            "в рабочем Telegram-боте это сообщение автоматически создаст read-only задачу."
+        ),
+        conversation_state=state,
+    )
+
+
+def _ozon_pricing_margin_cancel() -> TelegramCommandResult:
+    return TelegramCommandResult(
+        command="/ozon-pricing-margin",
+        ok=True,
+        text="Ozon: расчёт цен и маржи отменён. Изменений в кабинете не было.",
+        reply_markup=OZON_MENU_KEYBOARD,
+    )
+
+
+def _ozon_pricing_margin_invalid(message: str) -> TelegramCommandResult:
+    return TelegramCommandResult(
+        command="/ozon-pricing-margin",
+        ok=False,
+        mode="input",
+        blocked_reason="invalid_ozon_pricing_margin_parameters",
+        text=f"Ozon: цены и маржа\n\n{message}\n\nИзменений в Ozon не было.",
+        reply_markup=OZON_MENU_KEYBOARD,
     )
 
 
@@ -3770,6 +3919,9 @@ def _normalize_button_command(command: str) -> str:
         "в работу ozon": "/ozon-work-plan",
         "ozon в работу": "/ozon-work-plan",
         "озон в работу": "/ozon-work-plan",
+        "цены и маржа ozon": "/ozon-pricing-margin",
+        "ozon цены и маржа": "/ozon-pricing-margin",
+        "озон цены и маржа": "/ozon-pricing-margin",
         "отчет за период ozon": "/period-report-ozon",
         "ozon отчет за период": "/period-report-ozon",
         "wb акции": "/wb-actions",
@@ -3814,3 +3966,17 @@ def _parse_command(message: str) -> tuple[str, str]:
     if "@" in command:
         command = command.split("@", 1)[0]
     return command or "/help", argument.strip()
+
+
+def _owner_decimal(value: Any) -> Decimal | None:
+    text = str(value or "").strip().replace(" ", "").replace(",", ".")
+    try:
+        result = Decimal(text)
+    except (InvalidOperation, ValueError):
+        return None
+    return result if result.is_finite() else None
+
+
+def _decimal_text(value: Decimal) -> str:
+    normalized = value.quantize(Decimal("0.01"))
+    return format(normalized, "f").rstrip("0").rstrip(".")

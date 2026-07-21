@@ -24,8 +24,8 @@ class JobRunner:
         return self.service.run(job_id)
 
     def run_next(self) -> JobRunnerResult:
-        jobs = self.service.store.list_jobs(status="queued", limit=1)
-        if not jobs:
+        job = self.service.store.next_queued_job()
+        if job is None:
             return JobRunnerResult(job=None, ran=False, ok=True, message="No queued jobs.")
-        result = self.service.run(jobs[0].job_id)
+        result = self.service.run(job.job_id)
         return JobRunnerResult(job=result.job, ran=True, ok=result.ok, message=result.message)

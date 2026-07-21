@@ -182,6 +182,15 @@ class JobStore:
             ).fetchall()
         return [_job_from_row(row) for row in rows]
 
+    def next_queued_job(self) -> JobRecord | None:
+        """Return the oldest queued job so the worker processes the queue FIFO."""
+        self.initialize()
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM jobs WHERE status = 'queued' ORDER BY created_at ASC, rowid ASC LIMIT 1"
+            ).fetchone()
+        return _job_from_row(row) if row is not None else None
+
     def list_events(self, job_id: str) -> list[JobEvent]:
         self.initialize()
         with self._connect() as connection:

@@ -131,6 +131,31 @@ def test_normalize_wb_feedback_detects_photo_links_and_single_video() -> None:
     assert classify_item(item) == "needs_media_review_for_public_reply"
 
 
+def test_normalize_wb_feedback_prefers_full_size_photo_link_object() -> None:
+    item = normalize_wb_feedback(
+        {
+            "id": "feedback-photo-object",
+            "text": "Цвет отличается",
+            "productValuation": 2,
+            "answer": None,
+            "photoLinks": [
+                {
+                    "fullSize": "https://example.test/review-photo-full.webp",
+                    "miniSize": "https://example.test/review-photo-mini.webp",
+                }
+            ],
+            "productDetails": {
+                "nmId": 123,
+                "supplierArticle": "chev_test0001",
+                "productName": "Шеврон на липучке тестовый",
+            },
+        }
+    )
+
+    assert item["photos_count"] == 1
+    assert item["media_urls"] == ["https://example.test/review-photo-full.webp"]
+
+
 def test_normalize_wb_question_quantity_requires_owner_input() -> None:
     item = normalize_wb_question(
         {

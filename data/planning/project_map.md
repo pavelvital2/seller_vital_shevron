@@ -70,10 +70,12 @@
   `JobRunner`: `run_once()` и `run_loop(max_iterations, stop_when_empty)`.
 - `jobs list|show|submit|run|run-next|cancel` - CLI-команды нового SQLite
   runtime-контура для создания, запуска и проверки job-ов без Telegram.
-- `src/seller_agent/bot/runtime_jobs.py` - optional Telegram runtime bridge:
-  в режиме `bot poll-once|poll-loop --runtime-jobs` live `/status` и `/today`
-  регистрируются в `telegram_updates`, дедуплицируются по `update_id` и
-  ставятся в `JobStore` как queued jobs без выполнения внутри polling.
+- `src/seller_agent/bot/runtime_jobs.py` - Telegram runtime bridge: в режиме
+  `bot poll-once|poll-loop --runtime-jobs` все текущие API/LK операции,
+  расчеты, dry-run и apply callback-и регистрируются в `telegram_updates`,
+  дедуплицируются по `update_id` и ставятся в `JobStore` без выполнения внутри
+  polling. Меню, ввод параметров и локальные runtime-команды остаются
+  мгновенными.
 - `src/seller_agent/bot/job_notifier.py` - Telegram notifier для завершенных
   runtime job-ов: находит исходный `telegram_updates` по `job_id`, отправляет
   итог в тот же chat/thread и прикрепляет безопасный `artifacts.report`.
@@ -87,7 +89,12 @@
   cancel support и enabled; CLI `tasks policy` показывает пробелы apply-gate.
   Telegram-enabled dry-run задачи: `/elastic` для Ozon Elastic,
   `/ozon-actions` для отдельного Ozon all-actions optimizer и `/wb-actions`
-  для WB акций `70-55-55`.
+  для WB акций `70-55-55`; read-only `/ozon-pricing-margin` рассчитывает
+  фактические расходы FBO и ценовую сетку через Job Worker.
+- `src/seller_agent/tasks/ozon_pricing_margin.py` - первый read-only
+  калькулятор `Ozon -> Цены и маржа`: 15/30 завершенных дней, расходы на
+  товар и физическое изделие, текущая комиссия FBO, сетка по `pack_qty`,
+  Markdown/Excel/JSON без marketplace write.
 - `tasks list|show` - CLI-команды просмотра `TaskRegistry`.
 - `src/seller_agent/tasks/catalog_unified.py` - read-only сборка внутреннего
   общего product-level каталога из confirmed Ozon/WB mapping, owner-approved
@@ -534,13 +541,18 @@ Ozon CDP port по умолчанию: `9544`.
   `JobService`, `JobRunner`, CLI `jobs`, Telegram `--runtime-jobs`, notifier,
   worker loop, approvals/resource leases и handler-ы основных Ozon/WB
   контуров. С 2026-07-18 Job Worker timer установлен и active/enabled;
-  основной bot работает с `runtime/runtime.db`.
+  основной bot работает с `runtime/runtime.db`. С 2026-07-20 все фактически
+  доступные бизнес-операции текущего Telegram-меню переведены в Worker;
+  JobRunner обрабатывает их FIFO, notifier возвращает сводку, report и
+  approval-кнопку.
 - `data/planning/development_work_checkpoint.md` - текущий checkpoint работ по
   развитию проекта после полной ревизии 2026-07-18: runtime, карточки, отчеты,
   поставки, незакрытые направления и точка возврата к `Цены и маржа`.
 - `data/planning/revision_2026-07-18.md` - полная ревизия текущего checkpoint:
   scope, tests, TaskRegistry, API preflight, runtime/systemd, исправления,
   остаточные риски и точка продолжения.
+- `data/planning/revision_2026-07-21.md` - актуальная ревизия накопленных
+  карточных, pricing, promotion и Job Worker изменений перед commit/push.
 - `data/planning/daily_morning_report_runbook.md`
 - `data/planning/marketplace_period_report_runbook.md`
 - `data/planning/reviews_questions_runbook.md`

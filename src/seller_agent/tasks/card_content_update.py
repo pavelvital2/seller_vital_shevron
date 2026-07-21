@@ -394,7 +394,9 @@ def _build_ozon_verify_payload(passport: dict[str, Any], current: dict[str, Any]
 def _wb_target(passport: dict[str, Any]) -> dict[str, Any]:
     content = passport.get("content") or {}
     physical = passport.get("physical") or {}
-    wb_attrs = (passport.get("wb") or {}).get("attributes") or []
+    wb = passport.get("wb") or {}
+    wb_attrs = wb.get("attributes") or []
+    adult_constraint = (wb.get("write_constraints") or {}).get("isAdult") or {}
     return {
         "title": _normalize_text(content.get("wb_title") or content.get("canonical_title")),
         "description": _normalize_text(content.get("wb_description") or content.get("canonical_description")),
@@ -407,6 +409,8 @@ def _wb_target(passport: dict[str, Any]) -> dict[str, Any]:
         "qty": _field_value(wb_attrs, "Количество предметов") or f"{physical.get('pack_qty') or 1} шт.",
         "kit": _field_value(wb_attrs, "Комплектация") or _normalize_text((passport.get("content") or {}).get("package_contents")),
         "tnved": "5810999000",
+        "is_adult": adult_constraint.get("target") is True,
+        "is_adult_apply_condition": _normalize_text(adult_constraint.get("apply_condition")),
     }
 
 
@@ -452,6 +456,10 @@ def _build_wb_payload(passport: dict[str, Any], current: dict[str, Any]) -> tupl
         "characteristics": chars,
         "sizes": deepcopy(current.get("sizes") or []),
     }
+    if "isAdult" in current:
+        variant["isAdult"] = bool(current.get("isAdult"))
+    if target["is_adult"]:
+        variant["isAdult"] = True
     if "kizMarked" in current:
         variant["kizMarked"] = bool(current.get("kizMarked"))
     changes = [
@@ -460,6 +468,15 @@ def _build_wb_payload(passport: dict[str, Any], current: dict[str, Any]) -> tupl
         {"field": "dimensions", "current": current.get("dimensions"), "target": dimensions},
         {"field": "color", "current": _normalize_text(current.get("characteristics")), "target": target["colors"]},
     ]
+    if target["is_adult"] and current.get("isAdult") is not True:
+        changes.append(
+            {
+                "field": "isAdult",
+                "current": current.get("isAdult"),
+                "target": True,
+                "apply_condition": target["is_adult_apply_condition"] or "only_if_current_not_true",
+            }
+        )
     return variant, changes, []
 
 
@@ -968,6 +985,8 @@ def _verify_wb_payloads(
         checks["description"] = _normalize_space(item.get("description")) == _normalize_space(payload.get("description"))
         checks["dimensions"] = _same_dimensions(item.get("dimensions"), payload.get("dimensions"))
         checks["colors"] = _same_list(_wb_char_values(item, WB_CHAR_IDS["color"]), _wb_char_values(payload, WB_CHAR_IDS["color"]))
+        if "isAdult" in payload:
+            checks["isAdult"] = bool(item.get("isAdult")) == bool(payload.get("isAdult"))
         target_media = (media_by_vendor_code or {}).get(code) or []
         if target_media:
             checks["photo_count"] = len(item.get("photos") or []) >= len(target_media)

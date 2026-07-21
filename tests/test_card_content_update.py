@@ -57,6 +57,48 @@ def test_build_wb_payload_preserves_identity_and_sizes() -> None:
     assert changes[0]["field"] == "title"
 
 
+def test_build_wb_payload_applies_conditional_adult_and_preserves_barcode() -> None:
+    passport = {
+        "content": {"wb_title": "Шеврон на липучке ЧВК", "wb_description": "Описание"},
+        "physical": {"package_dimensions_wb_cm": "10*10*1 см", "package_weight_g": 10, "pack_qty": 1},
+        "wb": {
+            "attributes": [
+                {"field": "Цвет", "value": "красный, черный"},
+                {"field": "Вид декора для одежды", "value": "шеврон"},
+                {"field": "Состав", "value": "полиэстер; нейлон"},
+                {"field": "Комплектация", "value": "шеврон на липучке 1 шт."},
+            ],
+            "write_constraints": {
+                "barcode": {"action": "do_not_change_or_update", "include_in_write_payload": False},
+                "isAdult": {"target": True, "apply_condition": "only_if_current_not_true"},
+            },
+        },
+    }
+    current = {
+        "nmID": 707654779,
+        "vendorCode": "svopklpict0009",
+        "title": "Old",
+        "description": "Old",
+        "dimensions": {"length": 10, "width": 10, "height": 1, "weightBrutto": 0.01},
+        "characteristics": [],
+        "sizes": [{"skus": ["2052807975386"], "techSize": "0", "wbSize": ""}],
+        "isAdult": False,
+    }
+
+    payload, changes, errors = _build_wb_payload(passport, current)
+
+    assert errors == []
+    assert payload is not None
+    assert payload["isAdult"] is True
+    assert payload["sizes"] == current["sizes"]
+    assert next(change for change in changes if change["field"] == "isAdult") == {
+        "field": "isAdult",
+        "current": False,
+        "target": True,
+        "apply_condition": "only_if_current_not_true",
+    }
+
+
 def test_build_ozon_payload_blocks_missing_color_dictionary_value() -> None:
     passport = {
         "content": {"ozon_title": "Шеврон на липучке ЧВК", "ozon_description": "Описание"},

@@ -184,6 +184,13 @@ ozon_description = wb_description = canonical_description
 - оставить `apply_authorized=false` до отдельной команды владельца;
 - не считать наличие паспорта фактом создания карточки на Ozon.
 
+Если owner-approved Layer 2 содержит `proposed_final_card.wb_create` с
+`current_state=card_absent`, promotion обязана перенести этот блок в
+`wb.create` и добавить `wb_card_create` в `safety.dangerous_actions`.
+`vendor_code` сразу должен быть равен внутреннему SKU. Отсутствующие `nmID` и
+barcode остаются ожидаемыми идентификаторами, выдаваемыми WB при create, а не
+основанием выносить создание карточки в отдельный owner review.
+
 После promotion нужно проверить количество хештегов, отсутствие служебных
 скобок/кавычек, число целевых фото и наличие Ozon ID. Пустые Ozon ID для
 будущего создания являются ожидаемым состоянием, а не результатом apply.
@@ -202,12 +209,36 @@ Fresh-аудиты могут хранить физические парамет
 массив `ozon_attributes.hashtags`. После записи паспорта обязательно сверять
 фактическое количество тегов с owner-approved Layer 2.
 
+Для полного owner-review нового формата `physical_parameters` также может
+содержать раздельные `product_width_mm`, `product_height_mm`,
+`package_depth_mm`, `package_width_mm`, `package_height_mm` и
+`package_weight_g`; WB-размеры могут находиться в
+`proposed_final_card.wb_create.dimensions_cm`. Штатная promotion обязана
+собрать из них Layer 3 без ручного копирования и не терять `owner_corrections`.
+
 Если наборы фото Ozon и WB различаются, Layer 3 обязан хранить их отдельно в
 `media.target_ozon_photo_set` и `media.target_wb_photo_set`. Общий
 `target_marketplace_photo_set` нельзя использовать как замену двум наборам:
 иначе WB-specific watermark, удаление дубля или незавершенная дизайнерская
 задача могут ошибочно попасть в план Ozon. Перед promotion оба массива нужно
 сверить с owner-approved решением и фактически доступными файлами.
+
+Если владелец согласовал сохранить текущие фото площадки без изменений,
+promotion не должна добавлять `wb_media_update` только из-за наличия media
+policy или строкового значения `keep_current`. В Layer 3 целевой набор WB-фото
+остается пустым, а `wb.write_constraints.media` фиксирует
+`include_in_write_payload=false`. Любая будущая замена фото требует нового
+аудита media policy.
+
+Условные и запрещенные WB-поля нужно сохранять машинно. Для `isAdult=true` с
+условием владельца `только если текущее значение не true` паспорт хранит
+`wb.write_constraints.isAdult.apply_condition=only_if_current_not_true`. Если
+barcode согласован как `не менять и не обновлять`, паспорт хранит
+`wb.write_constraints.barcode.include_in_write_payload=false`; неизвестное
+текущее значение нельзя превращать в новый barcode или основание для write.
+Планировщик WB-контента обязан при этом копировать текущий `sizes.skus` без
+изменения. Условный `isAdult` добавляется в payload только с целевым `true`, а
+verify обязан отдельно подтвердить фактический признак после apply.
 
 Для комплектов `physical.item_weight_g` и `physical.package_weight_g` нельзя
 сводить к одному значению. Вес одного обычного шеврона остается `10 г`, а вес

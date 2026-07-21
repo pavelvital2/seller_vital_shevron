@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 
 from seller_agent.bot.dispatcher import dispatch_callback, dispatch_message
-from seller_agent.bot.job_notifier import notify_telegram_job_result
-from seller_agent.bot.runtime_jobs import dispatch_runtime_job_message
+from seller_agent.bot.job_notifier import build_job_result_text, notify_telegram_job_result
+from seller_agent.bot.runtime_jobs import dispatch_runtime_job_callback, dispatch_runtime_job_message
 from seller_agent.bot.telegram_runner import (
     TelegramRunnerError,
     load_telegram_bot_token,
@@ -1947,6 +1947,184 @@ def test_runtime_job_dispatch_queues_live_status_and_deduplicates(tmp_path: Path
     assert updates.job_id == jobs[0].job_id
 
 
+@pytest.mark.parametrize(
+    ("message", "task_id"),
+    [
+        ("Ozon эластик", "ozon-elastic-plan"),
+        ("Ozon акции", "ozon-actions-optimizer-plan"),
+        ("Остатки и поставки Ozon", "ozon-stock-supply-monitor"),
+        ("WB акции", "wb-actions-discount-plan"),
+        ("WB аналитика", "wb-parser-warehouse-analytics"),
+        ("Остатки и поставки", "wb-stock-supply-monitor"),
+        ("Ozon входящие", "ozon-inbox"),
+        ("WB входящие", "wb-inbox"),
+    ],
+)
+def test_runtime_job_dispatch_queues_all_external_message_operations(
+    message: str,
+    task_id: str,
+    tmp_path: Path,
+) -> None:
+    runtime_db = tmp_path / f"{task_id}.db"
+
+    result = dispatch_runtime_job_message(
+        message,
+        update_id=3001,
+        chat_id=123,
+        data_dir=tmp_path / "data",
+        runtime_db=runtime_db,
+        live_today=True,
+        live_status=True,
+    )
+
+    assert result is not None
+    assert result.ok is True
+    jobs = JobStore(runtime_db).list_jobs()
+    assert len(jobs) == 1
+    assert jobs[0].task_id == task_id
+    assert jobs[0].status == "queued"
+
+
+@pytest.mark.parametrize(
+    ("callback_data", "task_id", "expected_params"),
+    [
+        (
+            "mpr_run:o:f:2026-07-01:2026-07-16",
+            "marketplace-period-report",
+            {
+                "marketplace": "ozon",
+                "report_type": "financial",
+                "date_from": "2026-07-01",
+                "date_to": "2026-07-16",
+            },
+        ),
+        (
+            "ozwp_run:c:1000:4",
+            "ozon-production-work-plan",
+            {"mode": "capacity", "value": 1000, "cluster_count": 4},
+        ),
+        (
+            "wbwp_run:d:30:6",
+            "wb-production-work-plan",
+            {"mode": "coverage_days", "value": 30, "cluster_count": 6},
+        ),
+        ("wbam_confirm:60-50-50", "wb-actions-discount-plan", {"scheme_text": "60-50-50"}),
+        (
+            "oe_apply:ozon_elastic_plan_test",
+            "ozon-elastic-apply",
+            {"plan_run_id": "ozon_elastic_plan_test", "confirmed_by_user": True},
+        ),
+        (
+            "oza_apply:ozon_actions_optimizer_plan_test",
+            "ozon-actions-optimizer-apply",
+            {"plan_run_id": "ozon_actions_optimizer_plan_test", "confirmed_by_user": True},
+        ),
+        (
+            "wba_apply:wb_actions_discount_plan_test",
+            "wb-actions-discount-apply",
+            {"plan_run_id": "wb_actions_discount_plan_test", "confirmed_by_user": True},
+        ),
+        (
+            "ozin_apply:ozon_inbox_test",
+            "ozon-inbox-apply",
+            {"source_run_id": "ozon_inbox_test", "confirmed_by_user": True},
+        ),
+        (
+            "wbin_apply:wb_inbox_test",
+            "wb-inbox-apply",
+            {"source_run_id": "wb_inbox_test", "confirmed_by_user": True},
+        ),
+    ],
+)
+def test_runtime_job_dispatch_queues_all_operation_callbacks(
+    callback_data: str,
+    task_id: str,
+    expected_params: dict,
+    tmp_path: Path,
+) -> None:
+    runtime_db = tmp_path / f"{task_id}.db"
+
+    result = dispatch_runtime_job_callback(
+        callback_data,
+        update_id=4001,
+        chat_id=123,
+        thread_id=55,
+        data_dir=tmp_path / "data",
+        runtime_db=runtime_db,
+    )
+
+    assert result is not None
+    assert result.ok is True
+    job = JobStore(runtime_db).list_jobs()[0]
+    assert job.task_id == task_id
+    for key, value in expected_params.items():
+        assert job.params[key] == value
+    update = JobStore(runtime_db).get_telegram_update(4001)
+    assert update is not None
+    assert update.payload["callback_data"] == callback_data
+    assert update.payload["thread_id"] == 55
+
+
+def test_ozon_pricing_margin_dialog_and_runtime_queue(tmp_path: Path) -> None:
+    menu = dispatch_message("Озон")
+    assert any(
+        button.get("text") == "Цены и маржа Ozon"
+        for row in menu.reply_markup["keyboard"]
+        for button in row
+    )
+
+    start = dispatch_message("Цены и маржа Ozon")
+    assert start.ok is True
+    period = dispatch_callback("opm_period:30", data_dir=tmp_path)
+    assert period.conversation_state == {"stage": "ozon_pricing_cost_input", "period_days": 30}
+    cost = dispatch_message("85", conversation_state=period.conversation_state)
+    assert cost.ok is True
+    assert cost.conversation_state["stage"] == "ozon_pricing_margin_input"
+
+    runtime_db = tmp_path / "runtime.db"
+    queued = dispatch_runtime_job_message(
+        "60",
+        update_id=2001,
+        chat_id=123,
+        data_dir=tmp_path / "data",
+        runtime_db=runtime_db,
+        conversation_state=cost.conversation_state,
+    )
+    assert queued is not None
+    assert queued.ok is True
+    job = JobStore(runtime_db).list_jobs()[0]
+    assert job.task_id == "ozon-pricing-margin"
+    assert job.params == {"unit_cost": "85", "target_margin": "60", "period_days": 30}
+
+
+def test_ozon_pricing_margin_rejects_invalid_owner_numbers(tmp_path: Path) -> None:
+    period = dispatch_callback("opm_period:15", data_dir=tmp_path)
+    invalid_cost = dispatch_message("ноль", conversation_state=period.conversation_state)
+    assert invalid_cost.blocked_reason == "invalid_ozon_unit_cost"
+    cost = dispatch_message("85,50", conversation_state=period.conversation_state)
+    invalid_margin = dispatch_runtime_job_message(
+        "-1",
+        update_id=2002,
+        chat_id=123,
+        data_dir=tmp_path / "data",
+        runtime_db=tmp_path / "runtime.db",
+        conversation_state=cost.conversation_state,
+    )
+    assert invalid_margin is not None
+    assert invalid_margin.blocked_reason == "invalid_ozon_target_margin"
+    assert JobStore(tmp_path / "runtime.db").list_jobs() == []
+
+    navigation = dispatch_runtime_job_message(
+        "Назад",
+        update_id=2003,
+        chat_id=123,
+        data_dir=tmp_path / "data",
+        runtime_db=tmp_path / "runtime.db",
+        conversation_state=cost.conversation_state,
+    )
+    assert navigation is None
+
+
 def test_bot_jobs_show_and_cancel_runtime_jobs(tmp_path: Path) -> None:
     runtime_db = tmp_path / "runtime.db"
     store = JobStore(runtime_db)
@@ -2110,6 +2288,139 @@ def test_notify_telegram_job_result_marks_notification_failure(tmp_path: Path) -
     update = store.get_telegram_update(502)
     assert update is not None
     assert update.processing_status == "notification_failed"
+
+
+def test_job_result_text_redacts_sensitive_worker_error(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "runtime.db")
+    job = store.create_job(
+        task_id="status-preflight",
+        actor="telegram:123",
+        job_id="job_sensitive_error_test",
+        status="queued",
+    )
+    store.update_job_status(
+        job.job_id,
+        "failed",
+        error="Authorization: Bearer secret-token-value",
+    )
+    failed_job = store.get_job(job.job_id)
+    assert failed_job is not None
+
+    text = build_job_result_text(failed_job)
+
+    assert "secret-token-value" not in text
+    assert "подробности скрыты safety-фильтром" in text
+
+
+def test_notify_telegram_plan_result_keeps_apply_button(tmp_path: Path) -> None:
+    runtime_db = tmp_path / "runtime.db"
+    store = JobStore(runtime_db)
+    job = store.create_job(
+        task_id="ozon-elastic-plan",
+        actor="telegram:123",
+        job_id="job_elastic_plan_notify",
+        status="queued",
+    )
+    store.register_telegram_update(
+        update_id=503,
+        chat_id="123",
+        command="/elastic",
+        job_id=job.job_id,
+        payload={"thread_id": 55, "kind": "message", "message": "Ozon эластик"},
+        processing_status="queued",
+    )
+    store.update_job_status(
+        job.job_id,
+        "success",
+        result={
+            "status": "ok",
+            "summary": {
+                "run_id": "ozon_elastic_plan_notify_test",
+                "overall_status": "ok",
+                "summary": {
+                    "active_rows": 10,
+                    "candidate_rows": 5,
+                    "add_to_action": 2,
+                    "update_action_price_with_changed_price": 1,
+                    "deactivate_from_action": 0,
+                },
+                "artifacts": {},
+            },
+            "artifacts": {},
+        },
+    )
+    calls: list[tuple[str, str, dict]] = []
+
+    def fake_api(token: str, method: str, payload: dict) -> dict:
+        calls.append((token, method, payload))
+        return {"ok": True, "result": {"message_id": 31}}
+
+    result = notify_telegram_job_result(
+        token="secret-token",
+        job_id=job.job_id,
+        store=store,
+        data_dir=tmp_path / "data",
+        api_request=fake_api,
+    )
+
+    assert result.ok is True
+    payload = calls[0][2]
+    assert "добавить: `2`" in payload["text"]
+    assert payload["reply_markup"]["inline_keyboard"][0][0]["callback_data"] == (
+        "oe_apply:ozon_elastic_plan_notify_test"
+    )
+
+
+def test_poll_once_runtime_jobs_queues_operation_callback_without_direct_execution(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from seller_agent.bot import telegram_runner
+
+    calls: list[tuple[str, str, dict]] = []
+    direct_callbacks: list[str] = []
+
+    monkeypatch.setattr(
+        telegram_runner,
+        "dispatch_callback",
+        lambda data, **kwargs: direct_callbacks.append(data) or pytest.fail("direct callback must not run"),
+    )
+
+    def fake_api(token: str, method: str, payload: dict) -> dict:
+        calls.append((token, method, payload))
+        if method == "getUpdates":
+            return {
+                "ok": True,
+                "result": [
+                    {
+                        "update_id": 504,
+                        "callback_query": {
+                            "id": "cb-runtime",
+                            "data": "mpr_run:o:f:2026-07-01:2026-07-16",
+                            "message": {"chat": {"id": 123}, "message_thread_id": 55},
+                        },
+                    }
+                ],
+            }
+        return {"ok": True, "result": {"message_id": 11}}
+
+    runtime_db = tmp_path / "runtime.db"
+    result = poll_once(
+        token="secret-token",
+        data_dir=tmp_path / "data",
+        state_file=tmp_path / "state.json",
+        allowed_chat_ids={123},
+        runtime_jobs=True,
+        runtime_db=runtime_db,
+        api_request=fake_api,
+    )
+
+    assert result["ok"] is True
+    assert direct_callbacks == []
+    job = JobStore(runtime_db).list_jobs()[0]
+    assert job.task_id == "marketplace-period-report"
+    send_payload = next(payload for _, method, payload in calls if method == "sendMessage")
+    assert "runtime-очередь" in send_payload["text"]
 
 
 def test_poll_once_dispatches_callback_query(

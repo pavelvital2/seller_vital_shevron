@@ -154,7 +154,23 @@ def _collect_ozon(
     )
 
     delivered = [row for row in operations if row.get("operation_type") == "OperationAgentDeliveredToCustomer"]
-    returned = [row for row in operations if row.get("operation_type") == "OperationItemReturn"]
+    returned_operations = [row for row in operations if row.get("operation_type") == "OperationItemReturn"]
+    warnings = []
+    return_source = "Ozon /v1/returns/list"
+    try:
+        return_rows = adapter.fetch_returns(
+            logistic_return_date_from=date_from,
+            logistic_return_date_to=date_to,
+            return_schema="FBO",
+        )
+        return_metrics = _ozon_return_metrics(return_rows)
+    except Exception as exc:  # noqa: BLE001 - finance fallback keeps the report usable.
+        return_metrics = _ozon_finance_return_metrics(returned_operations)
+        return_source = "Ozon /v3/finance/transaction/list (fallback по уникальным отправлениям)"
+        warnings.append(
+            "Реестр возвратов Ozon недоступен; количество рассчитано по уникальным "
+            f"отправлениям финансовых операций: {_safe_error(exc)}"
+        )
     product_totals: dict[str, dict[str, Any]] = defaultdict(lambda: {"units": 0, "physical": 0, "gross": 0.0})
     unmapped: Counter[str] = Counter()
     buyout_units = 0
@@ -192,7 +208,6 @@ def _collect_ozon(
     orders = sum(_int(row.get("ordered_units")) for row in daily)
     revenue = sum(_number(row.get("revenue")) for row in daily)
     cancellations = sum(_int(row.get("cancellations")) for row in daily)
-    analytics_returns = sum(_int(row.get("returns")) for row in daily)
 
     top_products = []
     for sku, values in sorted(product_totals.items(), key=lambda item: item[1]["gross"], reverse=True)[:20]:
@@ -204,7 +219,6 @@ def _collect_ozon(
                 **values,
             }
         )
-    warnings = []
     if end == datetime.now(MOSCOW).date():
         warnings.append("Текущий день может быть финансово неполным до закрытия операций Ozon.")
     if unmapped:
@@ -216,7 +230,10 @@ def _collect_ozon(
             "buyout_units": buyout_units,
             "physical_pieces": physical,
             "buyout_gross": _money(buyout_gross),
-            "returns": len(returned) or analytics_returns,
+            "returns": return_metrics["total"],
+            "return_cancellations": return_metrics["cancellations"],
+            "client_returns": return_metrics["client_returns"],
+            "return_unknown": return_metrics["unknown"],
             "cancellations": cancellations,
             "gross": _money(gross),
             "expenses": _money(max(0.0, gross - net)),
@@ -229,8 +246,24 @@ def _collect_ozon(
         "top_products": top_products,
         "unmapped_ids": dict(unmapped.most_common(30)),
         "warnings": warnings,
-        "sources": ["Ozon /v3/finance/transaction/list", "Ozon /v1/analytics/data"],
+        "sources": ["Ozon /v3/finance/transaction/list", return_source, "Ozon /v1/analytics/data"],
     }
+
+
+def collect_ozon_period_metrics(
+    *,
+    adapter: OzonSellerAdapter,
+    catalog_rows: list[dict[str, str]],
+    start: date,
+    end: date,
+) -> dict[str, Any]:
+    """Collect Ozon period metrics for other read-only financial workflows."""
+    return _collect_ozon(
+        adapter=adapter,
+        catalog=_CatalogIndex(catalog_rows),
+        start=start,
+        end=end,
+    )
 
 
 def _collect_wb(
@@ -370,6 +403,42 @@ def _ozon_expenses(
     if abs(delta) >= 0.01:
         result["Сверочная разница"] += delta
     return {key: _money(value) for key, value in sorted(result.items())}, counts
+
+
+def _ozon_return_metrics(rows: list[dict[str, Any]]) -> dict[str, int]:
+    result = Counter[str]()
+    for row in rows:
+        product = row.get("product") if isinstance(row.get("product"), dict) else {}
+        quantity = max(1, _int(product.get("quantity"), 1))
+        return_type = _text(row.get("type"))
+        if return_type == "Cancellation":
+            result["cancellations"] += quantity
+        elif return_type == "ClientReturn":
+            result["client_returns"] += quantity
+        else:
+            result["unknown"] += quantity
+    result["total"] = result["cancellations"] + result["client_returns"] + result["unknown"]
+    return {key: result[key] for key in ("total", "cancellations", "client_returns", "unknown")}
+
+
+def _ozon_finance_return_metrics(rows: list[dict[str, Any]]) -> dict[str, int]:
+    grouped: dict[tuple[str, str], int] = {}
+    for row in rows:
+        posting = row.get("posting") if isinstance(row.get("posting"), dict) else {}
+        posting_number = _text(posting.get("posting_number")) or _text(row.get("posting_number"))
+        items = row.get("items") if isinstance(row.get("items"), list) else []
+        if not items:
+            fallback_id = posting_number or _text(row.get("operation_id"))
+            grouped[(fallback_id, "")] = max(grouped.get((fallback_id, ""), 0), 1)
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            sku = _text(item.get("sku"))
+            key = (posting_number or _text(row.get("operation_id")), sku)
+            grouped[key] = max(grouped.get(key, 0), max(1, _int(item.get("quantity"), 1)))
+    total = sum(grouped.values())
+    return {"total": total, "cancellations": 0, "client_returns": 0, "unknown": total}
 
 
 def _wb_expenses(
@@ -523,7 +592,14 @@ def _write_markdown(
         "",
         f"- Заказы: **{summary['orders']} товаров** на **{_rub(summary['order_amount'])}**.",
         f"- Выкупы: **{summary['buyout_units']} товаров / {summary['physical_pieces']} физических изделий**.",
-        f"- Возвраты: **{summary['returns']}**; отмены: **{summary['cancellations']}**.",
+        (
+            f"- Возвратные события: **{summary['returns']}** "
+            f"(отмены/невыкупы: **{summary.get('return_cancellations', 0)}**; "
+            f"возвраты после покупки: **{summary.get('client_returns', 0)}**; "
+            f"другие: **{summary.get('return_unknown', 0)}**)."
+            if marketplace == "ozon"
+            else f"- Возвраты: **{summary['returns']}**; отмены: **{summary['cancellations']}**."
+        ),
         f"- Продажи до расходов: **{_rub(summary['gross'])}**.",
         f"- Расходы: **{_rub(summary['expenses'])}**.",
         f"- К выплате после расходов: **{_rub(summary['net'])}**.",
@@ -566,18 +642,31 @@ def _write_xlsx(
     summary_sheet.append(["Период", f"{start.isoformat()} - {end.isoformat()}"])
     summary_sheet.append(["Тип", report_type])
     summary_sheet.append([])
-    for key, label in (
+    summary_rows = [
         ("orders", "Заказы, товаров"),
         ("order_amount", "Сумма заказов, руб."),
         ("buyout_units", "Выкупы, товаров"),
         ("physical_pieces", "Выкупы, физических изделий"),
-        ("returns", "Возвраты"),
+        ("returns", "Возвратные события" if marketplace == "ozon" else "Возвраты"),
+    ]
+    if marketplace == "ozon":
+        summary_rows.extend(
+            [
+                ("return_cancellations", "Отмены/невыкупы в возвратных событиях"),
+                ("client_returns", "Возвраты после покупки"),
+                ("return_unknown", "Другие возвратные события"),
+            ]
+        )
+    summary_rows.extend(
+        [
         ("cancellations", "Отмены"),
         ("gross", "Продажи до расходов, руб."),
         ("expenses", "Расходы, руб."),
         ("net", "К выплате после расходов, руб."),
         ("net_per_piece", "На физическое изделие, руб."),
-    ):
+        ]
+    )
+    for key, label in summary_rows:
         summary_sheet.append([label, metrics["summary"].get(key, 0)])
     summary_sheet["A1"].font = Font(bold=True)
     summary_sheet.column_dimensions["A"].width = 38

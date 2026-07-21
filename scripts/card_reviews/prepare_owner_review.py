@@ -151,7 +151,7 @@ def normalize_review_data(data: dict[str, Any], audit_dir: Path) -> dict[str, An
     proposed["title_length"] = len(title)
 
     hashtags = proposed.get("ozon_hashtags") or recommended_hashtags(data) or current_ozon_attr(data, "#Хештеги")
-    proposed["ozon_hashtags"] = filter_hashtags(hashtags, non_uniform_nr=non_uniform)
+    proposed["ozon_hashtags"] = filter_hashtags(hashtags, non_uniform_nr=non_uniform).split()
 
     blocks = proposed.get("description_blocks")
     if not isinstance(blocks, list) or len(blocks) < 3:
@@ -300,11 +300,13 @@ def build_html(data: dict[str, Any], audit_dir: Path, output: Path) -> None:
             f'<div class="rec-head"><h3>{esc(rec_title)}</h3><span>{esc(rec.get("status"))}</span></div>'
             f'<div class="flow"><div><b>Сейчас</b><p>{text_html(current_value)}</p></div>'
             f'<div><b>Рекомендую</b><p>{text_html(recommended_value)}</p></div></div>'
-            f'<p class="why"><b>Почему:</b> {esc(why)}</p></article>'
+            f'<p class="why"><b>Почему:</b> {esc(why)}</p>'
+            f'<p class="footer"><b>Batch group:</b> {esc(rec.get("batch_group_key") or "not_set")}</p></article>'
         )
 
+    seo = data.get("seo", {})
     seo_rows = []
-    for row in data.get("seo", {}).get("confirmed_query_rows", []):
+    for row in seo.get("confirmed_query_rows", []):
         decision = row.get("use_decision") or "используем"
         if is_non_uniform_nr(str(sku)) and re.search(r"(рукав|нарукав)", row.get("query", ""), re.I):
             decision = "не используем в title/hashtag"
@@ -312,8 +314,64 @@ def build_html(data: dict[str, Any], audit_dir: Path, output: Path) -> None:
             decision = "не используем в title/hashtag"
         seo_rows.append(
             f"<tr><td>{esc(row.get('marketplace'))}</td><td>{esc(row.get('query'))}</td>"
-            f"<td>{esc(row.get('frequency') or row.get('popularity'))}</td><td>{esc(row.get('role'))}</td><td>{esc(decision)}</td></tr>"
+            f"<td>{esc(row.get('frequency') or row.get('popularity'))}</td><td>{esc(row.get('period'))}</td>"
+            f"<td>{esc(row.get('role'))}</td><td>{esc(row.get('seed_query'))}</td><td>{esc(row.get('rank'))}</td>"
+            f"<td>{esc(row.get('source'))}</td><td>{esc(row.get('collected_at'))}</td><td>{esc(decision)}</td></tr>"
         )
+
+    source_rows = [
+        f"<tr><td>{esc(row.get('name'))}</td><td>{esc(row.get('marketplace'))}</td><td>{esc(row.get('source'))}</td>"
+        f"<td>{esc(row.get('period'))}</td><td>{esc(row.get('exported_at'))}</td><td>{esc(row.get('path'))}</td></tr>"
+        for row in seo.get("source_tables", [])
+    ]
+    cluster_rows = [
+        f"<tr><td>{esc(row.get('query'))}</td><td>{esc(row.get('marketplace'))}</td><td>{esc(row.get('role'))}</td>"
+        f"<td>{esc(row.get('frequency'))}</td><td>{esc(row.get('period'))}</td><td>{esc(row.get('relevance'))}</td>"
+        f"<td>{esc(row.get('reason'))}</td></tr>"
+        for row in seo.get("target_query_clusters", [])
+    ]
+    semantic_rows = [
+        f"<tr><td>{esc(row.get('phrase'))}</td><td>{esc(row.get('role'))}</td><td>{esc(row.get('relevance'))}</td>"
+        f"<td>{esc(row.get('frequency'))}</td><td>{esc(row.get('period'))}</td><td>{esc(row.get('source'))}</td></tr>"
+        for row in seo.get("description_semantic_plan", [])
+    ]
+    coverage_rows = [
+        f"<tr><td>{esc(row.get('phrase'))}</td><td>{esc(row.get('used_form'))}</td>"
+        f"<td>{esc(row.get('description_block'))}</td><td>{esc(row.get('covered'))}</td></tr>"
+        for row in seo.get("description_seo_coverage", [])
+    ]
+    content_term_rows = [
+        f"<tr><td>{esc(row.get('term'))}</td><td>{esc(row.get('source'))}</td><td>{esc(row.get('reason'))}</td></tr>"
+        for row in seo.get("content_terms", [])
+    ]
+    demand_term_rows = [
+        f"<tr><td>{esc(row.get('marketplace'))}</td><td>{esc(row.get('query'))}</td><td>{esc(row.get('frequency'))}</td>"
+        f"<td>{esc(row.get('period'))}</td><td>{esc(row.get('source'))}</td><td>{esc(row.get('relevance'))}</td></tr>"
+        for row in seo.get("seo_demand_terms", [])
+    ]
+    parser_rows = [
+        f"<tr><td>{esc(row.get('marketplace'))}</td><td>{esc(row.get('query'))}</td><td>{esc(row.get('position'))}</td>"
+        f"<td>{esc(row.get('collected_at'))}</td><td>{esc(row.get('use'))}</td><td>{esc(row.get('native_id'))}</td></tr>"
+        for row in seo.get("parser_positions_by_query", [])
+    ]
+    top_query_rows = [
+        f"<tr><td>{esc(row.get('marketplace'))}</td><td>{esc(row.get('query'))}</td><td>{esc(row.get('frequency') or row.get('popularity'))}</td>"
+        f"<td>{esc(row.get('period'))}</td><td>{esc(row.get('source'))}</td><td>{esc(row.get('collected_at'))}</td></tr>"
+        for row in seo.get("marketplace_top_queries", [])
+    ]
+    hashtag_evidence = seo.get("hashtag_selection_evidence", {})
+    hashtag_evidence_rows = []
+    for item in hashtag_evidence.get("ordered_hashtags", []):
+        if isinstance(item, dict):
+            hashtag_evidence_rows.append(
+                f"<tr><td>{esc(item.get('hashtag'))}</td><td>{esc(item.get('source'))}</td>"
+                f"<td>{esc(item.get('frequency'))}</td><td>{esc(item.get('frequency_type'))}</td>"
+                f"<td>{esc(item.get('relevance'))}</td></tr>"
+            )
+        else:
+            hashtag_evidence_rows.append(
+                f'<tr><td>{esc(item)}</td><td colspan="4">Источник и приоритет не указаны</td></tr>'
+            )
 
     ozon_param_rows = []
     for attr in ozon.get("attributes", []):
@@ -363,6 +421,7 @@ def build_html(data: dict[str, Any], audit_dir: Path, output: Path) -> None:
     if isinstance(color_value, list):
         color_value = ", ".join(map(str, color_value))
     color_name = proposed.get("color_name") or physical.get("color_name") or ""
+    ozon_hashtags_display = normalize_hashtag_value(proposed.get("ozon_hashtags"))
 
     wb_identity = (
         wb.get("vendor_code")
@@ -383,10 +442,18 @@ def build_html(data: dict[str, Any], audit_dir: Path, output: Path) -> None:
 <section><h2>Коллаж фото</h2>{f'<div class="media-scroll"><img class="collage" src="{collage}" alt="Коллаж всех фото карточки"></div>' if collage else '<p class="warn">Коллаж не найден, HTML не готов к отправке владельцу.</p>'}<p class="hint">{esc(photo_display_note)}</p></section>
 <section><h2>Рекомендации: сейчас -> рекомендую -> почему</h2><div class="rec-grid">{''.join(rec_cards)}</div></section>
 <section><h2>Фото-аудит</h2><div class="photo-grid">{''.join(photo_audit_cards)}</div>{f'<h3>Порядок фото для загрузки на Ozon и WB</h3><div class="photo-card">{"".join(target_photo_list_items)}</div><div class="table-wrap"><table><thead><tr><th>№</th><th>Что должно быть</th><th>Источник</th><th>Примечание</th></tr></thead><tbody>{"".join(target_photo_rows)}</tbody></table></div>' if target_photo_rows else ''}<p class="hint">{esc(media.get('target_marketplace_photo_set_note') or '')}</p></section>
-<section><h2>Итоговый вариант</h2><div class="field-grid"><div class="field"><span>Название Ozon/WB</span><b>{esc(proposed.get('canonical_title'))}</b></div><div class="field"><span>Длина</span><b>{esc(proposed.get('title_length'))}</b></div><div class="field"><span>Цвет / название цвета</span><b>{esc(color_value)} / {esc(color_name)}</b></div><div class="field"><span>Ozon хештеги</span><b>{esc(proposed.get('ozon_hashtags'))}</b></div></div><h3>Описание, 3 блока</h3><div class="desc-grid">{''.join(f'<div class="desc-block"><b>{esc(desc_block_titles[i] if i < len(desc_block_titles) else f"Блок {i + 1}")}</b><p>{esc(block)}</p></div>' for i, block in enumerate(desc_blocks[:3]))}</div><p class="warn"><b>Правило:</b> упаковку, размеры упаковки и вес не пишем в продающем описании.</p></section>
-<section><h2>SEO-запросы</h2><div class="table-wrap"><table><thead><tr><th>MP</th><th>Запрос</th><th>Частотность</th><th>Роль</th><th>Решение</th></tr></thead><tbody>{''.join(seo_rows)}</tbody></table></div></section>
-<section><h2>Целевые поля Ozon</h2><div class="table-wrap"><table><thead><tr><th>Поле</th><th>Сейчас</th><th>Рекомендую</th><th>Статус</th><th>Почему</th></tr></thead><tbody>{field_rows(data.get('target_editor_fields', []), 'Ozon')}</tbody></table></div></section>
-<section><h2>Целевые поля WB</h2><div class="table-wrap"><table><thead><tr><th>Поле</th><th>Сейчас</th><th>Рекомендую</th><th>Статус</th><th>Почему</th></tr></thead><tbody>{field_rows(data.get('target_editor_fields', []), 'WB')}</tbody></table></div></section>
+<section><h2>Итоговый вариант</h2><div class="field-grid"><div class="field"><span>Название Ozon/WB</span><b>{esc(proposed.get('canonical_title'))}</b></div><div class="field"><span>Длина</span><b>{esc(proposed.get('title_length'))}</b></div><div class="field"><span>Цвет / название цвета</span><b>{esc(color_value)} / {esc(color_name)}</b></div><div class="field"><span>Ozon хештеги</span><b>{esc(ozon_hashtags_display)}</b></div></div><h3>Описание, 3 блока</h3><div class="desc-grid">{''.join(f'<div class="desc-block"><b>{esc(desc_block_titles[i] if i < len(desc_block_titles) else f"Блок {i + 1}")}</b><p>{esc(block)}</p></div>' for i, block in enumerate(desc_blocks[:3]))}</div><p class="warn"><b>Правило:</b> упаковку, размеры упаковки и вес не пишем в продающем описании.</p></section>
+<section><h2>SEO-запросы и доказательства</h2><p class="warn"><b>Ограничение:</b> {esc(seo.get('frequency_limitation'))}</p><div class="table-wrap"><table><thead><tr><th>MP</th><th>Запрос</th><th>Частотность</th><th>Период</th><th>Роль</th><th>Seed</th><th>Rank</th><th>Источник</th><th>Собрано</th><th>Решение</th></tr></thead><tbody>{''.join(seo_rows)}</tbody></table></div></section>
+<details open><summary>Источники SEO</summary><div class="table-wrap"><table><thead><tr><th>Таблица</th><th>MP</th><th>Источник</th><th>Период</th><th>Выгружено</th><th>Путь</th></tr></thead><tbody>{''.join(source_rows)}</tbody></table></div></details>
+<details open><summary>Целевые кластеры запросов</summary><div class="table-wrap"><table><thead><tr><th>Запрос</th><th>MP</th><th>Роль</th><th>Частотность</th><th>Период</th><th>Подтверждение</th><th>Почему</th></tr></thead><tbody>{''.join(cluster_rows)}</tbody></table></div></details>
+<details open><summary>Семантический план описания</summary><div class="table-wrap"><table><thead><tr><th>Фраза</th><th>Роль</th><th>Подтверждение</th><th>Частотность</th><th>Период</th><th>Источник</th></tr></thead><tbody>{''.join(semantic_rows)}</tbody></table></div></details>
+<details open><summary>Покрытие SEO в описании</summary><div class="table-wrap"><table><thead><tr><th>Фраза</th><th>Использованная форма</th><th>Блок</th><th>Покрыта</th></tr></thead><tbody>{''.join(coverage_rows)}</tbody></table></div></details>
+<details open><summary>Content terms и demand terms</summary><h3>Content terms</h3><div class="table-wrap"><table><thead><tr><th>Термин</th><th>Источник</th><th>Почему</th></tr></thead><tbody>{''.join(content_term_rows)}</tbody></table></div><h3>Demand terms</h3><div class="table-wrap"><table><thead><tr><th>MP</th><th>Запрос</th><th>Частотность</th><th>Период</th><th>Источник</th><th>Подтверждение</th></tr></thead><tbody>{''.join(demand_term_rows)}</tbody></table></div></details>
+<details open><summary>Marketplace top queries</summary><div class="table-wrap"><table><thead><tr><th>MP</th><th>Запрос</th><th>Частотность</th><th>Период</th><th>Источник</th><th>Собрано</th></tr></thead><tbody>{''.join(top_query_rows)}</tbody></table></div></details>
+<details open><summary>Доказательства по хештегам</summary><p class="hint">{esc(hashtag_evidence.get('ordering_rule'))}</p><div class="table-wrap"><table><thead><tr><th>Хештег</th><th>Источник</th><th>Частотность</th><th>Тип частотности</th><th>Релевантность</th></tr></thead><tbody>{''.join(hashtag_evidence_rows)}</tbody></table></div><p class="hint">{esc(hashtag_evidence.get('freshness_limitation'))}</p></details>
+<details open><summary>Parser baseline</summary><div class="table-wrap"><table><thead><tr><th>MP</th><th>Запрос</th><th>Позиция</th><th>Дата</th><th>Использование</th><th>Native ID</th></tr></thead><tbody>{''.join(parser_rows)}</tbody></table></div></details>
+<section><h2>Целевые параметры для пачного заполнения: Ozon</h2><div class="table-wrap"><table><thead><tr><th>Поле</th><th>Сейчас</th><th>Рекомендую</th><th>Статус</th><th>Почему</th></tr></thead><tbody>{field_rows(data.get('target_editor_fields', []), 'Ozon')}</tbody></table></div></section>
+<section><h2>Целевые параметры для пачного заполнения: WB</h2><div class="table-wrap"><table><thead><tr><th>Поле</th><th>Сейчас</th><th>Рекомендую</th><th>Статус</th><th>Почему</th></tr></thead><tbody>{field_rows(data.get('target_editor_fields', []), 'WB')}</tbody></table></div></section>
 <details open><summary>Все текущие параметры Ozon</summary><div class="table-wrap"><table><thead><tr><th>Поле</th><th>Сейчас</th><th>ID/Источник</th></tr></thead><tbody>{''.join(ozon_param_rows)}</tbody></table></div></details>
 <details open><summary>Все текущие параметры WB</summary><div class="table-wrap"><table><thead><tr><th>Поле</th><th>Сейчас</th><th>ID/Источник</th></tr></thead><tbody>{''.join(wb_param_rows)}</tbody></table></div></details>
 <section><h2>Решение владельца</h2><p>Варианты: <b>применяй</b>, <b>поменять ...</b>, <b>отложить</b>, <b>нет</b>.</p><p class="warn">Если после просмотра владелец пишет <b>применяй</b>, это approval только для действий, явно показанных в этом HTML и сохраненных в Layer 2/Layer 3 package.</p></section>
@@ -396,14 +463,22 @@ def build_html(data: dict[str, Any], audit_dir: Path, output: Path) -> None:
 
 
 def validate_html(path: Path) -> dict[str, Any]:
+    configured_browser = os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH")
+    browser_candidates = [Path(configured_browser)] if configured_browser else []
+    browser_candidates.append(Path("/usr/bin/google-chrome"))
+    browser_path = next((candidate for candidate in browser_candidates if candidate.is_file()), None)
+    launch_options: dict[str, Any] = {"headless": True}
+    if browser_path is not None:
+        launch_options["executablePath"] = str(browser_path)
+
     script = f"""
 const {{ chromium }} = require('playwright');
 (async () => {{
-  const browser = await chromium.launch({{headless:true}});
+  const browser = await chromium.launch({json.dumps(launch_options)});
   const out = [];
   for (const [name, viewport] of Object.entries({{mobile:{{width:390,height:844}}, desktop:{{width:1366,height:1000}}}})) {{
     const page = await browser.newPage({{viewport}});
-    await page.goto('file://{path.resolve()}', {{waitUntil:'load'}});
+    await page.goto({json.dumps(path.resolve().as_uri())}, {{waitUntil:'load'}});
     const metrics = await page.evaluate(() => ({{
       scrollWidth: document.documentElement.scrollWidth,
       clientWidth: document.documentElement.clientWidth,

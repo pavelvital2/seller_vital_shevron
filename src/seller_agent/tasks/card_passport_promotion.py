@@ -137,7 +137,9 @@ def _photo_url_map(audit: dict[str, Any]) -> dict[tuple[str, int], str]:
             continue
         marketplace = _normalize_text(photo.get("marketplace")).lower()
         position = _as_int(photo.get("position"))
-        url = _normalize_text(photo.get("source_url"))
+        url = _first_existing(photo.get("source_url"), photo.get("url"))
+        if not marketplace and "ozone.ru" in url:
+            marketplace = "ozon"
         if marketplace and position and url:
             result[(marketplace, position)] = url
     return result
@@ -212,11 +214,14 @@ def _physical(proposed: dict[str, Any], identity: dict[str, Any] | None = None) 
     wb_characteristics = (
         proposed.get("wb_characteristics") if isinstance(proposed.get("wb_characteristics"), dict) else {}
     )
+    wb_create = proposed.get("wb_create") if isinstance(proposed.get("wb_create"), dict) else {}
     wb_dimensions = (
         wb_characteristics.get("dimensions_cm")
         if isinstance(wb_characteristics.get("dimensions_cm"), dict)
         else {}
     )
+    if not wb_dimensions and isinstance(wb_create.get("dimensions_cm"), dict):
+        wb_dimensions = wb_create["dimensions_cm"]
     wb_dimensions_package = "*".join(
         _normalize_text(wb_dimensions.get(key)) for key in ("length", "width", "height")
     ) if all(wb_dimensions.get(key) is not None for key in ("length", "width", "height")) else ""
@@ -225,16 +230,25 @@ def _physical(proposed: dict[str, Any], identity: dict[str, Any] | None = None) 
         source.get("product_size_mm"),
         source.get("product_size_mm_each"),
         source.get("product_size"),
+        source.get("product_size_display"),
         proposed.get("product_size_mm"),
         ozon_attributes.get("product_size_mm"),
     )
+    if not product_size and source.get("product_width_mm") is not None and source.get("product_height_mm") is not None:
+        product_size = f"{_normalize_text(source.get('product_width_mm'))}*{_normalize_text(source.get('product_height_mm'))}"
     ozon_package = _first_existing(
         source.get("ozon_package_mm"),
         source.get("ozon_package"),
         source.get("package_size_ozon_mm"),
         source.get("package_size_mm"),
+        source.get("package_size_display"),
         ozon_attributes.get("package_dimensions_mm"),
     )
+    if not ozon_package and all(source.get(key) is not None for key in ("package_depth_mm", "package_width_mm", "package_height_mm")):
+        ozon_package = "*".join(
+            _normalize_text(source.get(key))
+            for key in ("package_depth_mm", "package_width_mm", "package_height_mm")
+        )
     wb_package = _first_existing(
         source.get("wb_package_cm"),
         source.get("wb_package"),
@@ -304,6 +318,12 @@ def _content(proposed: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     if wb_description.lower() == "same_as_canonical_description":
         wb_description = description
     blocks = proposed.get("description_blocks")
+    if isinstance(blocks, dict):
+        blocks = [
+            _normalize_text(blocks.get(name))
+            for name in ("Описание товара", "Преимущества и характеристики товара", "О производителе")
+            if _normalize_text(blocks.get(name))
+        ]
     if not isinstance(blocks, list) or not blocks:
         blocks = [part.strip() for part in description.split("\n\n") if part.strip()]
     return (
@@ -444,7 +464,42 @@ def _marketplace_attributes(
         {"field": "ТНВЭД", "value": "5810999000"},
         {"field": "КИЗ", "value": "false / unchecked"},
     ]
+    wb_characteristics = (
+        proposed.get("wb_characteristics") if isinstance(proposed.get("wb_characteristics"), dict) else {}
+    )
+    if wb_characteristics.get("isAdult") is True:
+        wb_attrs.append({"field": "18+ / isAdult", "value": "true"})
     return ozon_attrs, wb_attrs
+
+
+def _wb_write_constraints(audit: dict[str, Any], proposed: dict[str, Any]) -> dict[str, Any]:
+    wb_characteristics = (
+        proposed.get("wb_characteristics") if isinstance(proposed.get("wb_characteristics"), dict) else {}
+    )
+    barcode = wb_characteristics.get("barcode")
+    barcode_action = _normalize_text(barcode.get("action")) if isinstance(barcode, dict) else ""
+    policy = _get_nested(audit, "media", "wb_departmental_symbol_policy")
+    media_status = _normalize_text(policy.get("media_apply_status")) if isinstance(policy, dict) else ""
+    constraints: dict[str, Any] = {}
+    if barcode_action:
+        constraints["barcode"] = {
+            "action": barcode_action,
+            "include_in_write_payload": False,
+        }
+    if wb_characteristics.get("isAdult") is True:
+        constraints["isAdult"] = {
+            "target": True,
+            "apply_condition": _first_existing(
+                wb_characteristics.get("isAdult_apply_condition"),
+                "only_if_current_not_true",
+            ),
+        }
+    if media_status == "not_applicable":
+        constraints["media"] = {
+            "action": "keep_current",
+            "include_in_write_payload": False,
+        }
+    return constraints
 
 
 def build_passport_from_audit(audit: dict[str, Any], audit_path: Path) -> tuple[dict[str, Any] | None, list[str], list[str]]:
@@ -512,9 +567,17 @@ def build_passport_from_audit(audit: dict[str, Any], audit_path: Path) -> tuple[
     )
     owner_review = audit.get("owner_review") if isinstance(audit.get("owner_review"), dict) else {}
     approved_at = _first_existing(owner_review.get("approved_at"), owner_review.get("final_review_sent_at"), datetime.now().isoformat(timespec="seconds"))
-    dangerous_actions = ["card_content_update", "seller_sku_update", "wb_media_update"]
+    target_marketplace_photo_set = _target_photo_set(audit, proposed)
+    target_ozon_photo_set = _marketplace_photo_set(audit, proposed, "ozon")
+    target_wb_photo_set = _marketplace_photo_set(audit, proposed, "wb")
+    dangerous_actions = ["card_content_update", "seller_sku_update"]
+    if media_assets or target_marketplace_photo_set or target_wb_photo_set:
+        dangerous_actions.append("wb_media_update")
     if proposed.get("future_ozon_create"):
         dangerous_actions.append("ozon_card_create")
+    wb_create = proposed.get("wb_create") if isinstance(proposed.get("wb_create"), dict) else None
+    if wb_create and _normalize_text(wb_create.get("current_state")) == "card_absent":
+        dangerous_actions.append("wb_card_create")
     passport = {
         "$schema": "./master_product_passport_approved.schema.json",
         "approval": {
@@ -524,7 +587,7 @@ def build_passport_from_audit(audit: dict[str, Any], audit_path: Path) -> tuple[
             "source_audit_id": str(audit_path.parent.relative_to(audit_path.parents[2])) if len(audit_path.parents) > 2 else audit_path.parent.name,
             "source_review_html": _first_existing(owner_review.get("final_review_html_path"), owner_review.get("submitted_html_path")),
             "change_notes": "Promoted from owner-approved Layer 2 audit by штатный passport promotion command.",
-            "owner_corrections": owner_review.get("corrections") or [],
+            "owner_corrections": owner_review.get("corrections") or owner_review.get("owner_corrections") or [],
             "marketplace_apply": {"status": "not_applied"},
         },
         "identity": {
@@ -569,9 +632,9 @@ def build_passport_from_audit(audit: dict[str, Any], audit_path: Path) -> tuple[
         "media": {
             "designer_tasks": audit.get("designer_tasks") or [],
             "target_assets": media_assets,
-            "target_marketplace_photo_set": _target_photo_set(audit, proposed),
-            "target_ozon_photo_set": _marketplace_photo_set(audit, proposed, "ozon"),
-            "target_wb_photo_set": _marketplace_photo_set(audit, proposed, "wb"),
+            "target_marketplace_photo_set": target_marketplace_photo_set,
+            "target_ozon_photo_set": target_ozon_photo_set,
+            "target_wb_photo_set": target_wb_photo_set,
             "wb_departmental_symbol_policy": (
                 (audit.get("media") or {}).get("wb_departmental_symbol_policy")
                 if isinstance(audit.get("media"), dict)
@@ -584,7 +647,11 @@ def build_passport_from_audit(audit: dict[str, Any], audit_path: Path) -> tuple[
             "wb_tags": wb_tags,
         },
         "ozon": {"attributes": ozon_attrs},
-        "wb": {"attributes": wb_attrs},
+        "wb": {
+            "attributes": wb_attrs,
+            "create": wb_create,
+            "write_constraints": _wb_write_constraints(audit, proposed),
+        },
         "safety": {
             "dangerous_actions": dangerous_actions,
             "approval_source": "owner-reviewed HTML and owner-approved Layer 2 audit",

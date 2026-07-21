@@ -254,7 +254,6 @@ get_status(job_id) -> JobStatus
 
 Еще не сделано:
 
-- Telegram routing через JobService для всех оставшихся длительных команд;
 - отдельные безопасные verify handlers для inbox/Messenger cleanup и
   оставшихся apply-контуров, где verify пока основан на общем dry-run;
 
@@ -338,8 +337,9 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 
 - CLI может создать job и дождаться результата - выполнено для read-only
   задач, которые уже поддерживает текущий `WorkflowRunner`;
-- Telegram получает `job_id` сразу - выполнено для live `/status` и `/today`
-  в опциональном режиме `bot poll-once|poll-loop --runtime-jobs`;
+- Telegram получает `job_id` сразу - выполнено для всех текущих бизнес-задач
+  и финальных callback-операций в режиме
+  `bot poll-once|poll-loop --runtime-jobs`;
 - итоговый report отправляется после завершения - выполнено для Telegram job
   через `bot run-job-next` и безопасный `artifacts.report`;
 - все запуски видны в `jobs` и `job_events`;
@@ -356,9 +356,9 @@ worker/job runner -> result -> send final report
 
 Нужно добавить:
 
-- `callback_query` support - уже есть для Ozon Elastic/WB actions, но apply
-  еще не переведен на JobService;
-- dedup by `update_id` - выполнено для message updates в режиме
+- `callback_query` support - выполнено для финальных report/plan/apply
+  callback-ов;
+- dedup by `update_id` - выполнено для message и callback updates в режиме
   `--runtime-jobs`;
 - команды `/jobs`, `/job_<id>`, `/cancel_<id>` - выполнено как
   maintenance-команды Telegram;
@@ -376,26 +376,27 @@ worker/job runner -> result -> send final report
   repository templates установленного и включенного worker timer;
 - `/jobs`, `/job_<id>`, `/cancel_<id>` показывают и безопасно отменяют только
   `created/queued` runtime job;
-- `/status` + `--live-status --runtime-jobs` создает job
-  `status-preflight`;
-- `/today` + `--live-today --runtime-jobs` создает job
-  `daily-morning-report`;
-- callback `oe_apply:<plan_run_id>` создает и сразу запускает runtime job
-  `ozon-elastic-apply` через `JobService`;
-- callback `wba_apply:<plan_run_id>` создает и сразу запускает runtime job
-  `wb-actions-discount-apply` через `JobService`;
-- повторный Telegram `update_id` не создает второй job.
+- `/status`, `/today`, stock/supply, parser analytics, inbox и action plan
+  команды создают queued job;
+- финальные callback-и period report и Ozon/WB production work plan создают
+  queued read-only job;
+- Ozon Elastic, Ozon all-actions, WB fixed/manual actions и Ozon/WB inbox
+  apply callback-и создают queued apply job, но не запускают write внутри
+  polling;
+- повторный Telegram `update_id` не создает второй job;
+- `JobRunner.run_next()` берет самый старый queued job (FIFO);
+- notifier отправляет task-aware сводку, report и следующую inline-кнопку.
 
 С 2026-07-18 по явному решению владельца systemd worker/timer вводится в
 эксплуатацию вместе с `--runtime-jobs` в основном bot unit. Перед включением
 проверяется пустая активная очередь и отсутствие approvals в
 `applying/applying_unknown`; после включения выполняется read-only smoke и
 проверяется доставка Telegram-результата. Основные
-apply handler-ы уже есть в `WorkflowRunner`; Ozon Elastic и WB actions callbacks
-переключены на `JobService`. Следующие callbacks (`Ozon все акции`,
-promotion bids, карточные batch apply) переключать позже по одному. Callback-и
-Ozon Elastic/WB actions пока выполняются синхронно внутри polling; полный
-callback dedup через `telegram_updates` остается отдельным следующим слоем.
+apply handler-ы уже есть в `WorkflowRunner`. С 2026-07-20 все фактически
+доступные в меню бота API/LK операции и apply callback-и переключены на
+очередь Job Worker. Карточные batch apply и promotion bids не считаются
+пропущенными маршрутами: соответствующих кнопок в текущем меню бота нет;
+при их добавлении обязательна постановка через тот же runtime bridge.
 
 Live deployment 2026-07-18:
 
@@ -410,6 +411,22 @@ Live deployment 2026-07-18:
 - после успешной доставки связанный `telegram_updates.processing_status`
   закрывается как `completed`, при ошибке отправки - как
   `notification_failed`;
+- marketplace write в smoke не выполнялся.
+
+Full bot routing deployment 2026-07-20:
+
+- все текущие business message/callback операции переведены на queued jobs;
+- `JobService` принимает `dry_run`, а `WorkflowRunner` получил handlers для
+  Ozon/WB action plans и inbox triage;
+- callback apply больше не вызывает `JobService.run()` внутри polling;
+- очередь обрабатывается FIFO;
+- notifier сохраняет owner-facing summary, безопасный report и следующую
+  inline-кнопку;
+- полный набор тестов: `447 passed`, `tasks policy` вернул пустой список;
+- после проверки пустой очереди и approvals перезапущен bot service;
+- Telegram-origin read-only smoke
+  `job_status-preflight_20260720T193638Z_1023b02e` завершился `success`,
+  связанный update получил `processing_status=completed`;
 - marketplace write в smoke не выполнялся.
 
 ### Этап 6. Атомарные approvals и resource leases

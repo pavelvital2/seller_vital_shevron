@@ -50,3 +50,50 @@ def test_job_worker_stops_when_empty(tmp_path: Path) -> None:
     assert summary.ok is True
     assert summary.iterations == 1
     assert summary.ran_jobs == 0
+
+
+def test_job_service_runs_dry_run_tasks_through_worker(tmp_path: Path) -> None:
+    def handler(task, data_dir, credentials, inputs):  # type: ignore[no-untyped-def]
+        return {"run_id": "dry_run_test", "overall_status": "ok", "artifacts": {}}
+
+    store = JobStore(tmp_path / "runtime.db")
+    service = JobService(
+        store=store,
+        workflow_runner=WorkflowRunner(
+            data_dir=tmp_path / "data",
+            lock_dir=tmp_path / "locks",
+            handlers={"ozon-elastic-plan": handler},
+        ),
+        data_dir=tmp_path / "data",
+    )
+    job = service.submit(task_id="ozon-elastic-plan")
+
+    result = JobWorker(JobRunner(service)).run_once()
+
+    assert result.ok is True
+    assert result.job is not None
+    assert result.job.job_id == job.job_id
+    assert result.job.status == "success"
+
+
+def test_job_worker_processes_oldest_queued_job_first(tmp_path: Path) -> None:
+    def handler(task, data_dir, credentials, inputs):  # type: ignore[no-untyped-def]
+        return {"run_id": inputs["run_id"], "overall_status": "ok", "artifacts": {}}
+
+    store = JobStore(tmp_path / "runtime.db")
+    service = JobService(
+        store=store,
+        workflow_runner=WorkflowRunner(
+            data_dir=tmp_path / "data",
+            lock_dir=tmp_path / "locks",
+            handlers={"status-preflight": handler},
+        ),
+        data_dir=tmp_path / "data",
+    )
+    first = service.submit(task_id="status-preflight", params={"run_id": "first"})
+    service.submit(task_id="status-preflight", params={"run_id": "second"})
+
+    result = JobWorker(JobRunner(service)).run_once()
+
+    assert result.job is not None
+    assert result.job.job_id == first.job_id

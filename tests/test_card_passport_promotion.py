@@ -367,6 +367,122 @@ def test_promote_supports_physical_parameters_contract(tmp_path: Path) -> None:
     assert passport["grouping"]["target_group_key"] == "МВД"
 
 
+def test_promote_supports_owner_review_full_wb_create_contract(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    audit = _minimal_owner_approved_audit("chev_back_fsin_text0005")
+    audit["identity"]["marketplace_presence"] = "ozon_only"
+    audit["identity"]["wb"] = None
+    audit["owner_review"]["owner_corrections"] = [
+        "Название цвета: Шеврон ФСИН на спину, синяя цифра"
+    ]
+    audit["owner_review"].pop("corrections")
+    proposed = audit["proposed_final_card"]
+    proposed.pop("target_physical_params")
+    proposed["description_blocks"] = {
+        "Описание товара": "Описание товара.",
+        "Преимущества и характеристики товара": "Материалы и качество.",
+        "О производителе": "Vital Shevron.",
+    }
+    proposed["physical_parameters"] = {
+        "product_width_mm": 225,
+        "product_height_mm": 70,
+        "package_depth_mm": 300,
+        "package_width_mm": 100,
+        "package_height_mm": 10,
+        "package_weight_g": 30,
+        "pack_qty": 1,
+    }
+    proposed["color_name"] = "Шеврон ФСИН на спину, синяя цифра"
+    proposed["wb_create"] = {
+        "current_state": "card_absent",
+        "subject_id": 2367,
+        "vendor_code": "chev_back_fsin_text0005",
+        "dimensions_cm": {"length": 30, "width": 10, "height": 1},
+    }
+    audit_path = data_dir / "catalog" / "card_audits" / "batch" / "card" / "audit.json"
+    _write_json(audit_path, audit)
+
+    result = run_promote_approved_card_passport(
+        data_dir=data_dir,
+        audit_paths=[audit_path],
+        run_id="promote_full_wb_create_contract_test",
+        write=True,
+    )
+
+    assert result["overall_status"] == "ok"
+    passport_path = data_dir / "catalog" / "master_passport" / "approved" / "chev_back_fsin_text0005.json"
+    passport = json.loads(passport_path.read_text(encoding="utf-8"))
+    assert passport["physical"]["product_size_mm"] == "225*70 мм"
+    assert passport["physical"]["package_dimensions_ozon_mm"] == "300*100*10 мм"
+    assert passport["physical"]["package_dimensions_wb_cm"] == "30*10*1 см"
+    assert passport["content"]["description_blocks"] == [
+        "Описание товара.",
+        "Материалы и качество.",
+        "Vital Shevron.",
+    ]
+    assert passport["approval"]["owner_corrections"] == [
+        "Название цвета: Шеврон ФСИН на спину, синяя цифра"
+    ]
+    assert passport["wb"]["create"]["subject_id"] == 2367
+    assert "wb_card_create" in passport["safety"]["dangerous_actions"]
+
+
+def test_promote_omits_wb_media_and_preserves_conditional_wb_constraints(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    audit = _minimal_owner_approved_audit("chev_nr_chvk_pict0003")
+    proposed = audit["proposed_final_card"]
+    proposed.pop("target_marketplace_photo_set")
+    proposed["wb_characteristics"] = {
+        "isAdult": True,
+        "isAdult_apply_condition": "only_if_current_not_true",
+        "barcode": {
+            "current": None,
+            "target": "keep_current_marketplace_value",
+            "action": "do_not_change_or_update; omit_from_target_changes",
+        },
+    }
+    audit["media"] = {
+        "target_ozon_photo_set": "keep_current_5",
+        "target_wb_photo_set": "keep_current_5; no_media_upload",
+        "wb_departmental_symbol_policy": {
+            "media_apply_status": "not_applicable",
+            "reason": "Current marketplace photos stay unchanged.",
+        },
+    }
+    audit_path = data_dir / "catalog" / "card_audits" / "batch" / "card" / "audit.json"
+    _write_json(audit_path, audit)
+
+    result = run_promote_approved_card_passport(
+        data_dir=data_dir,
+        audit_paths=[audit_path],
+        run_id="promote_keep_wb_media_constraints_test",
+        write=True,
+    )
+
+    assert result["overall_status"] == "ok"
+    passport_path = data_dir / "catalog" / "master_passport" / "approved" / "chev_nr_chvk_pict0003.json"
+    passport = json.loads(passport_path.read_text(encoding="utf-8"))
+    assert "wb_media_update" not in passport["safety"]["dangerous_actions"]
+    assert passport["media"]["target_wb_photo_set"] == []
+    assert passport["wb"]["write_constraints"] == {
+        "barcode": {
+            "action": "do_not_change_or_update; omit_from_target_changes",
+            "include_in_write_payload": False,
+        },
+        "isAdult": {
+            "target": True,
+            "apply_condition": "only_if_current_not_true",
+        },
+        "media": {
+            "action": "keep_current",
+            "include_in_write_payload": False,
+        },
+    }
+    wb_attributes = {row["field"]: row["value"] for row in passport["wb"]["attributes"]}
+    assert wb_attributes["18+ / isAdult"] == "true"
+    assert validate_wb_departmental_media_policy(passport)["status"] == "ok"
+
+
 def test_promote_supports_each_size_and_wb_dimensions_contract(tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     audit = _minimal_owner_approved_audit("chev_kit2_nr_rg_pict0003")

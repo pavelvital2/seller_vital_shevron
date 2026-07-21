@@ -1,34 +1,32 @@
 {
   "approval_status_counts": {
     "owner_approved": 1,
-    "owner_approved_applied_verified": 219
+    "owner_approved_applied_verified": 227
   },
-  "generated_at": "2026-07-16T22:39:58",
+  "generated_at": "2026-07-20T21:02:09",
   "last_sync": {
     "internal_skus": [
-      "chev_kit2_nr_mvd_pict0004",
-      "chev_kit2_nr_mvd_pict0005",
-      "chev_kit2_nr_mvd_pict0006",
-      "chev_kit2_nr_rg_pict0003",
-      "chev_kit2_nr_rg_pict0006",
-      "chev_kit2_nr_rg_pict0007",
-      "chev_kit2_nr_rg_pict0011",
-      "chev_kp_prikol_text0002",
-      "chev_kp_prikol_text0014",
-      "chev_kp_prikol_text0015"
+      "chev_back_fsb_text0003",
+      "chev_back_fsin_text0004",
+      "chev_back_fsin_text0005",
+      "chev_back_mvd_text0004",
+      "chev_kit2_nr_rg_pict0004",
+      "chev_nr_chvk_pict0003",
+      "chev_nr_oborg_pict0004",
+      "chev_nr_prikol_pict0001"
     ],
     "missing_audits": [],
     "missing_passports": [],
-    "run_id": "apply_10_approved_cards_20260716T2234_recovered",
-    "updated_audits": 10,
-    "updated_passports": 10
+    "run_id": "verify_apply_8_combined_20260720T2105",
+    "updated_audits": 8,
+    "updated_passports": 8
   },
   "marketplace_apply_status_counts": {
-    "applied_verified": 219,
+    "applied_verified": 227,
     "wb_applied_ozon_removed_policy": 1
   },
   "not_applied_skus": [
     "chev_pz_ng_text0074"
   ],
-  "total_passports": 220
+  "total_passports": 228
 }

@@ -1,4 +1,10 @@
 <!doctype html>
+<!--
+  OWNER-APPROVED VITAL SHEVRON CARD PASSPORT TEMPLATE
+  Locked by owner on 2026-07-21 from chev_kit4_fssp_pict0001.
+  Keep section order, visual hierarchy and complete target-field tables for
+  every subsequent card unless the owner explicitly changes the template.
+-->
 <html lang="ru">
 <head>
 <meta charset="utf-8">
@@ -48,6 +54,15 @@ summary { cursor:pointer; font-weight:700; font-size:17px; }
 .param-list, .photo-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-top:12px; }
 .param p { margin:4px 0 0; font-size:14px; white-space:pre-wrap; }
 .warn { background:#fff7ed; border:1px solid #fed7aa; border-radius:8px; padding:10px; }
+.ok { background:#eef9ef; border:1px solid #bfe8c4; border-radius:8px; padding:10px; }
+.tags { display:flex; flex-wrap:wrap; gap:6px; }
+.tag { font-size:12px; border:1px solid var(--line); border-radius:999px; padding:4px 7px; background:#fff; overflow-wrap:anywhere; }
+.table-wrap { max-width:100%; overflow-x:auto; }
+.table-wrap table { min-width:720px; }
+table { width:100%; border-collapse:collapse; font-size:13px; }
+th, td { text-align:left; vertical-align:top; border-bottom:1px solid var(--line); padding:7px; overflow-wrap:anywhere; word-break:break-word; }
+th { background:#f8fafc; color:#475467; }
+.status { font-weight:700; }
 .footer { color:var(--muted); font-size:12px; padding:10px 2px 28px; }
 @media (max-width: 760px) {
   header { position:static; padding:12px; }
@@ -95,7 +110,16 @@ summary { cursor:pointer; font-weight:700; font-size:17px; }
   <section>
     <h2>SEO query pack</h2>
     <div class="field-grid">{{ seo_fields_html }}</div>
+    <h3 style="margin-top:14px">Семантический план и покрытие описания</h3>
+    {{ seo_semantic_plan_html }}
+    <h3 style="margin-top:14px">Целевые Ozon-хештеги · {{ ozon_hashtag_count }}</h3>
+    <div class="tags">{{ ozon_hashtags_html }}</div>
   </section>
+
+  <details>
+    <summary>Доказательства по Ozon-хештегам</summary>
+    {{ ozon_hashtag_evidence_html }}
+  </details>
 
   <section>
     <h2>Рекомендованное описание: 3 блока</h2>
@@ -104,8 +128,13 @@ summary { cursor:pointer; font-weight:700; font-size:17px; }
   </section>
 
   <section>
+    <h2>Итоговый предлагаемый вариант</h2>
+    <div class="field-grid">{{ proposed_final_card_html }}</div>
+  </section>
+
+  <section>
     <h2>Целевые параметры для пачного заполнения</h2>
-    <p class="hint">Показывать только релевантные поля редакторов Ozon/WB для шевронов, нашивок, петлиц и комплектов. Формат: сейчас → рекомендую → статус → почему.</p>
+    <p class="hint">Показывать полный набор релевантных полей редакторов Ozon/WB для шевронов, нашивок, петлиц и комплектов. Формат: поле → сейчас → рекомендую → статус → почему. Сокращать таблицы запрещено.</p>
     {{ target_editor_fields_html }}
   </section>
 
@@ -125,7 +154,7 @@ summary { cursor:pointer; font-weight:700; font-size:17px; }
   </details>
 
   <section>
-    <h2>Решение владельца</h2>
+    <h2>Зафиксированное решение владельца</h2>
     <p>Варианты ответа: <b>да</b>, <b>нет</b>, <b>поменять ...</b>, <b>отложить</b>, <b>дизайнеру</b>, <b>ручная проверка</b>.</p>
     <p class="hint">Этот HTML является read-only аудитом. Apply и dry-run изменений не выполнялись.</p>
   </section>

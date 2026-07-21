@@ -408,6 +408,29 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_mapping=True,
     ),
     RegisteredTask(
+        name="ozon-pricing-margin",
+        command="ozon-pricing-margin",
+        title="Ozon pricing and margin calculator",
+        description=(
+            "Build a read-only Ozon FBO expense model and price ladder from owner-provided "
+            "unit cost, target margin and a completed 15- or 30-day finance period."
+        ),
+        mode="read_only",
+        risk="low",
+        marketplaces=("ozon",),
+        runbook_path="data/planning/pricing_margin_button_plan.md",
+        requires_credentials=True,
+        requires_mapping=True,
+        telegram_enabled=True,
+        telegram_button_label="/ozon-pricing-margin",
+        parameter_schema={
+            "unit_cost": {"type": "number", "exclusiveMinimum": 0, "required": True},
+            "target_margin": {"type": "number", "minimum": 0, "required": True},
+            "period_days": {"type": "integer", "enum": [15, 30], "required": True},
+        },
+        timeout_seconds=900,
+    ),
+    RegisteredTask(
         name="status-preflight",
         command="status-preflight",
         title="Status preflight",

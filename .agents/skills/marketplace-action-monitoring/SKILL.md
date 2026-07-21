@@ -54,6 +54,13 @@ description: "Use for Ozon/Wildberries marketplace action monitoring after promo
   signal, not proof of bid impact. Compare the same query set and exact
   `query + nmID` pairs, then wait for 3-day and 7-day Promotion API/order/DRR
   controls before a second bid change. Confirmed on Vital Shevron 2026-07-18.
+- For Ozon CPC checks after a combined price + bid apply, compare the exact
+  changed SKU cohort against the same SKU before apply and against products
+  whose bids were not increased. The apply day is mixed and the current day
+  may be partial, so a 24-hour parser improvement is only an early joint
+  price/advertising signal. Do not make a second mass bid change before three
+  full post days; repeat the stable control after seven full days. Confirmed by
+  Vital Shevron run `ozon_cpc_post_apply_review_20260720T2130`.
 
 ## Baseline Pattern
 

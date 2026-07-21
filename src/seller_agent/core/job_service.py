@@ -106,7 +106,7 @@ class JobService:
                 message="Job is waiting for explicit owner confirmation.",
             )
             return JobServiceResult(job=waiting, ok=False, status="waiting_confirmation", message=waiting.error)
-        if not task.is_read_only and not task.is_write and task.mode != "verify":
+        if not task.is_read_only and not task.is_write and task.mode not in {"dry_run", "verify"}:
             failed = self.store.update_job_status(
                 job_id,
                 "failed",
@@ -406,6 +406,8 @@ def _lease_ttl_seconds(timeout_seconds: int) -> int:
 def _allowed_modes_for_task(task: RegisteredTask) -> set[str]:
     if task.is_read_only:
         return {"read_only"}
+    if task.mode == "dry_run":
+        return {"dry_run"}
     if task.mode == "verify":
         return {"verify"}
     return {"apply"}

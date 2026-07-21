@@ -10,16 +10,24 @@ from seller_agent.config import AppCredentials, load_credentials
 from seller_agent.tasks.approved_cards_apply import run_apply_approved_cards, run_plan_approved_cards
 from seller_agent.tasks.card_content_update import run_card_content_update_verify
 from seller_agent.tasks.daily_morning_report import run_daily_morning_report
-from seller_agent.tasks.inbox_workflow import run_ozon_inbox_apply, run_wb_inbox_apply
+from seller_agent.tasks.inbox_workflow import (
+    run_ozon_inbox_apply,
+    run_ozon_inbox_triage,
+    run_wb_inbox_apply,
+    run_wb_inbox_triage,
+)
 from seller_agent.tasks.marketplace_period_report import run_marketplace_period_report
 from seller_agent.tasks.ozon_actions_optimizer_apply import (
     run_ozon_actions_optimizer_apply,
     run_ozon_actions_optimizer_verify,
 )
+from seller_agent.tasks.ozon_actions_optimizer_plan import run_ozon_actions_optimizer_plan
 from seller_agent.tasks.ozon_cpc_bids_apply import run_ozon_cpc_bids_apply, run_ozon_cpc_bids_verify
 from seller_agent.tasks.ozon_card_create_apply import run_ozon_card_create_verify
 from seller_agent.tasks.ozon_elastic_apply import run_ozon_elastic_apply, run_ozon_elastic_verify
+from seller_agent.tasks.ozon_elastic_plan import run_ozon_elastic_plan
 from seller_agent.tasks.ozon_product_remove import run_ozon_product_remove_verify
+from seller_agent.tasks.ozon_pricing_margin import run_ozon_pricing_margin
 from seller_agent.tasks.ozon_production_work_plan import run_ozon_production_work_plan
 from seller_agent.tasks.ozon_stock_supply_monitor import run_ozon_stock_supply_monitor
 from seller_agent.tasks.pricing_status import run_pricing_status
@@ -28,6 +36,7 @@ from seller_agent.tasks.reviews_questions import run_reviews_questions_apply, ru
 from seller_agent.tasks.seller_sku_update import run_seller_sku_update_verify
 from seller_agent.tasks.status_preflight import run_status_preflight
 from seller_agent.tasks.wb_actions_discount_apply import run_wb_actions_discount_apply, run_wb_actions_discount_verify
+from seller_agent.tasks.wb_actions_discount_plan import run_wb_actions_discount_plan
 from seller_agent.tasks.wb_card_create_apply import run_wb_card_create_verify
 from seller_agent.tasks.wb_parser_warehouse_analytics import run_wb_parser_warehouse_analytics
 from seller_agent.tasks.wb_production_work_plan import run_wb_production_work_plan
@@ -229,6 +238,12 @@ def default_workflow_handlers() -> dict[str, WorkflowHandler]:
         "marketplace-period-report": _marketplace_period_report_handler,
         "ozon-stock-supply-monitor": _ozon_stock_supply_monitor_handler,
         "ozon-production-work-plan": _ozon_production_work_plan_handler,
+        "ozon-pricing-margin": _ozon_pricing_margin_handler,
+        "ozon-inbox": _ozon_inbox_handler,
+        "wb-inbox": _wb_inbox_handler,
+        "ozon-elastic-plan": _ozon_elastic_plan_handler,
+        "ozon-actions-optimizer-plan": _ozon_actions_optimizer_plan_handler,
+        "wb-actions-discount-plan": _wb_actions_discount_plan_handler,
         "pricing-status": _pricing_status_handler,
         "status-preflight": _status_preflight_handler,
         "wb-parser-warehouse-analytics": _wb_parser_warehouse_analytics_handler,
@@ -327,6 +342,105 @@ def _ozon_production_work_plan_handler(
         value=_int_input(inputs, "value", 0),
         cluster_count=_int_input(inputs, "cluster_count", 0),
         run_id=_optional_str(inputs.get("run_id")),
+    )
+
+
+def _ozon_pricing_margin_handler(
+    task: RegisteredTask,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    if credentials is None:
+        raise ValueError(f"Task `{task.name}` requires credentials.")
+    return run_ozon_pricing_margin(
+        credentials=credentials,
+        data_dir=data_dir,
+        unit_cost=inputs.get("unit_cost"),
+        target_margin=inputs.get("target_margin"),
+        period_days=_int_input(inputs, "period_days", 0),
+        run_id=_optional_str(inputs.get("run_id")),
+    )
+
+
+def _ozon_inbox_handler(
+    task: RegisteredTask,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    if credentials is None:
+        raise ValueError(f"Task `{task.name}` requires credentials.")
+    return run_ozon_inbox_triage(
+        credentials=credentials,
+        data_dir=data_dir,
+        run_id=_optional_str(inputs.get("run_id")),
+        limit=_int_input(inputs, "limit", 300),
+    )
+
+
+def _wb_inbox_handler(
+    task: RegisteredTask,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    if credentials is None:
+        raise ValueError(f"Task `{task.name}` requires credentials.")
+    return run_wb_inbox_triage(
+        credentials=credentials,
+        data_dir=data_dir,
+        run_id=_optional_str(inputs.get("run_id")),
+        limit=_int_input(inputs, "limit", 100),
+    )
+
+
+def _ozon_elastic_plan_handler(
+    task: RegisteredTask,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    if credentials is None:
+        raise ValueError(f"Task `{task.name}` requires credentials.")
+    return run_ozon_elastic_plan(
+        credentials=credentials,
+        data_dir=data_dir,
+        run_id=_optional_str(inputs.get("run_id")),
+    )
+
+
+def _ozon_actions_optimizer_plan_handler(
+    task: RegisteredTask,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    if credentials is None:
+        raise ValueError(f"Task `{task.name}` requires credentials.")
+    return run_ozon_actions_optimizer_plan(
+        credentials=credentials,
+        data_dir=data_dir,
+        run_id=_optional_str(inputs.get("run_id")),
+        lk_boost_summary_json=_optional_path(inputs.get("lk_boost_summary_json")),
+    )
+
+
+def _wb_actions_discount_plan_handler(
+    task: RegisteredTask,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    if credentials is None:
+        raise ValueError(f"Task `{task.name}` requires credentials.")
+    return run_wb_actions_discount_plan(
+        credentials=credentials,
+        data_dir=data_dir,
+        run_id=_optional_str(inputs.get("run_id")),
+        scheme_text=_optional_str(inputs.get("scheme_text")) or "70-55-55",
+        actions_dir=_optional_path(inputs.get("actions_dir")),
+        prices_json=_optional_path(inputs.get("prices_json")),
     )
 
 

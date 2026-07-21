@@ -45,3 +45,5 @@ runtime/
 tmp/
 *.log
 .playwright-cli/
+agent_workspaces/
+output/

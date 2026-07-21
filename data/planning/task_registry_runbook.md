@@ -88,6 +88,13 @@ runtime-контура. Она не заменяет `RunManifest`: job store х
 `bot run-job-loop` делает то же в управляемом loop-режиме и останавливается на
 пустой очереди.
 
+С 2026-07-20 `JobService` поддерживает `read_only`, `dry_run`, `verify` и
+подтвержденные `apply` задачи. Production Telegram polling не запускает
+зарегистрированные бизнес-задачи напрямую: message/callback сначала
+регистрируется в `telegram_updates`, затем создается queued job. Worker берет
+job FIFO. Навигация, ввод параметров и команды просмотра/отмены runtime jobs
+не создают вложенные job и остаются синхронными.
+
 Карточные команды, уже добавленные в `TaskRegistry`:
 
 - `plan-seller-sku-update`;
@@ -389,6 +396,14 @@ approved card batch, card create/remove и seller SKU update. Legacy
 - ранжирует кластеры по чистой локальной потребности, формирует owner-facing
   Excel и локальный review status, поставку WB не создает;
 - runbook: `data/planning/supply_planning_runbook.md`.
+
+## Ozon `Цены и маржа`
+
+`ozon-pricing-margin` зарегистрирован как Telegram-enabled read-only задача с
+низким риском. Обязательные параметры: `unit_cost > 0`,
+`target_margin >= 0`, `period_days in {15, 30}`. Задача требует Ozon Seller
+credentials и unified mapping, выполняется через Job Worker и намеренно не
+имеет apply/verify пары: marketplace write в первом варианте отсутствует.
 
 ## Следующий шаг
 

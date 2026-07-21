@@ -34,6 +34,9 @@ description: "Use for Ozon/Wildberries reviews and questions workflows: read-onl
 - For WB reviews, media can be present directly in Feedbacks API fields such as
   `photoLinks` and `video`/`videos`/`videoLinks`; treat these as media evidence
   and send/download them for owner approval when present.
+- WB `photoLinks` rows may be objects with `fullSize` and `miniSize`, not plain
+  URL strings. Prefer `fullSize`, retain the media link in the pending package,
+  and inspect it before drafting a reply when the media affects the complaint.
 
 ## Source Routes
 

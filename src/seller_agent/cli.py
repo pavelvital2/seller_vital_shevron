@@ -60,6 +60,7 @@ from seller_agent.tasks.inbox_workflow import (
     run_wb_inbox_triage,
 )
 from seller_agent.tasks.ozon_product_remove import run_ozon_product_remove_apply, run_ozon_product_remove_plan
+from seller_agent.tasks.ozon_pricing_margin import run_ozon_pricing_margin
 from seller_agent.tasks.ozon_production_work_plan import run_ozon_production_work_plan
 from seller_agent.tasks.ozon_stock_supply_monitor import run_ozon_stock_supply_monitor
 from seller_agent.tasks.pricing_status import run_pricing_status
@@ -294,7 +295,7 @@ def build_parser() -> argparse.ArgumentParser:
     bot.add_argument(
         "--runtime-jobs",
         action="store_true",
-        help="Queue live /status and /today through SQLite JobService instead of running inside polling.",
+        help="Queue all Telegram business operations through SQLite JobService instead of running inside polling.",
     )
     bot.add_argument(
         "--runtime-db",
@@ -911,6 +912,30 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("all", "ozon", "wb"),
         default="all",
         help="Marketplace scope for --refresh-api.",
+    )
+
+    ozon_pricing_margin = subparsers.add_parser(
+        "ozon-pricing-margin",
+        help="Build a read-only Ozon FBO expense model and price ladder.",
+    )
+    ozon_pricing_margin.add_argument("--data-dir", default="data", help="Project data directory.")
+    ozon_pricing_margin.add_argument("--run-id", default=None, help="Optional stable run id.")
+    ozon_pricing_margin.add_argument(
+        "--unit-cost",
+        required=True,
+        help="Cost of one physical item in rubles.",
+    )
+    ozon_pricing_margin.add_argument(
+        "--target-margin",
+        required=True,
+        help="Target margin per physical item in rubles.",
+    )
+    ozon_pricing_margin.add_argument(
+        "--period-days",
+        type=int,
+        choices=(15, 30),
+        required=True,
+        help="Completed Ozon finance period in days.",
     )
 
     status_preflight = subparsers.add_parser(
@@ -2617,6 +2642,18 @@ def main(argv: list[str] | None = None) -> int:
             run_id=args.run_id,
             refresh_api=args.refresh_api,
             refresh_marketplace=args.refresh_marketplace,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["overall_status"] in {"ok", "warning"} else 2
+
+    if args.command == "ozon-pricing-margin":
+        result = run_ozon_pricing_margin(
+            credentials=load_credentials(),
+            data_dir=Path(args.data_dir),
+            unit_cost=args.unit_cost,
+            target_margin=args.target_margin,
+            period_days=args.period_days,
+            run_id=args.run_id,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["overall_status"] in {"ok", "warning"} else 2

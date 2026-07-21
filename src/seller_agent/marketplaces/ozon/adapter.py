@@ -477,6 +477,50 @@ class OzonSellerAdapter:
 
         return items
 
+    def fetch_returns(
+        self,
+        *,
+        logistic_return_date_from: str,
+        logistic_return_date_to: str,
+        return_schema: str = "FBO",
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        last_id = 0
+        page_limit = min(max(int(limit), 1), 500)
+
+        while True:
+            filter_payload: dict[str, Any] = {
+                "logistic_return_date": {
+                    "time_from": logistic_return_date_from,
+                    "time_to": logistic_return_date_to,
+                }
+            }
+            if return_schema:
+                filter_payload["return_schema"] = return_schema
+            data = self.post(
+                "/v1/returns/list",
+                {
+                    "filter": filter_payload,
+                    "limit": page_limit,
+                    "last_id": last_id,
+                },
+            )
+            page_items = data.get("returns") if isinstance(data, dict) else []
+            if not isinstance(page_items, list):
+                page_items = []
+            page = [row for row in page_items if isinstance(row, dict)]
+            items.extend(page)
+
+            if not data.get("has_next") or not page:
+                break
+            next_last_id = int(page[-1].get("id") or 0)
+            if not next_last_id or next_last_id == last_id:
+                break
+            last_id = next_last_id
+
+        return items
+
     def fetch_review_count(self) -> dict[str, Any]:
         return self.post("/v1/review/count", {})
 

@@ -12,6 +12,21 @@ description: "Use for Ozon/Wildberries stock and supply planning: current stocks
 - Supply creation or marketplace upload is a dangerous operation and requires
   review/approval.
 - Keep Ozon and WB local IDs separate until mapping is confirmed.
+- For an external Ozon shipment workbook that contains Ozon SKU, resolve the
+  current seller article (`offer_id`) through a fresh `/v3/product/list` join
+  by SKU. Do not match by title or trust an older `offer_id`; stop on missing
+  or ambiguous SKU. Confirmed by run
+  `ozon_shipment_sku_enrichment_20260719T1415` (102/102 rows matched).
+- Preserve the row structure of external headerless workbooks. Put the current
+  Ozon `offer_id` beside the old article without adding a synthetic header row
+  or cell comments, and visually inspect the longest sheet after rendering.
+  This prevents preview compression confirmed and fixed for the `Ростов` sheet
+  in run `ozon_shipment_sku_enrichment_fix_20260719T1430`.
+- When a shipment workbook has both planned and actual quantity columns, do
+  not silently sum the plan. Identify the final shipment column from the file
+  structure/differences, state the chosen source, and calculate physical units
+  as actual goods quantity times confirmed `pack_qty`. Two uncut petlitcy count
+  as one physical item.
 - Do not treat stock warehouse or shipment warehouse as destination cluster.
   Separate `stock_warehouse`, `ship_from_warehouse`, buyer region/city, and
   `destination_cluster`.
