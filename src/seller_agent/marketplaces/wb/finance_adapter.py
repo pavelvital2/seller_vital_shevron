@@ -59,6 +59,24 @@ class WbFinanceAdapter:
 
         return rows
 
+    def fetch_acquiring_reports(
+        self,
+        *,
+        date_from: str,
+        date_to: str,
+        limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        data = self.post(
+            "/api/finance/v1/acquiring/list",
+            {
+                "dateFrom": date_from,
+                "dateTo": date_to,
+                "limit": min(max(int(limit), 1), 1000),
+                "offset": 0,
+            },
+        )
+        return [row for row in data if isinstance(row, dict)] if isinstance(data, list) else []
+
     def fetch_sales_report_details(
         self,
         *,

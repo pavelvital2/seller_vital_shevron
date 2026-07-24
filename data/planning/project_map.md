@@ -553,6 +553,9 @@ Ozon CDP port по умолчанию: `9544`.
   остаточные риски и точка продолжения.
 - `data/planning/revision_2026-07-21.md` - актуальная ревизия накопленных
   карточных, pricing, promotion и Job Worker изменений перед commit/push.
+- `data/planning/revision_2026-07-24.md` - актуальная ревизия накопленных
+  reporting, pricing, promotion, карточных и runtime изменений; полный
+  `pytest`, live API/LK preflight, systemd и runtime recovery audit.
 - `data/planning/daily_morning_report_runbook.md`
 - `data/planning/marketplace_period_report_runbook.md`
 - `data/planning/reviews_questions_runbook.md`

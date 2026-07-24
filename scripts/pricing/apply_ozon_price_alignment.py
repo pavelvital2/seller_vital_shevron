@@ -446,13 +446,15 @@ def _run_stage(
 def _report(result: dict[str, Any]) -> str:
     stages = result["stages"]
     lines = [
-        "# Ozon: результат применения price и old_price",
+        "# Ozon: результат применения базовых цен и цен со скидкой",
         "",
         f"Run ID: `{result['run_id']}`",
         f"Approved plan: `{result['approved_plan_run_id']}`",
         f"Status: `{result['overall_status']}`",
         "",
-        "Минимальные цены не передавались в payload и проверялись на неизменность.",
+        "Изменялись только цена со скидкой (`price`) и базовая зачеркнутая цена "
+        "(`old_price`). Минимальные цены не передавались в payload и проверялись "
+        "на неизменность.",
         "",
     ]
     for stage in stages:

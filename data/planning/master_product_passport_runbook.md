@@ -225,10 +225,15 @@ Fresh-аудиты могут хранить физические парамет
 
 Если владелец согласовал сохранить текущие фото площадки без изменений,
 promotion не должна добавлять `wb_media_update` только из-за наличия media
-policy или строкового значения `keep_current`. В Layer 3 целевой набор WB-фото
-остается пустым, а `wb.write_constraints.media` фиксирует
-`include_in_write_payload=false`. Любая будущая замена фото требует нового
-аудита media policy.
+policy, строкового значения `keep_current` или структурированных строк
+`action=keep_current_no_upload`. Статус media policy
+`no_media_update_required` имеет тот же no-touch смысл. В Layer 3 целевой
+набор WB-фото и его URL остаются пустыми, `wb_media_update` отсутствует в
+`safety.dangerous_actions`, а `wb.write_constraints.media` фиксирует
+`include_in_write_payload=false`. Promotion принимает путь исходного HTML из
+`owner_review.final_review_html_path`, `submitted_html_path` или `html_path`.
+Любая будущая замена фото требует нового аудита media policy. Регрессионная
+проверка: `test_promote_omits_structured_keep_current_wb_photo_rows`.
 
 Условные и запрещенные WB-поля нужно сохранять машинно. Для `isAdult=true` с
 условием владельца `только если текущее значение не true` паспорт хранит

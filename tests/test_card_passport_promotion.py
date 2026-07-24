@@ -483,6 +483,55 @@ def test_promote_omits_wb_media_and_preserves_conditional_wb_constraints(tmp_pat
     assert validate_wb_departmental_media_policy(passport)["status"] == "ok"
 
 
+def test_promote_omits_structured_keep_current_wb_photo_rows(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    audit = _minimal_owner_approved_audit("chev_nr_svo_pict0003")
+    audit["owner_review"].pop("submitted_html_path")
+    audit["owner_review"]["html_path"] = (
+        "data/catalog/card_audits/batch/card/chev_nr_svo_pict0003.html"
+    )
+    proposed = audit["proposed_final_card"]
+    proposed.pop("target_marketplace_photo_set")
+    proposed["target_wb_photo_set"] = [
+        {
+            "position": position,
+            "source": f"WB {position}",
+            "source_url": f"https://example.invalid/wb/{position}.webp",
+            "action": "keep_current_no_upload",
+        }
+        for position in range(1, 6)
+    ]
+    audit["media"] = {
+        "wb_departmental_symbol_policy": {
+            "media_apply_status": "no_media_update_required",
+            "reason": "Current WB photos stay unchanged.",
+        },
+    }
+    audit_path = data_dir / "catalog" / "card_audits" / "batch" / "card" / "audit.json"
+    _write_json(audit_path, audit)
+
+    result = run_promote_approved_card_passport(
+        data_dir=data_dir,
+        audit_paths=[audit_path],
+        run_id="promote_structured_keep_wb_media_test",
+        write=True,
+    )
+
+    assert result["overall_status"] == "ok"
+    passport_path = data_dir / "catalog" / "master_passport" / "approved" / "chev_nr_svo_pict0003.json"
+    passport = json.loads(passport_path.read_text(encoding="utf-8"))
+    assert "wb_media_update" not in passport["safety"]["dangerous_actions"]
+    assert passport["media"]["target_wb_photo_set"] == []
+    assert passport["wb"]["write_constraints"]["media"] == {
+        "action": "keep_current",
+        "include_in_write_payload": False,
+    }
+    assert passport["approval"]["source_review_html"] == (
+        "data/catalog/card_audits/batch/card/chev_nr_svo_pict0003.html"
+    )
+    assert validate_wb_departmental_media_policy(passport)["status"] == "ok"
+
+
 def test_promote_supports_each_size_and_wb_dimensions_contract(tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     audit = _minimal_owner_approved_audit("chev_kit2_nr_rg_pict0003")

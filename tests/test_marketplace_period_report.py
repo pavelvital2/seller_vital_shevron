@@ -194,6 +194,9 @@ def test_wb_period_report_uses_finance_details_and_ads(tmp_path: Path, monkeypat
                 }
             ]
 
+        def fetch_acquiring_reports(self, **kwargs):  # type: ignore[no-untyped-def]
+            return []
+
         def fetch_sales_report_details(self, **kwargs):  # type: ignore[no-untyped-def]
             return [
                 {
@@ -241,5 +244,8 @@ def test_wb_period_report_uses_finance_details_and_ads(tmp_path: Path, monkeypat
     assert metrics["buyout_units"] == 1
     assert metrics["physical_pieces"] == 2
     assert metrics["advertising"] == 20.0
-    assert metrics["net"] == 280.0
-    assert metrics["net_per_piece"] == 140.0
+    assert metrics["expenses"] == 245.0
+    assert metrics["net"] == 255.0
+    assert metrics["net_per_piece"] == 127.5
+    assert metrics["adjustments"] == 25.0
+    assert metrics["cash_after_adjustments"] == 280.0

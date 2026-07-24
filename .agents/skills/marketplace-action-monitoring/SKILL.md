@@ -48,6 +48,10 @@ description: "Use for Ozon/Wildberries marketplace action monitoring after promo
   threshold change, count exclusions only among current participants, and
   derive target discount distribution from `Финальная скидка` separately from
   the next safe upload distribution in `Скидка к загрузке`.
+- WB action dry-run messages from Job Worker must show current participant
+  count and discount distribution, exclusion count grouped by reason, and
+  post-apply participant/non-participant counts with separate target discount
+  distributions. A payload row count alone is not an owner-decision report.
 - For WB parser checks immediately after combined price/action/bid changes,
   record the exact SERP collection time relative to every apply. A first
   parser run collected about two hours after bid apply is an early joint

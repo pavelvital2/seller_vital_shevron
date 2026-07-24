@@ -281,6 +281,14 @@ def _collect_wb(
     report_rows = finance.fetch_sales_reports(
         date_from=start.isoformat(), date_to=end.isoformat(), period="daily"
     )
+    acquiring_reports: list[dict[str, Any]] = []
+    try:
+        acquiring_reports = finance.fetch_acquiring_reports(
+            date_from=start.isoformat(),
+            date_to=end.isoformat(),
+        )
+    except Exception as exc:  # noqa: BLE001 - sales report remains usable.
+        warnings.append(f"Издержки WB на приём платежей не подтверждены: {_safe_error(exc)}")
     detail_rows = finance.fetch_sales_report_details(
         date_from=start.isoformat(), date_to=end.isoformat(), period="daily"
     )
@@ -323,8 +331,20 @@ def _collect_wb(
 
     gross = sum(_number(row.get("retailAmountSum")) for row in report_rows)
     bank_payment = sum(_number(row.get("bankPaymentSum")) for row in report_rows)
-    net = bank_payment - ad_spend
-    expenses = _wb_expenses(report_rows, gross=gross, bank_payment=bank_payment, ad_spend=ad_spend)
+    acquiring_expense = sum(
+        _number(row.get("acquiringFeeSum")) + _number(row.get("acquiringFeeVatSum"))
+        for row in acquiring_reports
+    )
+    expenses, adjustments = _wb_expenses(
+        report_rows,
+        gross=gross,
+        bank_payment=bank_payment,
+        ad_spend=ad_spend,
+        acquiring_expense=acquiring_expense,
+    )
+    total_expenses = sum(expenses.values())
+    net = gross - total_expenses
+    cash_after_adjustments = bank_payment - acquiring_expense - ad_spend
     active_orders = [row for row in order_rows if not _truthy(row.get("isCancel"))]
     cancelled_orders = [row for row in order_rows if _truthy(row.get("isCancel"))]
     order_amount = sum(_number(row.get("priceWithDisc")) for row in active_orders)
@@ -353,18 +373,23 @@ def _collect_wb(
             "returns": sum(max(1, abs(_int(row.get("quantity"), 1))) for row in return_rows),
             "cancellations": len(cancelled_orders),
             "gross": _money(gross),
-            "expenses": _money(max(0.0, gross - bank_payment) + ad_spend),
+            "expenses": _money(total_expenses),
             "net": _money(net),
             "net_per_piece": _money(net / physical if physical else 0),
             "advertising": _money(ad_spend),
+            "bank_payment": _money(bank_payment),
+            "adjustments": _money(sum(adjustments.values())),
+            "cash_after_adjustments": _money(cash_after_adjustments),
         },
         "expenses": expenses,
+        "adjustments": adjustments,
         "daily": daily,
         "top_products": top_products,
         "unmapped_ids": dict(unmapped.most_common(30)),
         "warnings": warnings,
         "sources": [
             "WB /api/finance/v1/sales-reports/list",
+            "WB /api/finance/v1/acquiring/list",
             "WB /api/finance/v1/sales-reports/detailed",
             "WB /api/v1/supplier/orders",
             "WB /adv/v3/fullstats",
@@ -442,22 +467,54 @@ def _ozon_finance_return_metrics(rows: list[dict[str, Any]]) -> dict[str, int]:
 
 
 def _wb_expenses(
-    rows: list[dict[str, Any]], *, gross: float, bank_payment: float, ad_spend: float
-) -> dict[str, float]:
-    values = {
+    rows: list[dict[str, Any]],
+    *,
+    gross: float,
+    bank_payment: float,
+    ad_spend: float,
+    acquiring_expense: float = 0.0,
+) -> tuple[dict[str, float], dict[str, float]]:
+    signed_values = {
         "Удержания площадки до логистики": max(0.0, gross - sum(_number(row.get("forPaySum")) for row in rows)),
         "Логистика": sum(_number(row.get("deliveryServiceSum")) for row in rows),
         "Хранение": sum(_number(row.get("paidStorageSum")) for row in rows),
         "Приёмка": sum(_number(row.get("paidAcceptanceSum")) for row in rows),
         "Удержания": sum(_number(row.get("deductionSum")) for row in rows),
         "Штрафы": sum(_number(row.get("penaltySum")) for row in rows),
-        "Реклама": ad_spend,
+        "Кешбэк и корректировки": sum(
+            _number(row.get("cashbackAmountSum"))
+            + _number(row.get("cashbackDiscountSum"))
+            + _number(row.get("cashbackCommissionChangeSum"))
+            for row in rows
+        ),
+        "Удержание по графику платежей": sum(_number(row.get("paymentSchedule")) for row in rows),
     }
-    expected = max(0.0, gross - bank_payment) + ad_spend
-    delta = expected - sum(values.values())
-    if abs(delta) >= 0.01:
-        values["Сверочная разница"] = delta
-    return {key: _money(value) for key, value in values.items()}
+    additional_payments = sum(_number(row.get("additionalPaymentSum")) for row in rows)
+    expenses = {key: max(0.0, value) for key, value in signed_values.items()}
+    if additional_payments < 0:
+        expenses["Отрицательные дополнительные выплаты"] = abs(additional_payments)
+    expenses["Издержки на приём платежей"] = max(0.0, acquiring_expense)
+    expenses["Реклама"] = max(0.0, ad_spend)
+
+    adjustments = {
+        f"{key}: зачисление": abs(value)
+        for key, value in signed_values.items()
+        if value < 0
+    }
+    if additional_payments > 0:
+        adjustments["Дополнительные выплаты"] = additional_payments
+
+    sales_report_expenses = sum(max(0.0, value) for value in signed_values.values())
+    if additional_payments < 0:
+        sales_report_expenses += abs(additional_payments)
+    expected_bank_payment = gross - sales_report_expenses + sum(adjustments.values())
+    reconciliation_delta = bank_payment - expected_bank_payment
+    if abs(reconciliation_delta) >= 0.01:
+        adjustments["Неклассифицированная сверочная корректировка"] = reconciliation_delta
+    return (
+        {key: _money(value) for key, value in expenses.items()},
+        {key: _money(value) for key, value in adjustments.items()},
+    )
 
 
 def _ozon_analytics_daily(payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -602,13 +659,24 @@ def _write_markdown(
         ),
         f"- Продажи до расходов: **{_rub(summary['gross'])}**.",
         f"- Расходы: **{_rub(summary['expenses'])}**.",
-        f"- К выплате после расходов: **{_rub(summary['net'])}**.",
+        f"- После текущих расходов: **{_rub(summary['net'])}**.",
         f"- На одно физическое изделие: **{_rub(summary['net_per_piece'])}**.",
     ]
+    if marketplace == "wb":
+        lines.extend(
+            [
+                f"- Корректировки и зачисления WB: **{_rub(summary.get('adjustments', 0))}**.",
+                f"- Начисление WB с корректировками после рекламы: **{_rub(summary.get('cash_after_adjustments', 0))}**.",
+            ]
+        )
     if report_type in {"financial", "full"}:
         lines.extend(["", "## Расходы", ""])
         for name, value in metrics.get("expenses", {}).items():
             lines.append(f"- {name}: **{_rub(value)}**.")
+        if marketplace == "wb" and metrics.get("adjustments"):
+            lines.extend(["", "## Корректировки И Зачисления", ""])
+            for name, value in metrics["adjustments"].items():
+                lines.append(f"- {name}: **{_rub(value)}**.")
     if report_type == "full":
         lines.extend(["", "## Товары", "", "| Товар | Единиц | Физических изделий | Продажи | К перечислению* |", "| --- | ---: | ---: | ---: | ---: |"])
         for row in metrics.get("top_products", []):
@@ -662,10 +730,17 @@ def _write_xlsx(
         ("cancellations", "Отмены"),
         ("gross", "Продажи до расходов, руб."),
         ("expenses", "Расходы, руб."),
-        ("net", "К выплате после расходов, руб."),
+        ("net", "После текущих расходов, руб."),
         ("net_per_piece", "На физическое изделие, руб."),
         ]
     )
+    if marketplace == "wb":
+        summary_rows.extend(
+            [
+                ("adjustments", "Корректировки и зачисления WB, руб."),
+                ("cash_after_adjustments", "Начисление с корректировками после рекламы, руб."),
+            ]
+        )
     for key, label in summary_rows:
         summary_sheet.append([label, metrics["summary"].get(key, 0)])
     summary_sheet["A1"].font = Font(bold=True)
@@ -677,6 +752,11 @@ def _write_xlsx(
         sheet.append(["Статья", "Сумма, руб."])
         for key, value in metrics.get("expenses", {}).items():
             sheet.append([key, value])
+        if marketplace == "wb" and metrics.get("adjustments"):
+            sheet.append([])
+            sheet.append(["Корректировки и зачисления", "Сумма, руб."])
+            for key, value in metrics["adjustments"].items():
+                sheet.append([key, value])
         sheet.freeze_panes = "A2"
         sheet.column_dimensions["A"].width = 42
         sheet.column_dimensions["B"].width = 18

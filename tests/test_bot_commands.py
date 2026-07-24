@@ -656,9 +656,20 @@ def test_bot_today_live_mode_builds_fresh_report(
                 "communications": {"unanswered_feedbacks": 1, "unanswered_questions": 0},
             },
             "wb": {
-                "orders": {"yesterday": {"active_orders": 12, "amount": 2400}},
+                "orders": {
+                    "yesterday": {
+                        "total_orders": 13,
+                        "amount": 2600,
+                        "active_orders": 12,
+                        "active_amount": 2400,
+                        "cancelled_orders": 1,
+                    }
+                },
                 "sales": {"yesterday": {"sales_rows": 9, "sales_amount": 1800}},
-                "finance_expenses": {"total_expenses": 600},
+                "finance_expenses": {
+                    "total_expenses": 600,
+                    "total_credits_and_adjustments": 100,
+                },
                 "stocks": {"quantity_total": 120, "zero_stock_count": 3},
                 "communications": {"unanswered_feedbacks": 2, "unanswered_questions": 1},
             },
@@ -669,9 +680,9 @@ def test_bot_today_live_mode_builds_fresh_report(
         },
         "unified_catalog": {
             "products": 710,
-            "confirmed_products": 269,
-            "ozon_only_products": 279,
-            "wb_only_products": 162,
+            "both_marketplaces_products": 269,
+            "active_ozon_only_products": 279,
+            "active_wb_only_products": 162,
         },
         "executive_summary": ["Период отчета: 2026-06-17 00:00-23:59 MSK."],
         "artifacts": {
@@ -710,7 +721,8 @@ def test_bot_today_live_mode_builds_fresh_report(
     assert "свежий read-only отчет построен" in live_result.text
     assert "daily_morning_report_v3_test" in live_result.text
     assert "Ozon: заказы `10`" in live_result.text
-    assert "WB: заказы `12`" in live_result.text
+    assert "WB: создано заказов `13`" in live_result.text
+    assert "активных `12`" in live_result.text
     assert "Unified: товаров `710`" in live_result.text
     assert live_result.artifacts["report"].endswith("daily_morning_report_v3.md")
     assert workflow_calls[0]["init"]["data_dir"] == tmp_path
@@ -1306,6 +1318,12 @@ def test_bot_wb_actions_plan_without_write_rows_has_no_apply_button(
     assert result.ok is True
     assert "Изменений к применению нет" in result.text
     assert result.reply_markup == {}
+
+
+def test_bot_wb_actions_omits_exclusion_reason_when_no_products_are_excluded() -> None:
+    from seller_agent.bot import commands
+
+    assert commands._wb_exclusion_reason_lines({}, threshold="60") == []
 
 
 def test_bot_wb_manual_actions_collects_and_confirms_named_parameters() -> None:
@@ -2369,6 +2387,102 @@ def test_notify_telegram_plan_result_keeps_apply_button(tmp_path: Path) -> None:
     assert payload["reply_markup"]["inline_keyboard"][0][0]["callback_data"] == (
         "oe_apply:ozon_elastic_plan_notify_test"
     )
+
+
+def test_job_worker_wb_actions_report_shows_participation_transitions(tmp_path: Path) -> None:
+    csv_path = tmp_path / "wb-actions.csv"
+    fieldnames = [
+        "Акций",
+        "Статусы в файлах акций",
+        "Причина",
+        "Текущая скидка",
+        "Финальная скидка",
+        "Скидка к загрузке",
+        "Осталось до целевой, п.п.",
+    ]
+    rows = [
+        {
+            "Акций": 1,
+            "Статусы в файлах акций": "Да",
+            "Причина": "скидка до порога <= 60%",
+            "Текущая скидка": 57,
+            "Финальная скидка": 57,
+            "Скидка к загрузке": 57,
+            "Осталось до целевой, п.п.": 0,
+        },
+        {
+            "Акций": 1,
+            "Статусы в файлах акций": "Да",
+            "Причина": "скидка до порога > 60% -> 50%",
+            "Текущая скидка": 64,
+            "Финальная скидка": 50,
+            "Скидка к загрузке": 50,
+            "Осталось до целевой, п.п.": 0,
+        },
+        {
+            "Акций": 1,
+            "Статусы в файлах акций": "Нет",
+            "Причина": "скидка до порога > 60% -> 50%",
+            "Текущая скидка": 64,
+            "Финальная скидка": 50,
+            "Скидка к загрузке": 50,
+            "Осталось до целевой, п.п.": 0,
+        },
+        {
+            "Акций": 0,
+            "Статусы в файлах акций": "",
+            "Причина": "товара нет в активных акциях -> 50%",
+            "Текущая скидка": 50,
+            "Финальная скидка": 50,
+            "Скидка к загрузке": 50,
+            "Осталось до целевой, п.п.": 0,
+        },
+    ]
+    with csv_path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter=";")
+        writer.writeheader()
+        writer.writerows(rows)
+
+    store = JobStore(tmp_path / "runtime.db")
+    job = store.create_job(
+        task_id="wb-actions-discount-plan",
+        actor="telegram:123",
+        job_id="job_wb_actions_report_test",
+        status="queued",
+        params={"scheme_text": "60-50-50"},
+    )
+    store.update_job_status(
+        job.job_id,
+        "success",
+        result={
+            "status": "ok",
+            "summary": {
+                "run_id": "wb_actions_discount_plan_60-50-50_test",
+                "overall_status": "ok",
+                "summary": {
+                    "scheme": "60-50-50",
+                    "total_goods": 4,
+                    "changed_rows": 2,
+                    "no_change": 2,
+                    "active_promos": 1,
+                    "future_promos": 0,
+                },
+                "artifacts": {"csv": str(csv_path)},
+            },
+        },
+    )
+    completed = store.get_job(job.job_id)
+    assert completed is not None
+
+    text = build_job_result_text(completed)
+
+    assert "участвуют в акциях: `2`" in text
+    assert "скидка 64%: `1` товаров" in text
+    assert "скидка 57%: `1` товаров" in text
+    assert "снимутся с текущих акций: `1`" in text
+    assert "требуемая скидка акции выше порога 60%" in text
+    assert "будут участвовать в акциях: `1`" in text
+    assert "не будут участвовать в акциях: `3`" in text
 
 
 def test_poll_once_runtime_jobs_queues_operation_callback_without_direct_execution(

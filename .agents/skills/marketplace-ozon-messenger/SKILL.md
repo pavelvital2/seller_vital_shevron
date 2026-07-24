@@ -30,6 +30,10 @@ description: "Use for Ozon Messenger and notification workflows: buyer chats, un
   - important Ozon marketplace messages to forward to Telegram;
   - noise/promotional banners;
   - old read customer-tail dialogs.
+- Customer wording such as `на заказ делаются`, `под заказ`, `изготовления
+  нету` and `не печатаете` must follow the confirmed Vital Shevron rule:
+  individual custom manufacture is unavailable and only ready variants from
+  the store are offered. Keep the reply natural for the exact question.
 - Never save raw buyer personal data, cookies, storage state, auth headers, or
   raw chat dumps into committed docs.
 

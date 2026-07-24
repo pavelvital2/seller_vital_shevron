@@ -725,6 +725,7 @@ def _summarize_wb_sales(rows: list[dict[str, Any]]) -> dict[str, Any]:
 def _summarize_wb_finance_expenses(
     *,
     reports: list[dict[str, Any]],
+    acquiring_reports: list[dict[str, Any]] | None = None,
     ad_spend: float | int | None = None,
 ) -> dict[str, Any]:
     if not reports:
@@ -737,8 +738,14 @@ def _summarize_wb_finance_expenses(
     for_pay = sum(_first_number(row, ("forPaySum",)) for row in reports)
     bank_payment = sum(_first_number(row, ("bankPaymentSum",)) for row in reports)
     advertising = float(ad_spend or 0)
+    acquiring_reports = acquiring_reports or []
+    acquiring = sum(
+        _first_number(row, ("acquiringFeeSum",))
+        + _first_number(row, ("acquiringFeeVatSum",))
+        for row in acquiring_reports
+    )
     marketplace_deductions = max(0.0, gross_amount - for_pay)
-    expenses = {
+    signed_components = {
         "marketplace_deductions_before_logistics": marketplace_deductions,
         "logistics": sum(_first_number(row, ("deliveryServiceSum",)) for row in reports),
         "storage": sum(_first_number(row, ("paidStorageSum",)) for row in reports),
@@ -751,24 +758,51 @@ def _summarize_wb_finance_expenses(
             + _first_number(row, ("cashbackCommissionChangeSum",))
             for row in reports
         ),
-        "advertising": advertising,
+        "payment_schedule": sum(_first_number(row, ("paymentSchedule",)) for row in reports),
     }
     additional_payments = sum(_first_number(row, ("additionalPaymentSum",)) for row in reports)
-    marketplace_expenses = max(0.0, gross_amount - bank_payment)
+    expenses = {
+        key: max(0.0, value)
+        for key, value in signed_components.items()
+    }
+    if additional_payments < 0:
+        expenses["negative_additional_payments"] = abs(additional_payments)
+    expenses["acquiring"] = acquiring
+    expenses["advertising"] = advertising
+
+    credits = {
+        f"{key}_credit": abs(value)
+        for key, value in signed_components.items()
+        if value < 0
+    }
+    if additional_payments > 0:
+        credits["additional_payments"] = additional_payments
+
+    sales_report_expenses = sum(max(0.0, value) for value in signed_components.values())
+    if additional_payments < 0:
+        sales_report_expenses += abs(additional_payments)
+    marketplace_expenses = sum(value for key, value in expenses.items() if key != "advertising")
     total_with_ads = marketplace_expenses + advertising
-    known_without_ads = sum(value for key, value in expenses.items() if key != "advertising") - additional_payments
-    reconciliation_delta = marketplace_expenses - known_without_ads
+    total_credits = sum(credits.values())
+    expected_bank_payment = gross_amount - sales_report_expenses + total_credits
+    reconciliation_delta = bank_payment - expected_bank_payment
     if abs(reconciliation_delta) >= 0.01:
-        expenses["other_reconciliation"] = reconciliation_delta
+        credits["unclassified_reconciliation"] = reconciliation_delta
+        total_credits += reconciliation_delta
 
     return {
         "status": "ok",
-        "source": "/api/finance/v1/sales-reports/list + /adv/v3/fullstats",
+        "source": (
+            "/api/finance/v1/sales-reports/list + "
+            "/api/finance/v1/acquiring/list + /adv/v3/fullstats"
+        ),
         "source_note": (
-            "WB финансовые расходы взяты из ежедневного отчета реализации; "
-            "реклама добавлена из WB Promotion статистики и не была сверена как часть bankPaymentSum."
+            "Расходы WB рассчитаны по положительным статьям ежедневного отчета реализации; "
+            "отрицательные удержания и другие зачисления показаны отдельно как корректировки. "
+            "Реклама добавлена из WB Promotion и не входит в bankPaymentSum."
         ),
         "reports_count": len(reports),
+        "acquiring_reports_count": len(acquiring_reports),
         "report_ids": [row.get("reportId") for row in reports if row.get("reportId")],
         "created_dates": sorted({str(row.get("createDate") or "") for row in reports if row.get("createDate")}),
         "gross_amount": _money(gross_amount),
@@ -778,7 +812,11 @@ def _summarize_wb_finance_expenses(
         "marketplace_expenses": _money(marketplace_expenses),
         "additional_payments": _money(additional_payments),
         "net_after_expenses": _money(gross_amount - total_with_ads),
+        "total_credits_and_adjustments": _money(total_credits),
+        "cash_after_adjustments_and_ads": _money(bank_payment - acquiring - advertising),
+        "bank_payment_reconciliation_delta": _money(reconciliation_delta),
         "expenses": {key: _money(value) for key, value in expenses.items()},
+        "credits_and_adjustments": {key: _money(value) for key, value in credits.items()},
     }
 
 
@@ -1376,9 +1414,14 @@ def _collect_business_snapshot(
                     date_to=periods["yesterday"],
                     period="daily",
                 )
+                acquiring_reports = wb_finance.fetch_acquiring_reports(
+                    date_from=periods["yesterday"],
+                    date_to=periods["yesterday"],
+                )
                 ad_spend = wb_ad_spend.get("spend") if wb_ad_spend.get("status") == "ok" else 0
                 business["wb"]["finance_expenses"] = _summarize_wb_finance_expenses(
                     reports=reports,
+                    acquiring_reports=acquiring_reports,
                     ad_spend=ad_spend,
                 )
             except Exception as exc:  # noqa: BLE001
@@ -2061,6 +2104,9 @@ EXPENSE_LABELS = {
     "deductions": "Удержания",
     "penalties": "Штрафы",
     "cashback": "Кешбэк/корректировки",
+    "payment_schedule": "Удержание по графику платежей",
+    "acquiring": "Издержки на приём платежей",
+    "negative_additional_payments": "Отрицательные дополнительные выплаты",
     "other_reconciliation": "Прочая сверка",
     "other": "Прочая сверка/корректировка",
 }
@@ -2259,7 +2305,9 @@ def _write_seller_v3_report(path: Path, result: dict[str, Any]) -> None:
         "| --- | ---: | ---: |",
         f"| Выкуплено/реализовано, ₽ | {_metric_money(ozon_expenses.get('gross_amount')) if ozon_expenses.get('status') == 'ok' else 'не подтверждено'} | {_metric_money(wb_expenses.get('gross_amount')) if wb_expenses.get('status') == 'ok' else 'не подтверждено'} |",
         f"| Расходы всего, ₽ | {_metric_money(ozon_expenses.get('total_expenses')) if ozon_expenses.get('status') == 'ok' else 'не подтверждено'} | {_metric_money(wb_expenses.get('total_expenses')) if wb_expenses.get('status') == 'ok' else 'не подтверждено'} |",
-        f"| К выплате/после расходов, ₽ | {_metric_money(ozon_expenses.get('net_amount')) if ozon_expenses.get('status') == 'ok' else 'не подтверждено'} | {_metric_money(wb_expenses.get('net_after_expenses')) if wb_expenses.get('status') == 'ok' else 'не подтверждено'} |",
+        f"| После текущих расходов, ₽ | {_metric_money(ozon_expenses.get('net_amount')) if ozon_expenses.get('status') == 'ok' else 'не подтверждено'} | {_metric_money(wb_expenses.get('net_after_expenses')) if wb_expenses.get('status') == 'ok' else 'не подтверждено'} |",
+        f"| WB: корректировки/зачисления, ₽ | — | {_metric_money(wb_expenses.get('total_credits_and_adjustments')) if wb_expenses.get('status') == 'ok' else 'не подтверждено'} |",
+        f"| WB: начисление с корректировками после рекламы, ₽ | — | {_metric_money(wb_expenses.get('cash_after_adjustments_and_ads')) if wb_expenses.get('status') == 'ok' else 'не подтверждено'} |",
         f"| Источник | {ozon_expenses.get('source', 'не подтверждено')} | {wb_expenses.get('source', 'не подтверждено')} |",
         "",
         "Расшифровка расходов:",
@@ -2280,8 +2328,10 @@ def _write_seller_v3_report(path: Path, result: dict[str, Any]) -> None:
                 "deductions",
                 "penalties",
                 "cashback",
+                "payment_schedule",
+                "acquiring",
+                "negative_additional_payments",
                 "advertising",
-                "other_reconciliation",
             ],
         ),
         "",

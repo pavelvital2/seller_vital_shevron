@@ -359,6 +359,51 @@ def _wb_actions_plan_result(
     callback_data = str(update.payload.get("callback_data") or "") if update else ""
     manual = callback_data.startswith("wbam_confirm:") or scheme != "70-55-55"
     title = "Ручная акция" if manual else "WB акции 70-55-55"
+    artifacts = _dict(result.get("artifacts"))
+
+    from seller_agent.bot import commands
+
+    report_stats = commands._wb_actions_report_stats(artifacts.get("csv"))
+    if not report_stats.get("available"):
+        lines = [
+            title,
+            "",
+            f"Итог: fresh dry-run построен со статусом `{result.get('overall_status') or 'н/д'}`.",
+            f"Схема: `{scheme}`",
+            f"Run ID: `{run_id or 'н/д'}`",
+            f"Job ID: `{job.job_id}`",
+            "",
+            f"- всего товаров: `{_int(summary.get('total_goods'))}`;",
+            f"- изменить скидку: `{changed}`;",
+            f"- без изменения: `{_int(summary.get('no_change'))}`.",
+            "",
+            "Разбивка участия и скидок не подтверждена: CSV полного расчета отсутствует или поврежден.",
+            "Скидки в WB не изменялись.",
+        ]
+        markup = {}
+        if changed and run_id:
+            rows = [[{"text": "Применить скидки", "callback_data": f"wba_apply:{run_id}"}]]
+            if manual:
+                rows.append([{"text": "Отклонить", "callback_data": f"wbam_reject:{run_id}"}])
+            markup = {"inline_keyboard": rows}
+        return "\n".join(lines), markup
+
+    current_participating = commands._wb_report_stat(report_stats, "current_participating")
+    current_not_participating = commands._wb_report_stat(report_stats, "current_not_participating")
+    offered_in_active_promos = commands._wb_report_stat(report_stats, "offered_in_active_promos")
+    offered_not_participating = commands._wb_report_stat(report_stats, "offered_not_participating")
+    outside_active_promos = commands._wb_report_stat(report_stats, "outside_active_promos")
+    eligible_after = commands._wb_report_stat(report_stats, "eligible_after")
+    excluded_after = commands._wb_report_stat(report_stats, "excluded_after")
+    newly_participating_after = commands._wb_report_stat(report_stats, "newly_participating_after")
+    not_participating_after = commands._wb_report_stat(report_stats, "not_participating_after")
+    step_limited = commands._wb_report_stat(report_stats, "step_limited")
+    current_distribution = report_stats.get("current_participating_discount_distribution", {})
+    after_distribution = report_stats.get("participating_after_discount_distribution", {})
+    outside_after_distribution = report_stats.get("not_participating_after_discount_distribution", {})
+    excluded_reasons = report_stats.get("excluded_reason_distribution", {})
+
+    threshold_text = scheme.split("-", maxsplit=1)[0]
     lines = [
         title,
         "",
@@ -367,11 +412,38 @@ def _wb_actions_plan_result(
         f"Run ID: `{run_id or 'н/д'}`",
         f"Job ID: `{job.job_id}`",
         "",
-        f"- всего товаров: `{_int(summary.get('total_goods'))}`;",
-        f"- изменить скидку: `{changed}`;",
-        f"- без изменения: `{_int(summary.get('no_change'))}`;",
+        "Сейчас:",
+        f"- всего товаров в магазине: `{_int(summary.get('total_goods'))}`;",
+        f"- доступны активные акции: `{_int(offered_in_active_promos)}`;",
+        f"- участвуют в акциях: `{_int(current_participating)}`;",
+        f"- не участвуют в акциях: `{_int(current_not_participating)}`;",
+        f"- из них доступны акциям, но не участвуют: `{_int(offered_not_participating)}`;",
+        f"- без доступных активных акций: `{_int(outside_active_promos)}`.",
+        "",
+        "Скидки товаров, которые сейчас участвуют:",
+        *commands._wb_discount_distribution_lines(current_distribution),
+        "",
+        "Что изменится:",
+        f"- снимутся с текущих акций: `{_int(excluded_after)}`;",
+        *commands._wb_exclusion_reason_lines(excluded_reasons, threshold=threshold_text),
+        f"- начнут участвовать: `{_int(newly_participating_after)}`;",
+        f"- всего изменить скидку: `{changed}`;",
+        f"- без изменения: `{_int(summary.get('no_change'))}`.",
+        "",
+        "После применения целевых параметров:",
+        f"- будут участвовать в акциях: `{_int(eligible_after)}`;",
+        f"- не будут участвовать в акциях: `{_int(not_participating_after)}`.",
+        "",
+        "Скидки товаров, которые останутся в акциях:",
+        *commands._wb_discount_distribution_lines(after_distribution),
+        "",
+        "Скидки товаров, которые не будут участвовать:",
+        *commands._wb_discount_distribution_lines(outside_after_distribution),
+        "",
+        "Техническая информация:",
         f"- активных акций: `{_int(summary.get('active_promos'))}`;",
-        f"- будущих акций: `{_int(summary.get('future_promos'))}`.",
+        f"- будущих акций: `{_int(summary.get('future_promos'))}`;",
+        f"- не достигнут целевой скидки за один безопасный upload: `{_int(step_limited)}`.",
         "",
         "Скидки в WB не изменялись. Полный расчёт приложен.",
     ]

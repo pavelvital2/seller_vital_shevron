@@ -88,6 +88,10 @@
 - `data/planning/revision_2026-07-21.md` - актуальная ревизия накопленного
   checkpoint: полный test/preflight/runtime контроль, revision-fixes,
   остаточные риски и состояние перед commit/push.
+- `data/planning/revision_2026-07-24.md` - актуальная ревизия marketplace
+  reporting, pricing, promotion, карточного checkpoint и production runtime:
+  полный test/preflight/systemd контроль, найденные риски и состояние перед
+  commit/push.
 - `data/planning/recommendations_index.md` - реестр рекомендаций.
 - `data/planning/followups.md` - контрольные follow-up задачи, которые нельзя
   потерять между сессиями агентов.

@@ -70,7 +70,9 @@ REPORT_FIELDS = [
 
 
 def _args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Build an approval-only Ozon price alignment plan.")
+    parser = argparse.ArgumentParser(
+        description="Build an approval-only Ozon discount/base price alignment plan."
+    )
     parser.add_argument("--elastic-run-id", required=True)
     parser.add_argument("--target-size", type=int, default=120)
     parser.add_argument("--run-id", default="")
@@ -209,6 +211,8 @@ def _xlsx(path: Path, summary: dict[str, Any], rows: list[dict[str, Any]], exclu
         ("Run ID", summary["run_id"]),
         ("Статус", "На согласовании, изменений в Ozon нет"),
         ("Товаров в пакете", summary["selected_rows"]),
+        ("Всего со старыми базовыми/скидочными ценами", summary["eligible_stale_rows"]),
+        ("Останется после применения пакета", summary["remaining_stale_after_plan"]),
         ("Активный Elastic со старыми ценами", summary["elastic_stale_selected"]),
         ("Позывные вне Elastic", summary["callsign_stale_selected"]),
         ("Следующая приоритетная пачка", summary["next_batch_selected"]),
@@ -271,12 +275,14 @@ def _markdown(summary: dict[str, Any]) -> str:
         f"- {group}: `{count}`"
         for group, count in summary["group_distribution"].items()
     )
-    return f"""# Ozon: согласование обновления price и old_price
+    return f"""# Ozon: согласование базовых цен и цен со скидкой
 
 ## Итог
 
 Подготовлен точный dry-run на `{summary['selected_rows']}` товаров. Изменения в Ozon не выполнялись.
 
+- всего товаров со старой базовой ценой или ценой со скидкой: `{summary['eligible_stale_rows']}`;
+- после применения этого пакета останется: `{summary['remaining_stale_after_plan']}`;
 - активный Elastic со старыми обычными ценами: `{summary['elastic_stale_selected']}`;
 - позывные вне Elastic со старыми ценами: `{summary['callsign_stale_selected']}`;
 - следующая приоритетная пачка: `{summary['next_batch_selected']}`;
@@ -293,7 +299,10 @@ def _markdown(summary: dict[str, Any]) -> str:
 
 ## Что будет меняться после отдельного согласования
 
-Только `price` и `old_price`. `min_price` показан в таблице исключительно для контроля, отсутствует в payload и не должен изменяться. Управление участием в Elastic в payload также отсутствует.
+Только цена со скидкой (`price`) и базовая зачеркнутая цена (`old_price`).
+`min_price` показан в таблице исключительно для контроля, отсутствует в
+payload и не должен изменяться. Управление участием в Elastic в payload также
+отсутствует.
 
 Порядок будущего apply:
 
@@ -338,11 +347,11 @@ def _html(summary: dict[str, Any], rows: list[dict[str, Any]]) -> str:
         )
     return f"""<!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Ozon: цены на согласование</title><style>
+<title>Ozon: базовые цены и цены со скидкой</title><style>
 *{{box-sizing:border-box}}body{{margin:0;background:#f3f5f7;color:#182026;font:14px/1.45 Arial,sans-serif;letter-spacing:0}}main{{max-width:1500px;margin:auto;padding:20px}}h1{{font-size:26px;margin:0 0 6px}}h2{{font-size:18px;margin:0 0 12px}}code{{overflow-wrap:anywhere;word-break:break-all}}.meta{{color:#667085}}.band{{background:#fff;border:1px solid #d6dce2;border-radius:6px;padding:16px;margin:14px 0;min-width:0}}.metrics{{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}}.metric{{border-left:4px solid #176b57;background:#f7faf9;padding:10px;min-width:0;overflow-wrap:anywhere}}.metric b{{display:block;font-size:23px}}.warning{{border-left:4px solid #b54708;padding-left:10px}}input{{width:100%;max-width:520px;padding:10px;border:1px solid #aeb7c2;border-radius:4px}}.table{{overflow:auto;max-height:680px;border:1px solid #d6dce2;margin-top:10px;max-width:100%}}table{{border-collapse:collapse;width:100%;min-width:1500px}}th,td{{padding:7px;border-bottom:1px solid #e2e6ea;text-align:left;white-space:nowrap}}th{{position:sticky;top:0;background:#e9eef1;z-index:1}}.tag{{display:inline-block;padding:2px 7px;border-radius:4px;background:#e4f2ed}}@media(max-width:800px){{main{{padding:10px}}h1{{font-size:21px}}.metrics{{grid-template-columns:repeat(2,minmax(0,1fr))}}}}
-</style></head><body><main><h1>Ozon: обновление price и old_price</h1><div class="meta">{escape(summary['run_id'])} · dry-run · изменений в Ozon нет</div>
-<section class="band"><div class="metrics"><div class="metric">Всего в пакете<b>{summary['selected_rows']}</b></div><div class="metric">Старые цены в Elastic<b>{summary['elastic_stale_selected']}</b></div><div class="metric">Позывные вне Elastic<b>{summary['callsign_stale_selected']}</b></div><div class="metric">Следующая пачка<b>{summary['next_batch_selected']}</b></div></div><p class="warning"><b>min_price не меняется.</b> В машинном payload есть только offer_id, price, old_price и currency_code. Изменение участия в Elastic также не запланировано.</p></section>
-<section class="band"><h2>Состав пакета</h2><p>Период продаж: {escape(summary['sales_period'])}. Текущих участников Elastic: {summary['elastic_active_rows']}. Checksum: <code>{escape(summary['actions_checksum'])}</code>.</p><input id="search" type="search" placeholder="Поиск по артикулу, названию или группе"><div class="table"><table><thead><tr>{''.join(f'<th>{escape(label)}</th>' for label in ['Этап','Группа','offer_id','Товар','Штук','Остаток','Заказы 30д','Elastic','Цена акции','min (контроль)','price сейчас','price цель','old сейчас','old цель','Риск'])}</tr></thead><tbody>{''.join(table_rows)}</tbody></table></div></section>
+</style></head><body><main><h1>Ozon: базовые цены и цены со скидкой</h1><div class="meta">{escape(summary['run_id'])} · dry-run · изменений в Ozon нет</div>
+<section class="band"><div class="metrics"><div class="metric">Всего со старыми ценами<b>{summary['eligible_stale_rows']}</b></div><div class="metric">В текущем пакете<b>{summary['selected_rows']}</b></div><div class="metric">Из них в Elastic<b>{summary['elastic_stale_selected']}</b></div><div class="metric">Останется после пакета<b>{summary['remaining_stale_after_plan']}</b></div></div><p class="warning"><b>Минимальная цена не меняется.</b> План обновляет только цену со скидкой (<code>price</code>) и базовую зачеркнутую цену (<code>old_price</code>). Участие в Elastic также не меняется.</p></section>
+<section class="band"><h2>Состав пакета</h2><p>Период продаж: {escape(summary['sales_period'])}. Текущих участников Elastic: {summary['elastic_active_rows']}. Checksum: <code>{escape(summary['actions_checksum'])}</code>.</p><input id="search" type="search" placeholder="Поиск по артикулу, названию или группе"><div class="table"><table><thead><tr>{''.join(f'<th>{escape(label)}</th>' for label in ['Этап','Группа','offer_id','Товар','Штук','Остаток','Заказы 30д','Elastic','Цена акции','Минимальная (контроль)','Со скидкой сейчас','Со скидкой цель','Базовая сейчас','Базовая цель','Риск'])}</tr></thead><tbody>{''.join(table_rows)}</tbody></table></div></section>
 <section class="band"><h2>Будущий порядок применения</h2><ol><li>Fresh drift-check цен и Elastic.</li><li>Этап A: Elastic и позывные, затем verify.</li><li>Этап B: следующая пачка, затем verify.</li><li>Любое изменение min_price, состава Elastic или цены покупателя блокирует строку и выносится на новое согласование.</li></ol></section>
 </main><script>const q=document.getElementById('search');q.addEventListener('input',()=>{{const v=q.value.toLowerCase();document.querySelectorAll('tbody tr').forEach(r=>r.hidden=!r.dataset.search.includes(v));}});</script></body></html>"""
 
@@ -599,6 +608,7 @@ def main() -> int:
         "fresh_price_rows": len(fresh_price_rows),
         "eligible_stale_rows": len(eligible),
         "selected_rows": len(selected),
+        "remaining_stale_after_plan": len(eligible) - len(selected),
         "elastic_stale_selected": sum(row["selection_group"] == "elastic_active_stale" for row in selected),
         "callsign_stale_selected": sum(row["selection_group"] == "callsign_stale" for row in selected),
         "next_batch_selected": sum(row["apply_stage"] == "B" for row in selected),

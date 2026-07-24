@@ -1991,11 +1991,16 @@ def _wb_actions_plan_for_scheme(
     current_participating = _wb_report_stat(report_stats, "current_participating")
     current_not_participating = _wb_report_stat(report_stats, "current_not_participating")
     offered_in_active_promos = _wb_report_stat(report_stats, "offered_in_active_promos")
+    offered_not_participating = _wb_report_stat(report_stats, "offered_not_participating")
+    outside_active_promos = _wb_report_stat(report_stats, "outside_active_promos")
     excluded_after = _wb_report_stat(report_stats, "excluded_after")
     not_participating_after = _wb_report_stat(report_stats, "not_participating_after")
     newly_participating_after = _wb_report_stat(report_stats, "newly_participating_after")
     target_distribution = report_stats.get("target_discount_distribution", {})
     upload_distribution = report_stats.get("upload_discount_distribution", {})
+    current_distribution = report_stats.get("current_participating_discount_distribution", {})
+    after_distribution = report_stats.get("participating_after_discount_distribution", {})
+    excluded_reasons = report_stats.get("excluded_reason_distribution", {})
     step_limited = _wb_report_stat(report_stats, "step_limited")
 
     lines = [
@@ -2013,17 +2018,28 @@ def _wb_actions_plan_for_scheme(
         f"- подходят под доступные активные акции: `{_int(offered_in_active_promos)}`",
         f"- участвуют в акциях: `{_int(current_participating)}`",
         f"- не участвуют в акциях: `{_int(current_not_participating)}`",
+        f"- из них доступны акциям, но не участвуют: `{_int(offered_not_participating)}`",
+        f"- без доступных активных акций: `{_int(outside_active_promos)}`",
         f"- проходят заданный порог {threshold}%: `{_int(eligible_after)}`",
+        "",
+        "Скидки товаров, которые сейчас участвуют:",
+        *_wb_discount_distribution_lines(current_distribution),
+        "",
+        "Что изменится:",
+        f"- исключатся из текущих акций: `{_int(excluded_after)}`",
+        *_wb_exclusion_reason_lines(excluded_reasons, threshold=str(threshold)),
+        f"- начнут участвовать: `{_int(newly_participating_after)}`",
         "",
         "После применения целевых параметров:",
         f"- останутся или будут участвовать в акциях: `{_int(eligible_after)}`",
-        f"- исключатся из текущих акций: `{_int(excluded_after)}`",
-        f"- начнут участвовать: `{_int(newly_participating_after)}`",
         f"- не будут участвовать в акциях: `{_int(not_participating_after)}`",
         f"- скидка изменится: `{_int(changed_rows)}`",
         f"- скидка останется без изменения: `{_int(summary.get('no_change'))}`",
         "",
-        "Итоговые скидки:",
+        "Скидки товаров, которые будут участвовать:",
+        *_wb_discount_distribution_lines(after_distribution),
+        "",
+        "Итоговые скидки всех товаров:",
         *_wb_discount_distribution_lines(target_distribution),
         "",
     ]
@@ -2685,7 +2701,14 @@ def _daily_report_chat_text(result: dict[str, Any]) -> str:
         "",
         "Заказы / выкупы / расходы:",
         f"- Ozon: заказы `{_int(ozon_orders_day.get('ordered_units'))}` шт. / `{_money(ozon_orders_day.get('revenue'))}`; выкупы `{_int(ozon_buyouts.get('buyout_units'))}` шт. / `{_money(ozon_buyouts.get('buyout_amount'))}`; расходы `{_money(ozon_expenses.get('total_expenses'))}`.",
-        f"- WB: заказы `{_int(wb_orders_day.get('total_orders', wb_orders_day.get('active_orders')))}` шт. / `{_money(wb_orders_day.get('amount'))}`; выкупы `{_int(wb_sales_day.get('sales_rows'))}` шт. / `{_money(wb_sales_day.get('sales_amount'))}`; расходы `{_money(wb_expenses.get('total_expenses'))}`.",
+        (
+            f"- WB: создано заказов `{_int(wb_orders_day.get('total_orders', wb_orders_day.get('active_orders')))}` шт. / "
+            f"`{_money(wb_orders_day.get('amount'))}`, из них активных `{_int(wb_orders_day.get('active_orders'))}` шт. / "
+            f"`{_money(wb_orders_day.get('active_amount'))}`, отмен `{_int(wb_orders_day.get('cancelled_orders'))}`; "
+            f"выкупы `{_int(wb_sales_day.get('sales_rows'))}` шт. / `{_money(wb_sales_day.get('sales_amount'))}`; "
+            f"текущие расходы `{_money(wb_expenses.get('total_expenses'))}`; "
+            f"корректировки/зачисления `{_money(wb_expenses.get('total_credits_and_adjustments'))}`."
+        ),
         "",
         "Отзывы и вопросы:",
         f"- Ozon требуют внимания: отзывы `{_int(ozon_comm.get('unanswered_feedbacks'))}`, вопросы `{_int(ozon_comm.get('unanswered_questions'))}`.",
@@ -2696,7 +2719,7 @@ def _daily_report_chat_text(result: dict[str, Any]) -> str:
         f"- WB: всего `{_int(wb_stocks.get('quantity_total'))}` шт., нулевой остаток `{_int(wb_stocks.get('zero_stock_count'))}` товаров.",
         "",
         "Каталог:",
-        f"- Unified: товаров `{_int(unified_catalog.get('products'))}`, связанных Ozon+WB `{_int(unified_catalog.get('confirmed_products'))}`, только Ozon `{_int(unified_catalog.get('ozon_only_products'))}`, только WB `{_int(unified_catalog.get('wb_only_products'))}`.",
+        f"- Unified: товаров `{_int(unified_catalog.get('products'))}`, связанных Ozon+WB `{_int(unified_catalog.get('both_marketplaces_products'))}`, только Ozon `{_int(unified_catalog.get('active_ozon_only_products'))}`, только WB `{_int(unified_catalog.get('active_wb_only_products'))}`.",
         "",
         "Акции:",
         f"- Ozon: активные `{_int(ozon_actions.get('active_actions'))}`, товаров участвует `{_int(ozon_actions.get('products_in_actions'))}`, не участвует `{_int(ozon_actions.get('products_not_in_actions'))}`.",
@@ -3486,6 +3509,10 @@ def _wb_actions_report_stats(csv_path: str | None) -> dict[str, Any]:
 
     target_distribution: dict[int, int] = {}
     upload_distribution: dict[int, int] = {}
+    current_participating_distribution: dict[int, int] = {}
+    participating_after_distribution: dict[int, int] = {}
+    not_participating_after_distribution: dict[int, int] = {}
+    excluded_reason_distribution: dict[str, int] = {}
     offered_in_active_promos = 0
     current_participating = 0
     eligible_after = 0
@@ -3501,14 +3528,28 @@ def _wb_actions_report_stats(csv_path: str | None) -> dict[str, Any]:
             offered_in_active_promos += 1
         if participating:
             current_participating += 1
+            if str(row.get("Текущая скидка") or "").strip():
+                current_discount = _int_value(row.get("Текущая скидка"))
+                current_participating_distribution[current_discount] = (
+                    current_participating_distribution.get(current_discount, 0) + 1
+                )
         if eligible:
             eligible_after += 1
+            target_discount = _int_value(row.get("Финальная скидка"))
+            participating_after_distribution[target_discount] = (
+                participating_after_distribution.get(target_discount, 0) + 1
+            )
             if not participating:
                 newly_participating_after += 1
         elif participating:
             excluded_after += 1
+            excluded_reason_distribution[reason] = excluded_reason_distribution.get(reason, 0) + 1
 
         target_discount = _int_value(row.get("Финальная скидка"))
+        if not eligible:
+            not_participating_after_distribution[target_discount] = (
+                not_participating_after_distribution.get(target_discount, 0) + 1
+            )
         upload_discount = _int_value(row.get("Скидка к загрузке"))
         target_distribution[target_discount] = target_distribution.get(target_discount, 0) + 1
         upload_distribution[upload_discount] = upload_distribution.get(upload_discount, 0) + 1
@@ -3520,6 +3561,8 @@ def _wb_actions_report_stats(csv_path: str | None) -> dict[str, Any]:
         "available": True,
         "total": total,
         "offered_in_active_promos": offered_in_active_promos,
+        "offered_not_participating": offered_in_active_promos - current_participating,
+        "outside_active_promos": total - offered_in_active_promos,
         "current_participating": current_participating,
         "current_not_participating": total - current_participating,
         "eligible_after": eligible_after,
@@ -3527,6 +3570,10 @@ def _wb_actions_report_stats(csv_path: str | None) -> dict[str, Any]:
         "newly_participating_after": newly_participating_after,
         "not_participating_after": total - eligible_after,
         "step_limited": step_limited,
+        "current_participating_discount_distribution": current_participating_distribution,
+        "participating_after_discount_distribution": participating_after_distribution,
+        "not_participating_after_discount_distribution": not_participating_after_distribution,
+        "excluded_reason_distribution": excluded_reason_distribution,
         "target_discount_distribution": target_distribution,
         "upload_discount_distribution": upload_distribution,
     }
@@ -3563,6 +3610,23 @@ def _wb_discount_distribution_lines(distribution: Any) -> list[str]:
     if not rows:
         return ["- нет данных"]
     return [f"- скидка {discount}%: `{count}` товаров" for discount, count in sorted(rows, reverse=True)]
+
+
+def _wb_exclusion_reason_lines(reasons: Any, *, threshold: str) -> list[str]:
+    if not isinstance(reasons, dict) or not reasons:
+        return []
+    lines: list[str] = []
+    for reason, count in sorted(reasons.items(), key=lambda item: (-_int_value(item[1]), str(item[0]))):
+        reason_text = str(reason)
+        if reason_text.startswith("скидка до порога >"):
+            label = (
+                f"требуемая скидка акции выше порога {threshold}%; "
+                "целевая скидка становится ниже требования акции"
+            )
+        else:
+            label = reason_text or "причина не указана"
+        lines.append(f"- причина снятия: {label}: `{_int_value(count)}` товаров")
+    return lines
 
 
 def _wb_latest_history_data(verify: dict[str, Any]) -> dict[str, Any]:

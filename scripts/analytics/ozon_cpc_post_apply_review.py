@@ -4,11 +4,12 @@ from __future__ import annotations
 import argparse
 import csv
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from html import escape
 import json
 from pathlib import Path
+import shutil
 from typing import Any
 
 from seller_agent.core.run_manifest import write_summary_run_manifest
@@ -162,10 +163,89 @@ def metric_table(previous: dict[str, float | int], current: dict[str, float | in
     return "".join(rows)
 
 
-def render_html(summary: dict[str, Any], products: list[dict[str, Any]]) -> str:
+def format_period(dates: list[str]) -> str:
+    if not dates:
+        return "-"
+    parsed = sorted(date.fromisoformat(value) for value in dates)
+    if len(parsed) == 1:
+        return parsed[0].strftime("%d.%m.%Y")
+    return f"{parsed[0]:%d.%m.%Y}-{parsed[-1]:%d.%m.%Y}"
+
+
+def summarize_result(summary: dict[str, Any]) -> tuple[str, str]:
     growth = summary["growth"]
+    changes = growth["changes_percent"]
+    parser_growth = summary["parser"]["growth"]
+    order_change = changes.get("orders")
+    spend_change = changes.get("spend")
+    drr = decimal_value(growth["post"]["drr_percent"])
+    position_change = parser_growth.get("average_position_change")
+    decisions = summary.get("guardrails", {}).get("growth_decision_counts", {})
+    keep_count = decisions.get("оставить текущую ставку", 0)
+    day_watch_count = decisions.get("контроль 24 часа", 0)
+
+    visibility = "Сопоставимая средняя позиция не рассчитана."
+    if position_change is not None:
+        if position_change < 0:
+            visibility = (
+                f"Средняя позиция сопоставимых пар улучшилась на "
+                f"{format_number(abs(position_change), 1)} места."
+            )
+        elif position_change > 0:
+            visibility = (
+                f"Средняя позиция сопоставимых пар ухудшилась на "
+                f"{format_number(position_change, 1)} места."
+            )
+        else:
+            visibility = "Средняя позиция сопоставимых пар не изменилась."
+
+    if order_change is not None and order_change > 5 and drr <= Decimal("8"):
+        conclusion = "Рост заказов подтверждён при приемлемой ДРР."
+        recommendation = (
+            "Сохранить текущие ставки у эффективных SKU. Точечно вынести в dry-run "
+            "только товары с расходом без заказов или ДРР выше контрольного порога."
+        )
+    elif spend_change is not None and spend_change > 5 and (order_change or 0) <= 5:
+        conclusion = "Дополнительный расход пока не дал сопоставимого роста заказов."
+        recommendation = (
+            f"Не повышать ставки повторно. Сохранить текущие ставки у {keep_count} "
+            f"эффективных SKU; {day_watch_count} товара проверить через 24 часа и "
+            "выносить в dry-run снижения только при расходе от 50 руб. без заказа."
+        )
+    elif drr <= Decimal("8"):
+        conclusion = "Когорта остаётся экономически приемлемой, но рост продаж слабый."
+        recommendation = (
+            "Сохранить текущие ставки и продолжить точечный контроль; массовое "
+            "изменение по этой выборке не обосновано."
+        )
+    else:
+        conclusion = "ДРР когорты вышла за контрольный порог."
+        recommendation = (
+            "Подготовить отдельный dry-run снижения только для убыточных SKU, "
+            "сохранив товары с заказами и приемлемой ДРР."
+        )
+    return f"{conclusion} {visibility}", recommendation
+
+
+def render_html(
+    summary: dict[str, Any],
+    products: list[dict[str, Any]],
+    reductions: list[dict[str, Any]],
+) -> str:
+    growth = summary["growth"]
+    reduction = summary["reductions"]
     parser_growth = summary["parser"]["growth"]
     parser_control = summary["parser"]["control"]
+    conclusion, recommendation = summarize_result(summary)
+    pre_period = format_period(summary["periods"]["pre"])
+    post_period = format_period(summary["periods"]["post"])
+    matched_pre_period = format_period(summary["periods"].get("matched_pre", []))
+    position_change = parser_growth.get("average_position_change")
+    position_tone = "good" if position_change is not None and position_change < 0 else "bad"
+    position_value = (
+        f"{format_number(parser_growth['average_previous_position'], 1)} -> "
+        f"{format_number(parser_growth['average_current_position'], 1)}"
+    )
     product_rows = []
     for row in products:
         product_rows.append(
@@ -179,6 +259,20 @@ def render_html(summary: dict[str, Any], products: list[dict[str, Any]]) -> str:
             f"<td>{escape(row['decision'])}</td>"
             "</tr>"
         )
+    reduction_rows = []
+    for row in reductions:
+        reduction_rows.append(
+            "<tr>"
+            f"<td><code>{escape(row['sku'])}</code><br><small>{escape(row['title'])}</small></td>"
+            f"<td>{format_number(row['old_bid'], 2)} -> {format_number(row['new_bid'], 2)}</td>"
+            f"<td>{format_number(row['post_spend'], 2)}</td>"
+            f"<td>{format_number(row['post_orders'])}</td>"
+            f"<td>{format_number(row['post_drr_percent'], 2)}</td>"
+            f"<td>{format_number(row['best_previous'])} -> {format_number(row['best_current'])}</td>"
+            f"<td>{escape(row['decision'])}</td>"
+            "</tr>"
+        )
+    decision_counts = summary["guardrails"]["growth_decision_counts"]
     return f"""<!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Ozon CPC: контроль после изменения ставок</title>
@@ -194,23 +288,31 @@ table{{width:100%;border-collapse:collapse}}th,td{{padding:8px;border-bottom:1px
 .scroll{{overflow-x:auto}}code{{font-size:12px}}ul{{margin:8px 0;padding-left:20px}}
 @media(max-width:760px){{main{{padding:10px}}.grid{{grid-template-columns:1fr 1fr}}h1{{font-size:21px}}table{{min-width:760px}}}}
 </style></head><body><main>
-<div class="band"><h1>Ozon CPC: первый контроль после изменения ставок</h1>
+<div class="band"><h1>Ozon CPC: контроль после изменения ставок</h1>
 <div>Run: <code>{escape(summary['run_id'])}</code> · read-only · сформирован {escape(summary['generated_at'])}</div></div>
-<section class="section"><h2>Итог</h2><p><b>Позиции улучшились, но рост продаж пока не подтвержден.</b> У 63 усиленных товаров средняя позиция сопоставимых пар стала лучше на <b>{format_number(abs(parser_growth['average_position_change']), 1)}</b> места, однако за первые два календарных дня расход вырос на <b>48,8%</b>, а число заказов снизилось на <b>3,2%</b>. ДРР остается низкой — <b>{format_number(growth['post']['drr_percent'], 2)}%</b>, поэтому массово откатывать ставки рано, но повышать их еще раз нельзя.</p></section>
+<section class="section"><h2>Итог</h2><p><b>{escape(conclusion)}</b></p><p>{escape(recommendation)}</p></section>
 <div class="grid">
-<div class="kpi">Усилено товаров<b>63</b><span class="muted">ставки +48-100%</span></div>
-<div class="kpi">Видимость<b class="good">34 -> 38</b><span class="muted">товаров в 30 запросах</span></div>
-<div class="kpi">Средняя позиция<b class="good">285,7 -> 251,2</b><span class="muted">62 сопоставимые пары</span></div>
+<div class="kpi">Усилено товаров<b>{growth['products']}</b><span class="muted">точная когорта apply</span></div>
+<div class="kpi">Видимость<b>{parser_growth['previous_visible_products']} -> {parser_growth['current_visible_products']}</b><span class="muted">товаров в {summary['parser']['query_count']} запросах</span></div>
+<div class="kpi">Средняя позиция<b class="{position_tone}">{position_value}</b><span class="muted">{parser_growth['intersection_pairs']} сопоставимых пар</span></div>
 <div class="kpi">ДРР после<b>{format_number(growth['post']['drr_percent'], 2)}%</b><span class="muted">цель портфеля не выше 8%</span></div>
 </div>
-<section class="section"><h2>Эффективность 63 повышенных ставок</h2><p class="muted">До: 17-18 июля. После: 19-20 июля; 19 июля включает часы до apply, 20 июля неполный на момент сбора. Одновременно изменялись цены, поэтому причинность CPC отдельно не доказана.</p><div class="scroll"><table><thead><tr><th>Метрика</th><th>До</th><th>После</th><th>Изменение</th></tr></thead><tbody>{metric_table(growth['pre'], growth['post'])}</tbody></table></div></section>
-<section class="section"><h2>Позиции 19 -> 20 июля</h2>
-<ul><li>Группа повышенных ставок: улучшились лучшие позиции у <b>{parser_growth['product_status_counts'].get('best_improved',0)}</b> товаров, ухудшились у <b>{parser_growth['product_status_counts'].get('best_declined',0)}</b>, впервые появились <b>{parser_growth['product_status_counts'].get('new_visible',0)}</b>, полностью потерянных нет.</li>
+<div class="grid">
+<div class="kpi">Оставить ставку<b class="good">{decision_counts.get('оставить текущую ставку', 0)}</b><span class="muted">есть заказы, ДРР до 8%</span></div>
+<div class="kpi">Контроль 24 часа<b class="warn">{decision_counts.get('контроль 24 часа', 0)}</b><span class="muted">расход 30-50 руб. без заказа</span></div>
+<div class="kpi">Позиция и конверсия<b>{decision_counts.get('контроль позиции и конверсии', 0)}</b><span class="muted">позиция ухудшилась, заказов нет</span></div>
+<div class="kpi">Недостаточно данных<b>{decision_counts.get('наблюдать', 0)}</b><span class="muted">без немедленного изменения</span></div>
+</div>
+<section class="section"><h2>Эффективность {growth['products']} повышенных ставок</h2><p class="muted">До: {pre_period}. После: {post_period}. День apply исключён, оба окна состоят из полных календарных дней. Одновременно изменялись цены, поэтому причинность CPC отдельно не доказана.</p><div class="scroll"><table><thead><tr><th>Метрика</th><th>До</th><th>После</th><th>Изменение</th></tr></thead><tbody>{metric_table(growth['pre'], growth['post'])}</tbody></table></div></section>
+<section class="section"><h2>Контроль по тем же дням недели</h2><p class="muted">{matched_pre_period} против {post_period}: понедельник-среда предыдущей и текущей недели.</p><div class="scroll"><table><thead><tr><th>Метрика</th><th>Предыдущая неделя</th><th>После</th><th>Изменение</th></tr></thead><tbody>{metric_table(growth['matched_pre'], growth['post'])}</tbody></table></div></section>
+<section class="section"><h2>Позиции {escape(summary['parser']['previous_date'])} -> {escape(summary['parser']['current_date'])}</h2>
+<ul><li>Группа повышенных ставок: улучшились лучшие позиции у <b>{parser_growth['product_status_counts'].get('best_improved',0)}</b> товаров, ухудшились у <b>{parser_growth['product_status_counts'].get('best_declined',0)}</b>, впервые появились <b>{parser_growth['product_status_counts'].get('new_visible',0)}</b>, полностью потеряны у <b>{parser_growth['product_status_counts'].get('lost_all',0)}</b>.</li>
 <li>По парам товар + запрос: <b>{parser_growth['pair_status_counts'].get('improved', 0)}</b> улучшений и <b>{parser_growth['pair_status_counts'].get('new', 0)}</b> новых против <b>{parser_growth['pair_status_counts'].get('declined', 0)}</b> ухудшений и <b>{parser_growth['pair_status_counts'].get('lost', 0)}</b> потерь.</li>
 <li>Контрольная группа без повышения: видимых товаров стало <b>{parser_control['previous_visible_products']} -> {parser_control['current_visible_products']}</b>, средняя сопоставимая позиция ухудшилась <b>{format_number(parser_control['average_previous_position'],1)} -> {format_number(parser_control['average_current_position'],1)}</b>.</li></ul></section>
-<section class="section"><h2>Что делать</h2><ol><li><b>Не повышать ставки повторно.</b> Сохранить текущие значения еще на два полных дня.</li><li>Утром 23 июля повторить контроль по трем полным дням 20-22 июля и сравнить с 17-19 июля с учетом смешанного дня apply.</li><li><code>2402042487</code>: расход {format_number(summary['guardrails']['near_stop_spend'],2)} руб. без заказа — на следующем сборе при превышении 50 руб. оставить кандидатом на возврат ставки или исключение после отдельного dry-run.</li><li>Не снижать только из-за нулевых заказов товары с сильным ростом позиции до накопления трех полных дней; сначала проверить конверсию карточки.</li></ol></section>
-<section class="section"><h2>63 товара: результат и контроль</h2><div class="scroll"><table><thead><tr><th>SKU / товар</th><th>Ставка</th><th>Расход после</th><th>Заказы</th><th>ДРР</th><th>Лучшая позиция</th><th>Решение</th></tr></thead><tbody>{''.join(product_rows)}</tbody></table></div></section>
-<section class="section"><h2>Источники и ограничения</h2><ul><li>Ozon Performance API: статистика до 20.07.2026, 395 активных товаров CPC; сегодняшний день неполный.</li><li>Apply: <code>ozon_price_cpc_growth_apply_20260719T092740</code>, 63 повышения и 7 снижений ставок.</li><li>Parser Data API: <code>/warehouse/ozon/aggregates/store-period-comparison</code>, seller_slug <code>vital-shevron</code>, даты 19.07 -> 20.07, warehouse {escape(summary['parser']['warehouse_built_at_utc'])}, 354 строки, complete=true.</li><li>Срез парсера 19 июля сделан до apply, 20 июля — после; это ранний совместный сигнал цены и рекламы, не доказательство причинности.</li></ul></section>
+<section class="section"><h2>Что делать</h2><ol><li><b>{escape(recommendation)}</b></li><li>Любое снижение или исключение оформить отдельным dry-run; этот отчёт ничего в Ozon не меняет.</li><li>Через семь полных дней после apply повторить устойчивый контроль, чтобы отделить краткосрочную волатильность выдачи.</li></ol></section>
+<section class="section"><h2>{growth['products']} повышенных ставок: результат по SKU</h2><div class="scroll"><table><thead><tr><th>SKU / товар</th><th>Ставка</th><th>Расход после</th><th>Заказы</th><th>ДРР</th><th>Лучшая позиция</th><th>Решение</th></tr></thead><tbody>{''.join(product_rows)}</tbody></table></div></section>
+<section class="section"><h2>{reduction['products']} сниженных ставок: проверка экономии</h2><div class="scroll"><table><thead><tr><th>SKU / товар</th><th>Ставка</th><th>Расход после</th><th>Заказы</th><th>ДРР</th><th>Лучшая позиция</th><th>Решение</th></tr></thead><tbody>{''.join(reduction_rows)}</tbody></table></div></section>
+<section class="section"><h2>Источники и ограничения</h2><ul><li>Ozon Performance API: статистика по полным дням до {escape(summary['performance_date_to'])}, источник <code>{escape(summary['performance_run_id'])}</code>.</li><li>Apply: <code>{escape(summary['source_apply_run_id'])}</code>, {growth['products']} повышения и {reduction['products']} снижений ставок.</li><li>Parser Data API: <code>/warehouse/ozon/aggregates/store-period-comparison</code>, seller_slug <code>vital-shevron</code>, даты {escape(summary['parser']['previous_date'])} -> {escape(summary['parser']['current_date'])}, warehouse {escape(summary['parser']['warehouse_built_at_utc'])}, {summary['parser']['returned_rows']} строк, complete={str(summary['parser']['complete']).lower()}.</li><li>Парсер охватывает {summary['parser']['query_count']} запросов и глубину до 500 позиций, а не всю поисковую выдачу Ozon. Одновременно менялись цены и CPC, поэтому результат является совместным эффектом.</li></ul></section>
 </main></body></html>"""
 
 
@@ -220,11 +322,18 @@ def main() -> int:
     parser.add_argument("--bid-apply-csv", type=Path, required=True)
     parser.add_argument("--parser-json", type=Path, required=True)
     parser.add_argument("--pre-dates", required=True)
+    parser.add_argument("--matched-pre-dates", required=True)
     parser.add_argument("--post-dates", required=True)
     parser.add_argument("--run-id", required=True)
+    parser.add_argument("--performance-run-id", required=True)
+    parser.add_argument("--source-apply-run-id", required=True)
+    parser.add_argument("--output-date", help="Run directory date, YYYY-MM-DD")
     args = parser.parse_args()
 
     pre_dates = {item.strip() for item in args.pre_dates.split(",") if item.strip()}
+    matched_pre_dates = {
+        item.strip() for item in args.matched_pre_dates.split(",") if item.strip()
+    }
     post_dates = {item.strip() for item in args.post_dates.split(",") if item.strip()}
     daily_rows = read_csv(args.daily_csv)
     bid_rows = read_csv(args.bid_apply_csv)
@@ -243,77 +352,100 @@ def main() -> int:
         return metrics([row for row in daily_rows if row.get("sku") in scope and row.get("date") in dates])
 
     growth_pre = cohort_metrics(growth_skus, pre_dates)
+    growth_matched_pre = cohort_metrics(growth_skus, matched_pre_dates)
     growth_post = cohort_metrics(growth_skus, post_dates)
     reduction_pre = cohort_metrics(reduction_skus, pre_dates)
+    reduction_matched_pre = cohort_metrics(reduction_skus, matched_pre_dates)
     reduction_post = cohort_metrics(reduction_skus, post_dates)
 
     post_by_sku: dict[str, list[dict[str, str]]] = defaultdict(list)
     for row in daily_rows:
-        if row.get("sku") in growth_skus and row.get("date") in post_dates:
+        if row.get("sku") in growth_skus | reduction_skus and row.get("date") in post_dates:
             post_by_sku[row["sku"]].append(row)
 
-    products = []
-    for bid in growth_rows:
+    def product_result(bid: dict[str, str], *, increased: bool) -> dict[str, Any]:
         sku = bid["sku"]
         post = metrics(post_by_sku.get(sku, []))
         movement = movement_for_product(parser_by_sku.get(sku, []))
-        if post["orders"] == 0 and post["spend"] >= Decimal("50"):
-            decision = "порог 50 руб.: review снижения/исключения"
+        if not increased and post["orders"] >= 1 and post["drr_percent"] <= Decimal("8"):
+            decision = "снижение эффективно: оставить"
+        elif not increased and post["orders"] == 0 and post["spend"] < Decimal("20"):
+            decision = "экономия подтверждена, наблюдать продажи"
+        elif post["orders"] == 0 and post["spend"] >= Decimal("50"):
+            decision = "кандидат на dry-run снижения/исключения"
+        elif post["spend"] >= Decimal("50") and post["drr_percent"] > Decimal("12"):
+            decision = "высокая ДРР: кандидат на dry-run снижения"
         elif post["orders"] == 0 and post["spend"] >= Decimal("30"):
             decision = "контроль 24 часа"
-        elif post["orders"] >= 2 and movement["status"] in {"best_improved", "new_visible"}:
-            decision = "оставить"
+        elif post["orders"] >= 1 and post["drr_percent"] <= Decimal("8"):
+            decision = "оставить текущую ставку"
         elif post["orders"] == 0 and movement["status"] == "best_declined":
             decision = "контроль позиции и конверсии"
         else:
-            decision = "наблюдать до 3 полных дней"
-        products.append(
-            {
-                "sku": sku,
-                "title": bid.get("title") or "",
-                "old_bid": float(decimal_value(bid.get("current_bid"))),
-                "new_bid": float(decimal_value(bid.get("target_bid"))),
-                "post_spend": round(float(post["spend"]), 2),
-                "post_orders": int(post["orders"]),
-                "post_revenue": round(float(post["orders_money"]), 2),
-                "post_drr_percent": round(float(post["drr_percent"]), 2),
-                "best_previous": movement["best_previous"],
-                "best_current": movement["best_current"],
-                "best_delta": movement["best_delta"],
-                "movement_status": movement["status"],
-                "decision": decision,
-            }
-        )
+            decision = "наблюдать"
+        return {
+            "sku": sku,
+            "title": bid.get("title") or "",
+            "old_bid": float(decimal_value(bid.get("current_bid"))),
+            "new_bid": float(decimal_value(bid.get("target_bid"))),
+            "post_spend": round(float(post["spend"]), 2),
+            "post_orders": int(post["orders"]),
+            "post_revenue": round(float(post["orders_money"]), 2),
+            "post_drr_percent": round(float(post["drr_percent"]), 2),
+            "best_previous": movement["best_previous"],
+            "best_current": movement["best_current"],
+            "best_delta": movement["best_delta"],
+            "movement_status": movement["status"],
+            "decision": decision,
+        }
+
+    products = [product_result(bid, increased=True) for bid in growth_rows]
+    reductions = [product_result(bid, increased=False) for bid in reduction_rows]
     products.sort(key=lambda row: (-row["post_spend"], row["sku"]))
+    reductions.sort(key=lambda row: (-row["post_spend"], row["sku"]))
 
     growth_parser = parser_group_metrics(growth_skus, parser_by_sku)
-    control_parser = parser_group_metrics(set(parser_by_sku) - growth_skus, parser_by_sku)
-    reduction_parser = parser_group_metrics(reduction_skus, parser_by_sku)
-    near_stop = max(
-        (row for row in products if row["post_orders"] == 0),
-        key=lambda row: row["post_spend"],
+    control_parser = parser_group_metrics(
+        set(parser_by_sku) - growth_skus - reduction_skus,
+        parser_by_sku,
     )
+    reduction_parser = parser_group_metrics(reduction_skus, parser_by_sku)
+    zero_order_products = [row for row in products if row["post_orders"] == 0]
+    near_stop = max(zero_order_products, key=lambda row: row["post_spend"]) if zero_order_products else None
     generated_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    output_date = args.output_date or datetime.now().astimezone().date().isoformat()
     summary = {
         "run_id": args.run_id,
         "generated_at": generated_at,
         "mode": "read_only",
         "overall_status": "warning",
         "apply_performed": False,
-        "source_apply_run_id": "ozon_price_cpc_growth_apply_20260719T092740",
-        "periods": {"pre": sorted(pre_dates), "post": sorted(post_dates)},
+        "source_apply_run_id": args.source_apply_run_id,
+        "performance_run_id": args.performance_run_id,
+        "performance_date_to": max(post_dates),
+        "periods": {
+            "pre": sorted(pre_dates),
+            "matched_pre": sorted(matched_pre_dates),
+            "post": sorted(post_dates),
+        },
         "growth": {
             "products": len(growth_skus),
             "pre": serialize_metrics(growth_pre),
+            "matched_pre": serialize_metrics(growth_matched_pre),
             "post": serialize_metrics(growth_post),
             "changes_percent": {
                 key: percentage_change(growth_pre[key], growth_post[key])
                 for key in growth_pre
             },
+            "matched_changes_percent": {
+                key: percentage_change(growth_matched_pre[key], growth_post[key])
+                for key in growth_matched_pre
+            },
         },
         "reductions": {
             "products": len(reduction_skus),
             "pre": serialize_metrics(reduction_pre),
+            "matched_pre": serialize_metrics(reduction_matched_pre),
             "post": serialize_metrics(reduction_post),
             "changes_percent": {
                 key: percentage_change(reduction_pre[key], reduction_post[key])
@@ -332,42 +464,55 @@ def main() -> int:
             "reductions": reduction_parser,
         },
         "guardrails": {
-            "near_stop_sku": near_stop["sku"],
-            "near_stop_spend": near_stop["post_spend"],
-            "near_stop_orders": near_stop["post_orders"],
+            "near_stop_sku": near_stop["sku"] if near_stop else None,
+            "near_stop_spend": near_stop["post_spend"] if near_stop else 0,
+            "near_stop_orders": near_stop["post_orders"] if near_stop else 0,
+            "growth_decision_counts": dict(Counter(row["decision"] for row in products)),
+            "reduction_decision_counts": dict(Counter(row["decision"] for row in reductions)),
         },
         "limitations": [
-            "19 July contains hours before the 09:27 MSK apply; 20 July was incomplete at collection time.",
+            "The apply day and the current partial day are excluded from the primary comparison.",
             "Prices and CPC bids changed in one sequence, so the isolated causal effect of bids cannot be confirmed.",
             "Parser visibility covers 30 collected queries and top 500 positions, not the complete Ozon search universe.",
         ],
     }
 
-    run_dir = DATA_DIR / "runs" / "2026-07-20" / args.run_id
+    run_dir = DATA_DIR / "runs" / output_date / args.run_id
     processed_dir = run_dir / "processed"
+    raw_dir = run_dir / "raw"
     processed_dir.mkdir(parents=True, exist_ok=True)
+    raw_dir.mkdir(parents=True, exist_ok=True)
     with (processed_dir / "growth_products.csv").open("w", encoding="utf-8-sig", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(products[0]))
         writer.writeheader()
         writer.writerows(products)
+    with (processed_dir / "reduced_products.csv").open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(reductions[0]))
+        writer.writeheader()
+        writer.writerows(reductions)
+    shutil.copy2(args.parser_json, raw_dir / "parser_store_period_comparison.json")
     (run_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
-    (run_dir / "report.html").write_text(render_html(summary, products), encoding="utf-8")
+    (run_dir / "report.html").write_text(
+        render_html(summary, products, reductions),
+        encoding="utf-8",
+    )
+    conclusion, recommendation = summarize_result(summary)
+    growth_change = summary["growth"]["changes_percent"]
     markdown = f"""# Ozon CPC: контроль после изменения ставок
 
-Итог: позиции 63 усиленных товаров улучшились, но рост продаж пока не подтвержден.
+Итог: {conclusion}
 
-- период до: `17-18.07.2026`;
-- ранний период после: `19-20.07.2026`;
-- расход: `{growth_pre['spend']:.2f} -> {growth_post['spend']:.2f}` руб. (`+48,8%`);
-- заказы: `{int(growth_pre['orders'])} -> {int(growth_post['orders'])}` (`-3,2%`);
+- период до: `{format_period(sorted(pre_dates))}`;
+- те же дни недели до: `{format_period(sorted(matched_pre_dates))}`;
+- период после: `{format_period(sorted(post_dates))}`;
+- расход: `{growth_pre['spend']:.2f} -> {growth_post['spend']:.2f}` руб. (`{growth_change['spend']:+.1f}%`);
+- заказы: `{int(growth_pre['orders'])} -> {int(growth_post['orders'])}` (`{growth_change['orders']:+.1f}%`);
 - средний CPC: `{growth_pre['avg_cpc']:.2f} -> {growth_post['avg_cpc']:.2f}` руб.;
 - ДРР: `{growth_pre['drr_percent']:.2f}% -> {growth_post['drr_percent']:.2f}%`;
 - видимые товары: `{growth_parser['previous_visible_products']} -> {growth_parser['current_visible_products']}`;
 - средняя позиция сопоставимых пар: `{growth_parser['average_previous_position']} -> {growth_parser['average_current_position']}`.
 
-Рекомендация: ставки повторно не повышать и не откатывать массово. Повторить
-контроль утром 23 июля по трем полным дням. SKU `{near_stop['sku']}` почти достиг
-порога расхода 50 руб. без заказа и требует отдельного review при превышении.
+Рекомендация: {recommendation}
 
 Режим read-only. Цены, ставки, кампании и карточки не изменялись.
 """
@@ -377,6 +522,8 @@ def main() -> int:
         "summary_markdown": str(run_dir / "summary.md"),
         "summary": str(run_dir / "summary.json"),
         "products": str(processed_dir / "growth_products.csv"),
+        "reductions": str(processed_dir / "reduced_products.csv"),
+        "parser_snapshot": str(raw_dir / "parser_store_period_comparison.json"),
     }
     summary["artifacts"].update(
         write_summary_run_manifest(
@@ -390,6 +537,7 @@ def main() -> int:
             inputs={
                 "source_apply_run_id": summary["source_apply_run_id"],
                 "pre_dates": sorted(pre_dates),
+                "matched_pre_dates": sorted(matched_pre_dates),
                 "post_dates": sorted(post_dates),
                 "parser_previous_date": parser_payload.get("previous_date"),
                 "parser_current_date": parser_payload.get("current_date"),

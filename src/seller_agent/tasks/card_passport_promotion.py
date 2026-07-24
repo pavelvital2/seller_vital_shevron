@@ -14,8 +14,16 @@ OWNER_APPROVED_PREFIX = "owner_approved"
 WB_DEPARTMENTAL_MEDIA_POLICY_STATUSES = {
     "allowed_verified",
     "blocked_pending_watermarked_assets",
+    "no_media_update_required",
     "not_applicable",
 }
+NO_MEDIA_UPDATE_ACTIONS = {
+    "do_not_touch",
+    "keep_current",
+    "keep_current_no_upload",
+    "no_media_upload",
+}
+NO_WB_MEDIA_UPDATE_STATUSES = {"no_media_update_required", "not_applicable"}
 
 
 def _read_json(path: Path) -> Any:
@@ -166,6 +174,16 @@ def _marketplace_photo_set(
         if position:
             result.append({"position": position, "source": f"{marketplace.upper()} {position}"})
     return result
+
+
+def _photo_set_requests_upload(photo_set: list[dict[str, Any]]) -> bool:
+    if not photo_set:
+        return False
+    for row in photo_set:
+        action = _normalize_text(row.get("action")).lower()
+        if action not in NO_MEDIA_UPDATE_ACTIONS:
+            return True
+    return False
 
 
 def _media_assets(audit: dict[str, Any], proposed: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str]]:
@@ -494,7 +512,7 @@ def _wb_write_constraints(audit: dict[str, Any], proposed: dict[str, Any]) -> di
                 "only_if_current_not_true",
             ),
         }
-    if media_status == "not_applicable":
+    if media_status in NO_WB_MEDIA_UPDATE_STATUSES:
         constraints["media"] = {
             "action": "keep_current",
             "include_in_write_payload": False,
@@ -570,8 +588,18 @@ def build_passport_from_audit(audit: dict[str, Any], audit_path: Path) -> tuple[
     target_marketplace_photo_set = _target_photo_set(audit, proposed)
     target_ozon_photo_set = _marketplace_photo_set(audit, proposed, "ozon")
     target_wb_photo_set = _marketplace_photo_set(audit, proposed, "wb")
+    wb_media_update_requested = _photo_set_requests_upload(
+        target_marketplace_photo_set
+    ) or _photo_set_requests_upload(target_wb_photo_set)
+    wb_media_status = _normalize_text(
+        _get_nested(audit, "media", "wb_departmental_symbol_policy", "media_apply_status")
+    )
+    if wb_media_status in NO_WB_MEDIA_UPDATE_STATUSES and not wb_media_update_requested:
+        media_assets = []
+        target_marketplace_photo_set = []
+        target_wb_photo_set = []
     dangerous_actions = ["card_content_update", "seller_sku_update"]
-    if media_assets or target_marketplace_photo_set or target_wb_photo_set:
+    if media_assets or wb_media_update_requested:
         dangerous_actions.append("wb_media_update")
     if proposed.get("future_ozon_create"):
         dangerous_actions.append("ozon_card_create")
@@ -585,7 +613,11 @@ def build_passport_from_audit(audit: dict[str, Any], audit_path: Path) -> tuple[
             "approved_at": approved_at,
             "approved_by": _first_existing(owner_review.get("approved_by"), "owner_telegram_confirmation"),
             "source_audit_id": str(audit_path.parent.relative_to(audit_path.parents[2])) if len(audit_path.parents) > 2 else audit_path.parent.name,
-            "source_review_html": _first_existing(owner_review.get("final_review_html_path"), owner_review.get("submitted_html_path")),
+            "source_review_html": _first_existing(
+                owner_review.get("final_review_html_path"),
+                owner_review.get("submitted_html_path"),
+                owner_review.get("html_path"),
+            ),
             "change_notes": "Promoted from owner-approved Layer 2 audit by штатный passport promotion command.",
             "owner_corrections": owner_review.get("corrections") or owner_review.get("owner_corrections") or [],
             "marketplace_apply": {"status": "not_applied"},

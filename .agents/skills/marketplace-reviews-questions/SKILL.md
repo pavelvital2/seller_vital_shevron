@@ -60,6 +60,9 @@ description: "Use for Ozon/Wildberries reviews and questions workflows: read-onl
   `scripts/notifications/wb_news_readonly.js`; report actual rows and important
   rows from that script only. Do not invent unread counts, and do not mark WB
   notifications read until a confirmed write route exists.
+- Treat WB incident news about warehouses, supply redirection, returns,
+  acceptance, stock, disposal and seller compensation as important even when
+  the title does not contain older generic tariff/logistics keywords.
 - Ozon `/api/v2/review/detail` is not read-only in practice: on 2026-07-18 it
   changed three media reviews from `NOT_VIEWED` to `VIEWED`. Use
   `scripts/reviews/ozon_review_media_detail_cdp.js` only after owner approval

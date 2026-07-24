@@ -9,6 +9,7 @@ from seller_agent.tasks.daily_morning_report import (
     _pending_packages,
     _recommendations_summary,
     _summarize_wb_analytics_stocks,
+    _summarize_wb_finance_expenses,
     _summarize_wb_orders,
     _summarize_wb_sales,
     latest_run_dirs,
@@ -598,6 +599,9 @@ def test_daily_morning_report_seller_v3_uses_new_template(tmp_path: Path, monkey
                 }
             ]
 
+        def fetch_acquiring_reports(self, *, date_from: str, date_to: str, limit: int = 1000):
+            return []
+
     class FakeWbPromotionAdapter:
         def __init__(self, credentials):
             self.credentials = credentials
@@ -680,7 +684,40 @@ def test_daily_morning_report_seller_v3_uses_new_template(tmp_path: Path, monkey
     assert "| Расходы всего, ₽ | 350 ₽ | 230 ₽ |" in report_text
     assert "| Отзывы за период 00:00-23:59 | 1 | 2 |" in report_text
     assert "| Товаров участвует | 8 | 7 |" in report_text
-    assert "| Товаров участвует | 8 | 7 |" in report_text
     assert "| WB-артикулы без строки в источнике остатков | - | 1 |" in report_text
     assert "пакеты на согласование" in report_text
     assert "| Есть текущие поставки | да | да |" in report_text
+
+
+def test_wb_finance_expenses_separates_credit_from_current_expenses() -> None:
+    result = _summarize_wb_finance_expenses(
+        reports=[
+            {
+                "reportId": 1,
+                "retailAmountSum": "4410",
+                "forPaySum": "3801.93",
+                "deliveryServiceSum": "1006.82",
+                "paidStorageSum": "607.32",
+                "deductionSum": "-21640.68",
+                "paymentSchedule": "195.65",
+                "bankPaymentSum": "23632.82",
+            },
+            {
+                "reportId": 2,
+                "retailAmountSum": "313.27",
+                "forPaySum": "211.15",
+                "deliveryServiceSum": "60.99",
+                "bankPaymentSum": "150.16",
+            },
+        ],
+        acquiring_reports=[],
+        ad_spend=275.08,
+    )
+
+    assert result["total_expenses"] == 2856.05
+    assert result["net_after_expenses"] == 1867.22
+    assert result["total_credits_and_adjustments"] == 21640.68
+    assert result["cash_after_adjustments_and_ads"] == 23507.9
+    assert result["bank_payment_reconciliation_delta"] == 0.0
+    assert result["expenses"]["deductions"] == 0.0
+    assert result["credits_and_adjustments"]["deductions_credit"] == 21640.68

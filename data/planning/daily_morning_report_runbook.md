@@ -177,7 +177,19 @@ Telegram-вывод ежедневного отчета строить по об
   `/api/finance/v1/sales-reports/list` с `period=daily`; использовать поля
   `retailAmountSum`, `forPaySum`, `deliveryServiceSum`, `paidStorageSum`,
   `paidAcceptanceSum`, `deductionSum`, `penaltySum`,
-  `additionalPaymentSum`, `cashback*`, `bankPaymentSum`;
+  `additionalPaymentSum`, `cashback*`, `paymentSchedule`, `bankPaymentSum`;
+- издержки WB на приём платежей проверять отдельно через
+  `/api/finance/v1/acquiring/list`, суммируя `acquiringFeeSum` и
+  `acquiringFeeVatSum`;
+- WB-расходы считать суммой положительных расходных статей, а не формулой
+  `max(0, retailAmountSum - bankPaymentSum)`: `bankPaymentSum` может включать
+  корректировки и зачисления за другие расчёты;
+- отрицательные `deductionSum`, `cashback*`, `paymentSchedule` и другие
+  отрицательные удержания не вычитать из расходов; показывать их отдельным
+  блоком `корректировки/зачисления`;
+- отдельно выводить две суммы: `после текущих расходов` =
+  `retailAmountSum - положительные расходы - реклама`, и денежное начисление с
+  корректировками = `bankPaymentSum - издержки приема платежей - реклама`;
 - WB рекламу за вчера брать отдельно из Promotion API `/adv/v3/fullstats`,
   поле `sum`; добавлять как рекламный расход отдельно от отчета реализации и
   явно писать, что рекламный расход не сверен как часть `bankPaymentSum`;
@@ -214,6 +226,31 @@ Telegram-вывод ежедневного отчета строить по об
 - Main Reports: `https://dev.wildberries.ru/docs/openapi/reports`;
 - Financial Reports: `https://dev.wildberries.ru/docs/openapi/financial-reports-and-accounting`;
 - Promotion API: `https://dev.wildberries.ru/docs/openapi/promotion`.
+
+## Recovery расходов WB 2026-07-23
+
+В отчёте за `2026-07-22` расходы WB ошибочно показывались как `275,08 ₽`.
+Причина: код применял `max(0, retailAmountSum - bankPaymentSum)`; при
+`bankPaymentSum=23 782,98 ₽` и реализации `4 723,27 ₽` расходы площадки
+обнулились из-за отрицательного `deductionSum=-21 640,68 ₽`.
+
+Исправленная сверка по двум частям ежедневного отчёта:
+
+- реализация: `4 723,27 ₽`;
+- комиссия/удержание до логистики: `710,19 ₽`;
+- логистика: `1 067,81 ₽`;
+- хранение: `607,32 ₽`;
+- удержание по графику платежей: `195,65 ₽`;
+- реклама: `275,08 ₽`;
+- издержки на приём платежей: `0 ₽` по
+  `/api/finance/v1/acquiring/list`;
+- текущие расходы: `2 856,05 ₽`;
+- после текущих расходов: `1 867,22 ₽`;
+- корректировка/зачисление по отрицательному удержанию: `21 640,68 ₽`;
+- денежное начисление с корректировкой после рекламы: `23 507,90 ₽`.
+
+Регрессионная проверка обязана подтверждать, что отрицательное удержание не
+обнуляет комиссию, логистику, хранение и другие положительные расходы.
 
 ## Recovery неполного отчета 2026-07-18
 

@@ -6,12 +6,23 @@ from pathlib import Path
 from seller_agent.config import AppCredentials, OzonSellerCredentials
 from seller_agent.tasks import inbox_workflow
 from seller_agent.tasks.inbox_workflow import (
+    IMPORTANT_NOTIFICATION_RE,
     _apply_ozon_messenger,
     _build_ozon_report,
     _build_wb_report,
     _classify_messenger_action,
     _collect_ozon_messenger_actions,
 )
+
+
+def test_wb_warehouse_incident_news_is_classified_as_important() -> None:
+    titles = [
+        "Собрали важное по ситуации на складах Краснодар и Невинномысск",
+        "Перенаправим текущие транзитные поставки на другие склады",
+        "О первых выплатах продавцам, чьи товары пострадали в Электростали",
+    ]
+
+    assert all(IMPORTANT_NOTIFICATION_RE.search(title) for title in titles)
 
 
 def test_wb_inbox_report_includes_product_rating_rows(tmp_path: Path) -> None:
@@ -301,6 +312,22 @@ def test_customer_question_still_gets_reply_draft() -> None:
             "is_read": False,
             "user": {"type": "Customer"},
             "data": ["Есть у вас позывной ЛЕОН"],
+        },
+        previous_message=None,
+    )
+
+    assert action["action_type"] == "send_chat_message"
+    assert "на заказ не изготавливаем" in action["draft_reply"].lower()
+
+
+def test_customer_question_with_na_zakaz_gets_reply_draft() -> None:
+    action = _classify_messenger_action(
+        chat_id="chat-1",
+        message={
+            "message_id": "m1",
+            "is_read": False,
+            "user": {"type": "Customer"},
+            "data": ["На заказ делаются шевроны?"],
         },
         previous_message=None,
     )

@@ -23,6 +23,18 @@ description: "Use for Ozon/Wildberries search query research: LK/API popular que
   next 50 queries; verify the chosen period before export.
 - Ozon search-query pages/API may have pagination, period limits and Premium
   restrictions; record limitations.
+- Confirmed 2026-07-21 for long Ozon multi-seed LK collection: arm a technical
+  warm-up request after page load before recording the first business seed.
+  Otherwise the response listener can capture the initial unfiltered table.
+  The keeper may also replace/close the page during a long run; checkpoint
+  every seed and retry by reconnecting only after the CDP guard, expected
+  profile and `Vital Shevron` store marker pass again. Do not replace the UI
+  trigger with raw in-page `fetch`: the endpoint returned `403 Failed to get
+  company ID` without the service context injected by the Ozon interface.
+  Never extract or persist auth headers to work around that response.
+- For exact-frequency tables, save a value only for an exact normalized query
+  match. An empty response is `no_data_returned`; a nonempty top-50 response
+  without the exact phrase is `not_returned_top50`, not zero demand.
 - Parser top-query passes must be checked for latest run, collection time and
   unique query count before analysis.
 - For Vital Shevron card-audit orchestration, do not make fresh card auditors
