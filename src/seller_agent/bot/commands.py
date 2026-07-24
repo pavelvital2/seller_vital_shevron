@@ -1997,10 +1997,6 @@ def _wb_actions_plan_for_scheme(
     excluded_after = _wb_report_stat(report_stats, "excluded_after")
     not_participating_after = _wb_report_stat(report_stats, "not_participating_after")
     newly_participating_after = _wb_report_stat(report_stats, "newly_participating_after")
-    unchanged_participants_over_threshold = _wb_report_stat(
-        report_stats,
-        "unchanged_participants_over_threshold",
-    )
     target_distribution = report_stats.get("target_discount_distribution", {})
     upload_distribution = report_stats.get("upload_discount_distribution", {})
     current_distribution = report_stats.get("current_participating_discount_distribution", {})
@@ -2048,18 +2044,6 @@ def _wb_actions_plan_for_scheme(
         *_wb_discount_distribution_lines(target_distribution),
         "",
     ]
-    if unchanged_participants_over_threshold:
-        lines.extend(
-            [
-                "Отдельный риск:",
-                (
-                    "- уже участвуют, скидка не меняется, но расчётное требование акции "
-                    f"выше порога: `{_int(unchanged_participants_over_threshold)}` товаров;"
-                ),
-                "- эти товары не считаются снятыми, потому что dry-run не меняет их скидку.",
-                "",
-            ]
-        )
     if step_limited:
         lines.extend(
             [
@@ -3518,6 +3502,7 @@ def _wb_actions_report_stats(csv_path: str | None) -> dict[str, Any]:
         "Статусы в файлах акций",
         "Причина",
         "Текущая скидка",
+        "Скидка до порога",
         "Финальная скидка",
         "Скидка к загрузке",
         "Осталось до целевой, п.п.",
@@ -3537,42 +3522,53 @@ def _wb_actions_report_stats(csv_path: str | None) -> dict[str, Any]:
     participating_after = 0
     excluded_after = 0
     newly_participating_after = 0
-    unchanged_participants_over_threshold = 0
     step_limited = 0
 
     for row in rows:
         reason = str(row.get("Причина") or "")
-        eligible = reason.startswith("скидка до порога <=")
-        participating = _wb_status_is_participating(str(row.get("Статусы в файлах акций") or ""))
+        offered = _int_value(row.get("Акций")) > 0
+        listed_as_participating = _wb_status_is_participating(
+            str(row.get("Статусы в файлах акций") or "")
+        )
         current_discount = _int_value(row.get("Текущая скидка"))
         target_discount = _int_value(row.get("Финальная скидка"))
+        required_discount = _optional_int_value(row.get("Скидка до порога"))
         discount_changes = current_discount != target_discount
-        if _int_value(row.get("Акций")) > 0:
+        current_qualifies = bool(
+            offered
+            and listed_as_participating
+            and required_discount is not None
+            and current_discount >= required_discount
+        )
+        target_qualifies = bool(
+            offered
+            and required_discount is not None
+            and target_discount >= required_discount
+        )
+        if offered:
             offered_in_active_promos += 1
-        if participating:
+        if current_qualifies:
             current_participating += 1
             current_participating_distribution[current_discount] = (
                 current_participating_distribution.get(current_discount, 0) + 1
             )
-        if eligible:
+        if target_qualifies:
             threshold_eligible += 1
 
-        participates_after = participating
+        participates_after = current_qualifies
         if discount_changes:
-            participates_after = eligible
+            participates_after = target_qualifies
 
         if participates_after:
             participating_after += 1
             participating_after_distribution[target_discount] = (
                 participating_after_distribution.get(target_discount, 0) + 1
             )
-            if not participating:
+            if not current_qualifies:
                 newly_participating_after += 1
-        elif participating:
+        elif current_qualifies:
             excluded_after += 1
             excluded_reason_distribution[reason] = excluded_reason_distribution.get(reason, 0) + 1
-        if participating and not eligible and not discount_changes:
-            unchanged_participants_over_threshold += 1
 
         if not participates_after:
             not_participating_after_distribution[target_discount] = (
@@ -3598,7 +3594,6 @@ def _wb_actions_report_stats(csv_path: str | None) -> dict[str, Any]:
         "excluded_after": excluded_after,
         "newly_participating_after": newly_participating_after,
         "not_participating_after": total - participating_after,
-        "unchanged_participants_over_threshold": unchanged_participants_over_threshold,
         "step_limited": step_limited,
         "current_participating_discount_distribution": current_participating_distribution,
         "participating_after_discount_distribution": participating_after_distribution,
@@ -3619,6 +3614,15 @@ def _int_value(value: Any) -> int:
         return int(float(str(value or "0").replace(" ", "").replace(",", ".")))
     except (TypeError, ValueError):
         return 0
+
+
+def _optional_int_value(value: Any) -> int | None:
+    if value is None or not str(value).strip():
+        return None
+    try:
+        return int(float(str(value).replace(" ", "").replace(",", ".")))
+    except (TypeError, ValueError):
+        return None
 
 
 def _wb_report_stat(stats: dict[str, Any], key: str) -> int | None:
