@@ -1993,9 +1993,14 @@ def _wb_actions_plan_for_scheme(
     offered_in_active_promos = _wb_report_stat(report_stats, "offered_in_active_promos")
     offered_not_participating = _wb_report_stat(report_stats, "offered_not_participating")
     outside_active_promos = _wb_report_stat(report_stats, "outside_active_promos")
+    threshold_eligible = _wb_report_stat(report_stats, "threshold_eligible")
     excluded_after = _wb_report_stat(report_stats, "excluded_after")
     not_participating_after = _wb_report_stat(report_stats, "not_participating_after")
     newly_participating_after = _wb_report_stat(report_stats, "newly_participating_after")
+    unchanged_participants_over_threshold = _wb_report_stat(
+        report_stats,
+        "unchanged_participants_over_threshold",
+    )
     target_distribution = report_stats.get("target_discount_distribution", {})
     upload_distribution = report_stats.get("upload_discount_distribution", {})
     current_distribution = report_stats.get("current_participating_discount_distribution", {})
@@ -2020,7 +2025,7 @@ def _wb_actions_plan_for_scheme(
         f"- не участвуют в акциях: `{_int(current_not_participating)}`",
         f"- из них доступны акциям, но не участвуют: `{_int(offered_not_participating)}`",
         f"- без доступных активных акций: `{_int(outside_active_promos)}`",
-        f"- проходят заданный порог {threshold}%: `{_int(eligible_after)}`",
+        f"- проходят заданный порог {threshold}%: `{_int(threshold_eligible)}`",
         "",
         "Скидки товаров, которые сейчас участвуют:",
         *_wb_discount_distribution_lines(current_distribution),
@@ -2043,6 +2048,18 @@ def _wb_actions_plan_for_scheme(
         *_wb_discount_distribution_lines(target_distribution),
         "",
     ]
+    if unchanged_participants_over_threshold:
+        lines.extend(
+            [
+                "Отдельный риск:",
+                (
+                    "- уже участвуют, скидка не меняется, но расчётное требование акции "
+                    f"выше порога: `{_int(unchanged_participants_over_threshold)}` товаров;"
+                ),
+                "- эти товары не считаются снятыми, потому что dry-run не меняет их скидку.",
+                "",
+            ]
+        )
     if step_limited:
         lines.extend(
             [
@@ -3500,6 +3517,7 @@ def _wb_actions_report_stats(csv_path: str | None) -> dict[str, Any]:
         "Акций",
         "Статусы в файлах акций",
         "Причина",
+        "Текущая скидка",
         "Финальная скидка",
         "Скидка к загрузке",
         "Осталось до целевой, п.п.",
@@ -3515,27 +3533,36 @@ def _wb_actions_report_stats(csv_path: str | None) -> dict[str, Any]:
     excluded_reason_distribution: dict[str, int] = {}
     offered_in_active_promos = 0
     current_participating = 0
-    eligible_after = 0
+    threshold_eligible = 0
+    participating_after = 0
     excluded_after = 0
     newly_participating_after = 0
+    unchanged_participants_over_threshold = 0
     step_limited = 0
 
     for row in rows:
         reason = str(row.get("Причина") or "")
         eligible = reason.startswith("скидка до порога <=")
         participating = _wb_status_is_participating(str(row.get("Статусы в файлах акций") or ""))
+        current_discount = _int_value(row.get("Текущая скидка"))
+        target_discount = _int_value(row.get("Финальная скидка"))
+        discount_changes = current_discount != target_discount
         if _int_value(row.get("Акций")) > 0:
             offered_in_active_promos += 1
         if participating:
             current_participating += 1
-            if str(row.get("Текущая скидка") or "").strip():
-                current_discount = _int_value(row.get("Текущая скидка"))
-                current_participating_distribution[current_discount] = (
-                    current_participating_distribution.get(current_discount, 0) + 1
-                )
+            current_participating_distribution[current_discount] = (
+                current_participating_distribution.get(current_discount, 0) + 1
+            )
         if eligible:
-            eligible_after += 1
-            target_discount = _int_value(row.get("Финальная скидка"))
+            threshold_eligible += 1
+
+        participates_after = participating
+        if discount_changes:
+            participates_after = eligible
+
+        if participates_after:
+            participating_after += 1
             participating_after_distribution[target_discount] = (
                 participating_after_distribution.get(target_discount, 0) + 1
             )
@@ -3544,9 +3571,10 @@ def _wb_actions_report_stats(csv_path: str | None) -> dict[str, Any]:
         elif participating:
             excluded_after += 1
             excluded_reason_distribution[reason] = excluded_reason_distribution.get(reason, 0) + 1
+        if participating and not eligible and not discount_changes:
+            unchanged_participants_over_threshold += 1
 
-        target_discount = _int_value(row.get("Финальная скидка"))
-        if not eligible:
+        if not participates_after:
             not_participating_after_distribution[target_discount] = (
                 not_participating_after_distribution.get(target_discount, 0) + 1
             )
@@ -3565,10 +3593,12 @@ def _wb_actions_report_stats(csv_path: str | None) -> dict[str, Any]:
         "outside_active_promos": total - offered_in_active_promos,
         "current_participating": current_participating,
         "current_not_participating": total - current_participating,
-        "eligible_after": eligible_after,
+        "threshold_eligible": threshold_eligible,
+        "eligible_after": participating_after,
         "excluded_after": excluded_after,
         "newly_participating_after": newly_participating_after,
-        "not_participating_after": total - eligible_after,
+        "not_participating_after": total - participating_after,
+        "unchanged_participants_over_threshold": unchanged_participants_over_threshold,
         "step_limited": step_limited,
         "current_participating_discount_distribution": current_participating_distribution,
         "participating_after_discount_distribution": participating_after_distribution,

@@ -397,6 +397,10 @@ def _wb_actions_plan_result(
     excluded_after = commands._wb_report_stat(report_stats, "excluded_after")
     newly_participating_after = commands._wb_report_stat(report_stats, "newly_participating_after")
     not_participating_after = commands._wb_report_stat(report_stats, "not_participating_after")
+    unchanged_participants_over_threshold = commands._wb_report_stat(
+        report_stats,
+        "unchanged_participants_over_threshold",
+    )
     step_limited = commands._wb_report_stat(report_stats, "step_limited")
     current_distribution = report_stats.get("current_participating_discount_distribution", {})
     after_distribution = report_stats.get("participating_after_discount_distribution", {})
@@ -444,9 +448,23 @@ def _wb_actions_plan_result(
         f"- активных акций: `{_int(summary.get('active_promos'))}`;",
         f"- будущих акций: `{_int(summary.get('future_promos'))}`;",
         f"- не достигнут целевой скидки за один безопасный upload: `{_int(step_limited)}`.",
-        "",
-        "Скидки в WB не изменялись. Полный расчёт приложен.",
     ]
+    if unchanged_participants_over_threshold:
+        lines.extend(
+            [
+                (
+                    "- уже участвуют, скидка не меняется, но расчётное требование акции "
+                    f"выше порога: `{_int(unchanged_participants_over_threshold)}`;"
+                ),
+                "- они не считаются снятыми: dry-run не меняет их скидку.",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "Скидки в WB не изменялись. Полный расчёт приложен.",
+        ]
+    )
     markup = {}
     if changed and run_id:
         rows = [[{"text": "Применить скидки", "callback_data": f"wba_apply:{run_id}"}]]

@@ -48,6 +48,12 @@ description: "Use for Ozon/Wildberries marketplace action monitoring after promo
   threshold change, count exclusions only among current participants, and
   derive target discount distribution from `Финальная скидка` separately from
   the next safe upload distribution in `Скидка к загрузке`.
+- Confirmed on 2026-07-24: do not forecast a WB action exit or entry when the
+  dry-run leaves the product discount unchanged. Preserve the fresh export
+  participation status for no-op rows. Apply threshold-based transition logic
+  only to rows whose target discount differs from the current discount; show
+  unchanged current participants above the threshold as a risk, not as a
+  guaranteed removal.
 - WB action dry-run messages from Job Worker must show current participant
   count and discount distribution, exclusion count grouped by reason, and
   post-apply participant/non-participant counts with separate target discount

@@ -1186,6 +1186,7 @@ def test_bot_wb_actions_builds_plan_and_apply_button(
         fieldnames = [
             "Акций",
             "Статусы в файлах акций",
+            "Текущая скидка",
             "Финальная скидка",
             "Скидка к загрузке",
             "Осталось до целевой, п.п.",
@@ -1198,6 +1199,7 @@ def test_bot_wb_actions_builds_plan_and_apply_button(
             {
                 "Акций": "2",
                 "Статусы в файлах акций": "Да, Нет",
+                "Текущая скидка": "60",
                 "Финальная скидка": "60",
                 "Скидка к загрузке": "60",
                 "Осталось до целевой, п.п.": "0",
@@ -1209,6 +1211,7 @@ def test_bot_wb_actions_builds_plan_and_apply_button(
             {
                 "Акций": "1",
                 "Статусы в файлах акций": "Да",
+                "Текущая скидка": "70",
                 "Финальная скидка": "55",
                 "Скидка к загрузке": "55",
                 "Осталось до целевой, п.п.": "0",
@@ -1220,6 +1223,7 @@ def test_bot_wb_actions_builds_plan_and_apply_button(
             {
                 "Акций": "0",
                 "Статусы в файлах акций": "",
+                "Текущая скидка": "70",
                 "Финальная скидка": "55",
                 "Скидка к загрузке": "55",
                 "Осталось до целевой, п.п.": "0",
@@ -1231,6 +1235,7 @@ def test_bot_wb_actions_builds_plan_and_apply_button(
             {
                 "Акций": "1",
                 "Статусы в файлах акций": "Нет",
+                "Текущая скидка": "70",
                 "Финальная скидка": "55",
                 "Скидка к загрузке": "55",
                 "Осталось до целевой, п.п.": "0",
@@ -2437,6 +2442,15 @@ def test_job_worker_wb_actions_report_shows_participation_transitions(tmp_path: 
             "Скидка к загрузке": 50,
             "Осталось до целевой, п.п.": 0,
         },
+        {
+            "Акций": 1,
+            "Статусы в файлах акций": "Да",
+            "Причина": "скидка до порога > 60% -> 50%",
+            "Текущая скидка": 50,
+            "Финальная скидка": 50,
+            "Скидка к загрузке": 50,
+            "Осталось до целевой, п.п.": 0,
+        },
     ]
     with csv_path.open("w", encoding="utf-8-sig", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter=";")
@@ -2461,9 +2475,9 @@ def test_job_worker_wb_actions_report_shows_participation_transitions(tmp_path: 
                 "overall_status": "ok",
                 "summary": {
                     "scheme": "60-50-50",
-                    "total_goods": 4,
+                    "total_goods": 5,
                     "changed_rows": 2,
-                    "no_change": 2,
+                    "no_change": 3,
                     "active_promos": 1,
                     "future_promos": 0,
                 },
@@ -2476,13 +2490,15 @@ def test_job_worker_wb_actions_report_shows_participation_transitions(tmp_path: 
 
     text = build_job_result_text(completed)
 
-    assert "участвуют в акциях: `2`" in text
+    assert "участвуют в акциях: `3`" in text
+    assert "скидка 50%: `1` товаров" in text
     assert "скидка 64%: `1` товаров" in text
     assert "скидка 57%: `1` товаров" in text
     assert "снимутся с текущих акций: `1`" in text
     assert "требуемая скидка акции выше порога 60%" in text
-    assert "будут участвовать в акциях: `1`" in text
+    assert "будут участвовать в акциях: `2`" in text
     assert "не будут участвовать в акциях: `3`" in text
+    assert "они не считаются снятыми: dry-run не меняет их скидку" in text
 
 
 def test_poll_once_runtime_jobs_queues_operation_callback_without_direct_execution(
