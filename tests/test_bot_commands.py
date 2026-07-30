@@ -7,7 +7,11 @@ from pathlib import Path
 import pytest
 
 from seller_agent.bot.dispatcher import dispatch_callback, dispatch_message
-from seller_agent.bot.job_notifier import build_job_result_text, notify_telegram_job_result
+from seller_agent.bot.job_notifier import (
+    build_job_result_presentation,
+    build_job_result_text,
+    notify_telegram_job_result,
+)
 from seller_agent.bot.runtime_jobs import dispatch_runtime_job_callback, dispatch_runtime_job_message
 from seller_agent.bot.telegram_runner import (
     TelegramRunnerError,
@@ -84,13 +88,13 @@ def test_bot_marketplace_buttons_show_submenus() -> None:
     assert wb.ok is True
     assert wb.command == "/wb"
     assert wb.reply_markup["keyboard"][0][0]["text"] == "WB акции"
-    assert wb.reply_markup["keyboard"][1][0]["text"] == "WB аналитика"
+    assert wb.reply_markup["keyboard"][1][0]["text"] == "Акции от минимальной цены"
     assert ozon.reply_markup["keyboard"][1][0]["text"] == "Отчёт за период Ozon"
     assert ozon.reply_markup["keyboard"][2][0]["text"] == "Остатки и поставки Ozon"
     assert ozon.reply_markup["keyboard"][3][0]["text"] == "В работу Ozon"
-    assert wb.reply_markup["keyboard"][2][0]["text"] == "Остатки и поставки"
-    assert wb.reply_markup["keyboard"][3][0]["text"] == "В работу"
-    assert wb.reply_markup["keyboard"][4][0]["text"] == "Отчёт за период WB"
+    assert wb.reply_markup["keyboard"][3][0]["text"] == "Остатки и поставки"
+    assert wb.reply_markup["keyboard"][4][0]["text"] == "В работу"
+    assert wb.reply_markup["keyboard"][5][0]["text"] == "Отчёт за период WB"
 
 
 def test_bot_wb_work_plan_collects_value_and_confirms_parameters() -> None:
@@ -1424,6 +1428,33 @@ def test_bot_wb_manual_actions_cancel_and_reject_are_noop() -> None:
     assert "Скидки в WB не изменены" in rejected.text
 
 
+def test_bot_wb_min_price_actions_uses_default_or_manual_outside_discount() -> None:
+    start = dispatch_message("Акции от минимальной цены")
+
+    assert start.ok is True
+    assert start.command == "/wb-actions-min-price"
+    assert start.conversation_state == {"stage": "wb_min_price_discount_input"}
+    assert start.reply_markup["inline_keyboard"][0][0]["callback_data"] == "wbmp_review:50"
+
+    default_review = dispatch_callback("wbmp_review:50")
+    assert default_review.ok is True
+    assert "вне подходящих акций: `50%`" in default_review.text
+    assert default_review.reply_markup["inline_keyboard"][0][0]["callback_data"] == (
+        "wbmp_confirm:50"
+    )
+
+    manual_review = dispatch_message("47", conversation_state=start.conversation_state)
+    assert manual_review.ok is True
+    assert "вне подходящих акций: `47%`" in manual_review.text
+    assert manual_review.reply_markup["inline_keyboard"][0][0]["callback_data"] == (
+        "wbmp_confirm:47"
+    )
+
+    invalid = dispatch_message("101", conversation_state=start.conversation_state)
+    assert invalid.ok is False
+    assert invalid.conversation_state == start.conversation_state
+
+
 def test_bot_wb_actions_callback_applies_specific_plan(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -2038,6 +2069,11 @@ def test_runtime_job_dispatch_queues_all_external_message_operations(
         ),
         ("wbam_confirm:60-50-50", "wb-actions-discount-plan", {"scheme_text": "60-50-50"}),
         (
+            "wbmp_confirm:47",
+            "wb-best-price-action-plan",
+            {"outside_discount": 47},
+        ),
+        (
             "oe_apply:ozon_elastic_plan_test",
             "ozon-elastic-apply",
             {"plan_run_id": "ozon_elastic_plan_test", "confirmed_by_user": True},
@@ -2051,6 +2087,14 @@ def test_runtime_job_dispatch_queues_all_external_message_operations(
             "wba_apply:wb_actions_discount_plan_test",
             "wb-actions-discount-apply",
             {"plan_run_id": "wb_actions_discount_plan_test", "confirmed_by_user": True},
+        ),
+        (
+            "wbmp_apply:wb_best_price_actions_plan_47_20260729T120000",
+            "wb-best-price-action-apply",
+            {
+                "plan_run_id": "wb_best_price_actions_plan_47_20260729T120000",
+                "confirmed_by_user": True,
+            },
         ),
         (
             "ozin_apply:ozon_inbox_test",
@@ -2508,6 +2552,115 @@ def test_job_worker_wb_actions_report_shows_participation_transitions(tmp_path: 
     assert "требуемая скидка акции выше порога 60%" in text
     assert "будут участвовать в акциях: `1`" in text
     assert "не будут участвовать в акциях: `4`" in text
+
+
+def test_job_worker_wb_min_price_plan_shows_apply_button(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "runtime.db")
+    job = store.create_job(
+        task_id="wb-best-price-action-plan",
+        actor="telegram:123",
+        job_id="job_wb_best_price_plan",
+        status="queued",
+        params={"outside_discount": 47},
+    )
+    store.update_job_status(
+        job.job_id,
+        "success",
+        result={
+            "status": "ok",
+            "summary": {
+                "run_id": "wb_best_price_actions_plan_47_20260729T120000",
+                "overall_status": "ok",
+                "outside_action_discount": 47,
+                "safe_to_apply": True,
+                "summary": {
+                    "scope_total": 478,
+                    "currently_participating": 11,
+                    "offered_any_action": 355,
+                    "not_offered": 123,
+                    "eligible_any_action": 11,
+                    "outside_action": 467,
+                    "offered_but_below_minimum": 344,
+                    "to_change_discount": 467,
+                    "no_change_discount": 11,
+                    "target_below_minimum": 0,
+                    "unsafe_single_upload": 0,
+                    "target_discount_distribution": {"47": 467, "59": 11},
+                },
+                "artifacts": {"report": str(tmp_path / "report.html")},
+            },
+        },
+    )
+    completed = store.get_job(job.job_id)
+    assert completed is not None
+
+    text, markup = build_job_result_presentation(completed)
+
+    assert "Скидка вне подходящих акций: `47%`" in text
+    assert "будут участвовать в лучшей допустимой акции: `11`" in text
+    assert markup["inline_keyboard"][0][0]["callback_data"] == (
+        "wbmp_apply:wb_best_price_actions_plan_47_20260729T120000"
+    )
+
+
+def test_job_worker_wb_actions_apply_reports_safe_step_and_offers_followup(
+    tmp_path: Path,
+) -> None:
+    store = JobStore(tmp_path / "runtime.db")
+    job = store.create_job(
+        task_id="wb-actions-discount-apply",
+        actor="telegram:123",
+        job_id="job_wb_actions_safe_step_apply",
+        status="queued",
+        params={"plan_run_id": "wb_actions_discount_plan_60-50-50_test"},
+    )
+    store.update_job_status(
+        job.job_id,
+        "success",
+        result={
+            "status": "warning",
+            "summary": {
+                "run_id": "wb_actions_discount_apply_60-50-50_test",
+                "overall_status": "warning",
+                "approved_plan_run_id": "wb_actions_discount_plan_60-50-50_test",
+                "scheme": "60-50-50",
+                "applied": {"payload_rows_count": 328},
+                "verify": {
+                    "status": "ok",
+                    "expected_rows": 328,
+                    "success_rows": 328,
+                    "failed_rows": 0,
+                },
+                "drift": {"skipped_due_to_drift_product_count": 0},
+                "target_completion": {
+                    "status": "safe_step_applied",
+                    "rows_count": 328,
+                    "direct_final_target_rows": 309,
+                    "followup_required_rows": 19,
+                    "followup_required": True,
+                    "transitions": [
+                        {
+                            "current_discount": 0,
+                            "uploaded_discount": 33,
+                            "final_discount": 50,
+                            "rows_count": 19,
+                        }
+                    ],
+                },
+                "artifacts": {},
+            },
+        },
+    )
+    completed = store.get_job(job.job_id)
+    assert completed is not None
+
+    text, markup = build_job_result_presentation(completed)
+
+    assert "конечная схема достигнута не полностью" in text
+    assert "остановились на безопасном промежуточном шаге: `19`" in text
+    assert "`0% → 33% → 50%`: `19` товаров" in text
+    assert "Осталось довести до конечной скидки: `19`" in text
+    assert markup["inline_keyboard"][0][0]["callback_data"] == "wbam_confirm:60-50-50"
 
 
 def test_poll_once_runtime_jobs_queues_operation_callback_without_direct_execution(

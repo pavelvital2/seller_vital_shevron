@@ -26,6 +26,7 @@ from seller_agent.tasks.seller_sku_update import (
 )
 from seller_agent.tasks.wb_card_create_apply import run_wb_card_create_apply
 from seller_agent.tasks.wb_card_create_plan import run_wb_card_create_plan
+from seller_agent.tasks.wb_media import build_wb_media_plan, validate_wb_media_plan
 
 
 def _read_json(path: Path) -> Any:
@@ -72,6 +73,42 @@ def _stage(status: str, **kwargs: Any) -> dict[str, Any]:
     return {"status": status, **kwargs}
 
 
+def _verified_skus_from_content_verify(
+    *,
+    data_dir: Path,
+    internal_skus: list[str],
+    verify: dict[str, Any],
+) -> list[str]:
+    marketplace_verify = verify.get("verify") if isinstance(verify.get("verify"), dict) else {}
+    ozon_results = {
+        _normalize_text(row.get("offer_id")): row
+        for row in ((marketplace_verify.get("ozon") or {}).get("results") or [])
+        if isinstance(row, dict) and _normalize_text(row.get("offer_id"))
+    }
+    wb_results = {
+        _normalize_text(row.get("vendorCode")): row
+        for row in ((marketplace_verify.get("wb") or {}).get("results") or [])
+        if isinstance(row, dict) and _normalize_text(row.get("vendorCode"))
+    }
+    ready: list[str] = []
+    for sku in internal_skus:
+        passport_path = data_dir / "catalog" / "master_passport" / "approved" / f"{sku}.json"
+        if not passport_path.exists():
+            continue
+        passport = _read_json(passport_path)
+        identity = passport.get("identity") if isinstance(passport.get("identity"), dict) else {}
+        expected_checks: list[bool] = []
+        ozon_offer_id = _normalize_text(identity.get("ozon_offer_id"))
+        if ozon_offer_id and _normalize_text(identity.get("ozon_product_id")).isdigit():
+            expected_checks.append((ozon_results.get(ozon_offer_id) or {}).get("status") == "ok")
+        wb_vendor_code = _normalize_text(identity.get("wb_vendor_code"))
+        if wb_vendor_code and _normalize_text(identity.get("wb_nm_id")).isdigit():
+            expected_checks.append((wb_results.get(wb_vendor_code) or {}).get("status") == "ok")
+        if expected_checks and all(expected_checks):
+            ready.append(sku)
+    return ready
+
+
 def _run_post_apply_content_verify(
     *,
     credentials: AppCredentials,
@@ -90,7 +127,12 @@ def _run_post_apply_content_verify(
     )
     status = "ok" if verify.get("overall_status") == "ok" else "warning"
     blocked_count = int(verify.get("blocked_rows") or 0)
-    return _stage(status, verify=verify, ready_skus=internal_skus if status == "ok" else [], blocked_count=blocked_count)
+    ready_skus = _verified_skus_from_content_verify(
+        data_dir=data_dir,
+        internal_skus=internal_skus,
+        verify=verify,
+    )
+    return _stage(status, verify=verify, ready_skus=ready_skus, blocked_count=blocked_count)
 
 
 def _run_content_stage(
@@ -133,12 +175,16 @@ def _run_content_stage(
         wait_seconds=wait_seconds,
         poll_interval=poll_interval,
     )
-    passport_updates = _mark_content_passports_applied(
-        data_dir=data_dir,
-        plan_path=Path(apply_plan["artifacts"]["plan"]),
-        run_id=str(apply["run_id"]),
-    )
     status = "ok" if apply.get("overall_status") == "ok" else "warning"
+    passport_updates = (
+        _mark_content_passports_applied(
+            data_dir=data_dir,
+            plan_path=Path(apply_plan["artifacts"]["plan"]),
+            run_id=str(apply["run_id"]),
+        )
+        if status == "ok"
+        else {}
+    )
     return _stage(
         status,
         plan=plan,
@@ -190,12 +236,16 @@ def _run_seller_sku_stage(
         poll_interval=poll_interval,
         update_local_layers=True,
     )
-    passport_updates = _update_seller_sku_passports(
-        data_dir=data_dir,
-        plan_path=Path(apply_plan["artifacts"]["seller_sku_update_plan"]),
-        run_id=str(apply["run_id"]),
-    )
     status = "ok" if apply.get("overall_status") == "ok" else "warning"
+    passport_updates = (
+        _update_seller_sku_passports(
+            data_dir=data_dir,
+            plan_path=Path(apply_plan["artifacts"]["seller_sku_update_plan"]),
+            run_id=str(apply["run_id"]),
+        )
+        if status == "ok"
+        else {}
+    )
     return _stage(
         status,
         plan=plan,
@@ -212,9 +262,12 @@ def _passport_wants_wb_create(data_dir: Path, sku: str) -> bool:
         return False
     passport = _read_json(path)
     identity = passport.get("identity") or {}
-    if _normalize_text(identity.get("wb_nm_id")):
+    wb_nm_id = _normalize_text(identity.get("wb_nm_id"))
+    if wb_nm_id.isdigit():
         return False
-    return True
+    safety = passport.get("safety") if isinstance(passport.get("safety"), dict) else {}
+    dangerous_actions = safety.get("dangerous_actions") if isinstance(safety.get("dangerous_actions"), list) else []
+    return "wb_card_create" in dangerous_actions
 
 
 def _passport_wants_ozon_create(data_dir: Path, sku: str) -> bool:
@@ -367,6 +420,40 @@ def _passport_checksums(data_dir: Path, skus: list[str]) -> dict[str, str]:
     return checksums
 
 
+def _media_checksums(
+    data_dir: Path,
+    skus: list[str],
+) -> tuple[dict[str, dict[str, str]], list[dict[str, Any]]]:
+    checksums: dict[str, dict[str, str]] = {}
+    errors: list[dict[str, Any]] = []
+    for sku in skus:
+        passport_path = data_dir / "catalog" / "master_passport" / "approved" / f"{sku}.json"
+        if not passport_path.exists():
+            continue
+        passport = _read_json(passport_path)
+        media_plan = build_wb_media_plan(passport)
+        media_errors = validate_wb_media_plan(
+            data_dir=data_dir,
+            media_plan=media_plan,
+            require_contiguous=False,
+        )
+        if media_errors:
+            errors.append({"internal_sku": sku, "errors": media_errors})
+        sku_checksums: dict[str, str] = {}
+        for item in media_plan:
+            value = _normalize_text(item.get("local_path"))
+            if not value:
+                continue
+            path = Path(value)
+            if not path.is_absolute():
+                path = data_dir.parent / path
+            if path.is_file():
+                sku_checksums[value] = _sha256_bytes(path.read_bytes())
+        if sku_checksums:
+            checksums[sku] = sku_checksums
+    return checksums, errors
+
+
 def _plan_checksum(plan_package: dict[str, Any]) -> str:
     payload = {key: value for key, value in plan_package.items() if key != "plan_checksum"}
     return _sha256_bytes(_canonical_json_bytes(payload))
@@ -419,6 +506,18 @@ def _validate_plan_package(data_dir: Path, plan_run_id: str) -> tuple[dict[str, 
     ]
     if changed:
         errors.append({"reason": "passport_checksum_mismatch", "items": changed})
+    expected_media = plan.get("media_checksums") if isinstance(plan.get("media_checksums"), dict) else {}
+    actual_media, media_errors = _media_checksums(data_dir, skus)
+    if media_errors:
+        errors.append({"reason": "media_file_validation_failed", "items": media_errors})
+    if expected_media != actual_media:
+        errors.append(
+            {
+                "reason": "media_checksum_mismatch",
+                "expected": expected_media,
+                "actual": actual_media,
+            }
+        )
     return plan, errors
 
 
@@ -582,6 +681,14 @@ def run_plan_approved_cards(
 
     passport_preflight = ensure_approved_passports_for_batch(data_dir=data_dir, internal_skus=skus, base_run_id=base_run_id)
     passport_checksums = _passport_checksums(data_dir, skus)
+    media_checksums, media_checksum_errors = _media_checksums(data_dir, skus)
+    passport_preflight["wb_media_file_checks"] = {
+        "status": "blocked" if media_checksum_errors else "ok",
+        "checksums": media_checksums,
+        "errors": media_checksum_errors,
+    }
+    if media_checksum_errors:
+        passport_preflight["status"] = "blocked"
     stages: dict[str, Any] = {}
     if passport_preflight.get("status") == "ok":
         seller_sku = _run_seller_sku_plan_stage(
@@ -644,6 +751,7 @@ def run_plan_approved_cards(
         "overall_status": overall_status,
         "input_skus": skus,
         "passport_checksums": passport_checksums,
+        "media_checksums": media_checksums,
         "options": {
             "ozon_create_min_price": ozon_create_min_price,
             "ozon_create_allow_manual_review": ozon_create_allow_manual_review,
@@ -1114,7 +1222,7 @@ def _update_seller_sku_passports(*, data_dir: Path, plan_path: Path, run_id: str
             wb["seller_sku_update_status"] = "applied_verified"
         approval = passport.setdefault("approval", {}).setdefault("marketplace_apply", {})
         approval["seller_sku_update_run_id"] = run_id
-        approval["status"] = "applied_verified"
+        approval["status"] = "seller_sku_applied_verified"
         write_json(passport_path, passport)
         updated += 1
     return {"passports": updated}
@@ -1487,11 +1595,17 @@ def run_apply_approved_cards(
     elif any(status == "warning" for status in stage_statuses):
         overall_status = "warning"
 
-    status_sync = {"status": "skipped", "reason": "post_verify_not_ok"}
-    if post_verify["status"] == "ok":
+    verified_skus = post_verify.get("ready_skus") or []
+    status_sync = {
+        "status": "skipped",
+        "reason": "no_verified_skus",
+        "verified_skus": [],
+        "pending_skus": final_skus,
+    }
+    if verified_skus:
         status_sync = sync_card_apply_status(
             data_dir=data_dir,
-            internal_skus=final_skus,
+            internal_skus=verified_skus,
             run_id=base_run_id,
             summary_path=str(run_dir / "summary.json"),
             report_path=str(run_dir / "apply_approved_cards_report.md"),
@@ -1500,16 +1614,47 @@ def run_apply_approved_cards(
             seller_sku_update_run_id=_stage_run_id(seller_sku, "apply"),
             catalog_sync_run_id=base_run_id if catalog_sync.get("status") == "ok" else "",
         )
-    runtime_lifecycle = _maybe_upsert_card_work_items(
+        status_sync["verified_skus"] = verified_skus
+        status_sync["pending_skus"] = [sku for sku in final_skus if sku not in set(verified_skus)]
+    verified_runtime = _maybe_upsert_card_work_items(
         runtime_db=runtime_db,
-        skus=final_skus,
-        status="closed" if overall_status == "ok" else "applied",
+        skus=verified_skus,
+        status="closed",
         plan_run_id=plan_run_id,
         apply_run_id=base_run_id,
         post_verify_run_id=_stage_run_id(post_verify, "verify"),
         checksums=_passport_checksums(data_dir, final_skus),
         data={"overall_status": overall_status, "status_sync": status_sync},
     )
+    pending_skus = [sku for sku in final_skus if sku not in set(verified_skus)]
+    pending_runtime = _maybe_upsert_card_work_items(
+        runtime_db=runtime_db,
+        skus=pending_skus,
+        status="applied",
+        plan_run_id=plan_run_id,
+        apply_run_id=base_run_id,
+        post_verify_run_id=_stage_run_id(post_verify, "verify"),
+        checksums=_passport_checksums(data_dir, final_skus),
+        data={"overall_status": overall_status, "status_sync": status_sync},
+    )
+    if runtime_db is None:
+        runtime_lifecycle = {
+            "status": "skipped",
+            "reason": "runtime_db_disabled",
+            "updated": 0,
+            "verified": verified_runtime,
+            "pending": pending_runtime,
+        }
+    else:
+        runtime_lifecycle = {
+            "status": "ok"
+            if verified_runtime.get("status") == "ok" and pending_runtime.get("status") == "ok"
+            else "warning",
+            "updated": int(verified_runtime.get("updated") or 0) + int(pending_runtime.get("updated") or 0),
+            "runtime_db": str(runtime_db),
+            "verified": verified_runtime,
+            "pending": pending_runtime,
+        }
 
     result = {
         "run_id": base_run_id,

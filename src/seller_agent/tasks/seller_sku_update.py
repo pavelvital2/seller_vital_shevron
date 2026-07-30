@@ -183,11 +183,30 @@ def _ozon_precheck(
     write_json(run_dir / f"ozon_precheck_old_{old_offer_id}.json", old_result)
     write_json(run_dir / f"ozon_precheck_new_{new_offer_id}.json", new_result)
 
+    expected_product_id = str(ozon_op.get("product_id") or "").strip()
+    found_product_ids = _product_ids_from_ozon_result(old_result)
+    new_product_ids = _product_ids_from_ozon_result(new_result)
+    already_applied = (
+        old_result["status"] != "found"
+        and new_result["status"] == "found"
+        and bool(expected_product_id)
+        and expected_product_id in new_product_ids
+    )
+    if already_applied:
+        return {
+            "status": "already_applied",
+            "ready": True,
+            "old_offer_id": old_offer_id,
+            "new_offer_id": new_offer_id,
+            "expected_product_id": expected_product_id,
+            "found_product_ids": sorted(new_product_ids),
+            "new_offer_status": new_result["status"],
+            "errors": [],
+        }
+
     errors: list[str] = []
     if old_result["status"] != "found":
         errors.append("old_offer_not_found")
-    expected_product_id = str(ozon_op.get("product_id") or "").strip()
-    found_product_ids = _product_ids_from_ozon_result(old_result)
     if expected_product_id and expected_product_id not in found_product_ids:
         errors.append("product_id_drift")
     if new_result["status"] == "found":
@@ -264,7 +283,10 @@ def _build_plan(
             operation.get("status") == "already_ok"
             or (
                 ozon_check.get("status") in {"not_requested", "ready"}
-                and wb_check.get("status") in {"not_requested", "ready"}
+                or ozon_check.get("status") == "already_applied"
+            )
+            and (
+                wb_check.get("status") in {"not_requested", "ready"}
             )
         )
         planned.append(
@@ -419,6 +441,8 @@ def _apply_ozon_updates(
     for row in plan:
         ozon_op = row.get("ozon")
         if not row.get("ready") or not isinstance(ozon_op, dict):
+            continue
+        if (row.get("ozon_precheck") or {}).get("status") == "already_applied":
             continue
         payload_rows = [
             {
@@ -687,6 +711,35 @@ def _apply_local_row_update(row: dict[str, Any], updates: dict[str, dict[str, st
     return True
 
 
+def _apply_owner_review_row_update(
+    row: dict[str, Any],
+    updates: dict[str, dict[str, str]],
+    run_id: str,
+) -> bool:
+    sku = str(row.get("approved_internal_sku") or "").strip()
+    update = updates.get(sku)
+    if not update:
+        return False
+    marketplace = str(row.get("source_marketplace") or "").strip().lower()
+    if marketplace == "ozon" and update.get("ozon_offer_id"):
+        row["source_id"] = update["ozon_offer_id"]
+        row["current_internal_product_id"] = f"ozon:{update['ozon_offer_id']}"
+        if update.get("ozon_product_id"):
+            row["source_secondary_id"] = update["ozon_product_id"]
+    elif marketplace == "wb" and update.get("wb_vendor_code"):
+        row["source_id"] = update["wb_vendor_code"]
+        row["current_internal_product_id"] = f"wb:{update['wb_vendor_code']}"
+        if update.get("wb_nm_id"):
+            row["source_secondary_id"] = update["wb_nm_id"]
+    else:
+        return False
+    if "notes" in row:
+        marker = f"seller_sku_update_cli:{run_id}"
+        notes = str(row.get("notes") or "")
+        row["notes"] = notes if marker in notes else notes + (";" if notes else "") + marker
+    return True
+
+
 def _update_local_layers(*, data_dir: Path, plan: list[dict[str, Any]], run_id: str) -> dict[str, Any]:
     updates: dict[str, dict[str, str]] = {}
     for row in plan:
@@ -694,10 +747,13 @@ def _update_local_layers(*, data_dir: Path, plan: list[dict[str, Any]], run_id: 
         update = updates.setdefault(internal_sku, {"internal_sku": internal_sku})
         if isinstance(row.get("ozon"), dict):
             update["ozon_offer_id"] = row["ozon"]["new_offer_id"]
+            update["ozon_product_id"] = str(row["ozon"].get("product_id") or "")
         if isinstance(row.get("wb"), dict):
             update["wb_vendor_code"] = row["wb"]["new_vendor_code"]
+            update["wb_nm_id"] = str(row["wb"].get("nm_id") or "")
     changed: dict[str, int] = {}
     for rel_path in [
+        "catalog/mapping/ozon_wb_internal_sku_confirmed.csv",
         "catalog/unified/products.csv",
         "catalog/content/content_master.csv",
         "catalog/processed/master_catalog.csv",
@@ -714,6 +770,16 @@ def _update_local_layers(*, data_dir: Path, plan: list[dict[str, Any]], run_id: 
             count += int(_apply_local_row_update(row, updates, run_id))
         _write_csv(path, rows, fieldnames)
         changed[rel_path] = count
+    owner_review_path = data_dir / "catalog/unified/internal_sku_assignment_owner_review.csv"
+    if owner_review_path.exists():
+        rows = _read_csv(owner_review_path)
+        if rows:
+            fieldnames = list(rows[0].keys())
+            count = 0
+            for row in rows:
+                count += int(_apply_owner_review_row_update(row, updates, run_id))
+            _write_csv(owner_review_path, rows, fieldnames)
+            changed["catalog/unified/internal_sku_assignment_owner_review.csv"] = count
     for rel_path in [
         "catalog/unified/products.json",
         "catalog/content/content_master.json",

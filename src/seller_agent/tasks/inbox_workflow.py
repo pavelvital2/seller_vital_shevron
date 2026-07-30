@@ -148,6 +148,11 @@ def _is_customer_tail_closing_text(text: str) -> bool:
     }
 
 
+def _is_media_only_message(text: str) -> bool:
+    normalized = re.sub(r"!\[[^\]]*\]\([^)]+\)", "", str(text or "")).strip()
+    return not normalized and bool(str(text or "").strip())
+
+
 def _classify_messenger_action(*, chat_id: str, message: dict[str, Any], previous_message: dict[str, Any] | None = None) -> dict[str, Any]:
     text = _extract_message_text(message)
     user_type = _message_user_type(message)
@@ -176,6 +181,11 @@ def _classify_messenger_action(*, chat_id: str, message: dict[str, Any], previou
                 "notes": "Короткий закрывающий ответ покупателя после ответа продавца; закрыть без нового сообщения после approval.",
             }
         draft = _draft_customer_chat_reply(text)
+        if not draft and previous_user_type == "Customer" and _is_media_only_message(text):
+            previous_text = _extract_message_text(previous_message or {})
+            draft = _draft_customer_chat_reply(previous_text)
+            if draft:
+                base["source_text"] = f"{previous_text}\n{text}".strip()
         if draft:
             return {
                 **base,
@@ -1049,7 +1059,7 @@ def _apply_ozon_messenger(
     mark_read: list[dict[str, Any]] = []
     if credentials.ozon_seller:
         adapter = OzonSellerAdapter(credentials.ozon_seller)
-        for action in actions:
+        for action_index, action in enumerate(actions, 1):
             if action.get("action_type") != "mark_chat_read":
                 continue
             row = {"chat_id": action.get("chat_id"), "from_message_id": action.get("from_message_id"), "ok": False, "error": ""}
@@ -1062,6 +1072,59 @@ def _apply_ozon_messenger(
                 row["response"] = response
             except Exception as exc:  # noqa: BLE001
                 row["error"] = _safe_error(exc)
+                if "HTTP 403" in row["error"]:
+                    fallback_run_dir = ensure_dir(
+                        raw_dir / f"cdp_mark_read_fallback_{action_index:03d}"
+                    )
+                    script = PROJECT_ROOT / "scripts" / "messenger" / "ozon_mark_chat_read_cdp.js"
+                    completed = subprocess.run(
+                        [
+                            "node",
+                            str(script),
+                            "--chat-id",
+                            str(action.get("chat_id") or ""),
+                            "--from-message-id",
+                            str(action.get("from_message_id") or ""),
+                            "--run-dir",
+                            str(fallback_run_dir),
+                        ],
+                        cwd=PROJECT_ROOT,
+                        text=True,
+                        capture_output=True,
+                        timeout=120,
+                        check=False,
+                    )
+                    fallback_result = _safe_read_json(
+                        fallback_run_dir / "raw" / "ozon_messenger_lk_mark_read" / "mark_read_cdp_result.json"
+                    )
+                    row["api_error"] = row["error"]
+                    row["fallback"] = fallback_result or {
+                        "ok": False,
+                        "blocker": (completed.stderr or completed.stdout or "").strip()[:1000],
+                    }
+                    try:
+                        history = adapter.post(
+                            "/v3/chat/history",
+                            {"chat_id": str(action.get("chat_id") or ""), "limit": 50},
+                        )
+                        target_message_id = str(action.get("from_message_id") or "")
+                        target_message = next(
+                            (
+                                message
+                                for message in _extract_messages(history)
+                                if _message_id(message) == target_message_id
+                            ),
+                            None,
+                        )
+                        row["fallback_verified"] = bool(
+                            isinstance(target_message, dict) and not _is_unread(target_message)
+                        )
+                    except Exception as verify_exc:  # noqa: BLE001
+                        row["fallback_verify_error"] = _safe_error(verify_exc)
+                        row["fallback_verified"] = False
+                    if bool((fallback_result or {}).get("ok")) and row.get("fallback_verified") is True:
+                        row["ok"] = True
+                        row["error"] = ""
             mark_read.append(row)
     write_json(raw_dir / "mark_read_result.json", mark_read)
     ok = bool(send_result.get("ok", True)) and all(row.get("ok") for row in mark_read)

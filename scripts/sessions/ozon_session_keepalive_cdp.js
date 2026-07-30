@@ -6,6 +6,7 @@ const path = require('path');
 
 const { chromium } = require('../lib/playwright');
 const { assertOzonCdpContour } = require('../lib/ozon_cdp_guard');
+const { exportNormalizedStorageState } = require('../lib/ozon_cookie_state');
 
 const projectRoot = path.resolve(__dirname, '../..');
 const cdpUrl = process.env.OZON_CDP_URL || 'http://127.0.0.1:9544';
@@ -70,6 +71,7 @@ async function summarize(page) {
     expectedStore,
     ok: false,
     stateExported: false,
+    cookieState: null,
     checks: [],
     error: '',
     valuesPrinted: false,
@@ -110,9 +112,7 @@ async function summarize(page) {
 
     const bad = result.checks.find((check) => check.blocked || check.needsLogin || check.expectedStoreFound === false);
     if (!bad) {
-      fs.mkdirSync(path.dirname(statePath), { recursive: true });
-      await context.storageState({ path: statePath });
-      fs.chmodSync(statePath, 0o600);
+      result.cookieState = await exportNormalizedStorageState(context, statePath);
       result.ok = true;
       result.stateExported = true;
     } else if (bad.blocked) {

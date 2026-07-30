@@ -38,28 +38,23 @@ def test_latest_run_dirs_filters_known_prefixes(tmp_path: Path) -> None:
     assert runs[0]["overall_status"] == "ok"
 
 
-def test_pending_packages_marks_applied_by_apply_run(tmp_path: Path) -> None:
+def test_pending_packages_ignores_lifecycle_closed_package(tmp_path: Path) -> None:
     _write_json(
         tmp_path / "pending" / "actions_apply_pending_x" / "manifest.json",
         {"pending_id": "actions_apply_pending_x", "status": "pending_explicit_apply_approval"},
     )
     _write_json(
-        tmp_path / "runs" / "2026-06-11" / "actions_apply_y" / "summary.json",
-        {"run_id": "actions_apply_y", "overall_status": "ok", "pending_id": "actions_apply_pending_x"},
+        tmp_path / "approved" / "closed" / "pending__actions_apply_pending_x.closed.json",
+        {
+            "target_kind": "pending",
+            "target_id": "actions_apply_pending_x",
+            "status_before": "pending_review",
+        },
     )
 
     packages = _pending_packages(tmp_path)
 
-    assert packages == [
-        {
-            "pending_id": "actions_apply_pending_x",
-            "path": str(tmp_path / "pending" / "actions_apply_pending_x"),
-            "manifest": str(tmp_path / "pending" / "actions_apply_pending_x" / "manifest.json"),
-            "status": "applied",
-            "created_at": "",
-            "applied_run_id": "actions_apply_y",
-        }
-    ]
+    assert packages == []
 
 
 def test_recommendations_summary_counts_open_items(tmp_path: Path) -> None:
@@ -683,7 +678,7 @@ def test_daily_morning_report_seller_v3_uses_new_template(tmp_path: Path, monkey
     assert "| Отмены, шт. | 1 | 1 |" in report_text
     assert "| Расходы всего, ₽ | 350 ₽ | 230 ₽ |" in report_text
     assert "| Отзывы за период 00:00-23:59 | 1 | 2 |" in report_text
-    assert "| Товаров участвует | 8 | 7 |" in report_text
+    assert "| Фактически участвует сейчас | 8 | 7 |" in report_text
     assert "| WB-артикулы без строки в источнике остатков | - | 1 |" in report_text
     assert "пакеты на согласование" in report_text
     assert "| Есть текущие поставки | да | да |" in report_text

@@ -837,6 +837,54 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_credentials=True,
     ),
     RegisteredTask(
+        name="wb-best-price-action-plan",
+        command="plan-wb-best-price-actions",
+        title="Plan WB actions from minimum prices",
+        description=(
+            "Build a fresh WB action dry-run constrained by approved per-product minimum prices."
+        ),
+        mode="dry_run",
+        risk="normal",
+        marketplaces=("wb",),
+        runbook_path="data/planning/wb_actions_runbook.md",
+        requires_credentials=True,
+        telegram_enabled=True,
+        telegram_button_label="/wb-actions-min-price",
+        timeout_seconds=900,
+    ),
+    RegisteredTask(
+        name="wb-best-price-action-apply",
+        command="apply-wb-best-price-actions",
+        title="Apply WB actions from minimum prices",
+        description=(
+            "Apply an owner-approved WB best-price action plan after full minimum and drift checks."
+        ),
+        mode="apply",
+        risk="high",
+        marketplaces=("wb",),
+        runbook_path="data/planning/wb_actions_runbook.md",
+        requires_credentials=True,
+        requires_confirmation=True,
+        source_plan_task="wb-best-price-action-plan",
+        verify_task="wb-best-price-action-verify",
+        timeout_seconds=1800,
+        lock_keys=("marketplace:wb", "actions:wb:discounts"),
+    ),
+    RegisteredTask(
+        name="wb-best-price-action-verify",
+        command="verify-wb-best-price-actions",
+        title="Verify WB actions from minimum prices",
+        description=(
+            "Read-only verification of WB target discounts, minimum prices and selected actions."
+        ),
+        mode="verify",
+        risk="low",
+        marketplaces=("wb",),
+        runbook_path="data/planning/wb_actions_runbook.md",
+        requires_credentials=True,
+        timeout_seconds=900,
+    ),
+    RegisteredTask(
         name="wb-promotion-report",
         command="wb-promotion-report",
         title="WB promotion report",

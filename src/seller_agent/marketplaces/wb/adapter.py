@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
 from ...config import WbCredentials
-from ...http import request_json
+from ...http import request_json, request_multipart_file
 
 
 @dataclass
@@ -143,6 +144,24 @@ class WbContentAdapter:
 
     def save_media_links(self, *, nm_id: int, urls: list[str]) -> dict[str, Any]:
         return self.post("/content/v3/media/save", {"nmId": nm_id, "data": urls})
+
+    def upload_media_file(
+        self,
+        *,
+        nm_id: int,
+        photo_number: int,
+        file_path: Path,
+    ) -> dict[str, Any]:
+        return request_multipart_file(
+            "POST",
+            f"{self.base_url}/content/v3/media/file",
+            headers={
+                "Authorization": self.credentials.token,
+                "X-Nm-Id": str(nm_id),
+                "X-Photo-Number": str(photo_number),
+            },
+            file_path=file_path,
+        )
 
     def find_subjects(self, name: str, *, limit: int = 20, locale: str = "ru") -> list[dict[str, Any]]:
         data = self.get(

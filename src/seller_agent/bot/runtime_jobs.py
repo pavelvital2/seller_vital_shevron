@@ -222,6 +222,8 @@ def _runtime_request_for_message(
         "/wb-actions": RuntimeJobRequest("/wb-actions", "wb-actions-discount-plan", {"scheme_text": "70-55-55"}, "WB акции 70-55-55"),
         "/wb_actions": RuntimeJobRequest("/wb-actions", "wb-actions-discount-plan", {"scheme_text": "70-55-55"}, "WB акции 70-55-55"),
         "/wb-actions-70-55-55": RuntimeJobRequest("/wb-actions", "wb-actions-discount-plan", {"scheme_text": "70-55-55"}, "WB акции 70-55-55"),
+        "/wb-actions-min-price": None,
+        "/wb_actions_min_price": None,
         "/wb-analytics": RuntimeJobRequest("/wb-analytics", "wb-parser-warehouse-analytics", {"supplier_id": "4516781", "limit": 500, "report_limit": 50}, "WB аналитика"),
         "/wb_analytics": RuntimeJobRequest("/wb-analytics", "wb-parser-warehouse-analytics", {"supplier_id": "4516781", "limit": 500, "report_limit": 50}, "WB аналитика"),
         "/wb-stock-supplies": RuntimeJobRequest("/wb-stock-supplies", "wb-stock-supply-monitor", {}, "Остатки и поставки WB"),
@@ -300,11 +302,30 @@ def _runtime_request_for_callback(data: str) -> RuntimeJobRequest | TelegramComm
             {"scheme_text": scheme},
             "Ручная акция",
         )
+    if value.startswith("wbmp_confirm:"):
+        discount = value.removeprefix("wbmp_confirm:").strip()
+        if not discount.isdigit() or not 0 <= int(discount) <= 99:
+            return _invalid_callback(
+                "Акции от минимальной цены",
+                "Скидка для товаров вне акций повреждена.",
+            )
+        return RuntimeJobRequest(
+            "/wb-actions-min-price",
+            "wb-best-price-action-plan",
+            {"outside_discount": int(discount)},
+            "Акции от минимальной цены",
+        )
 
     apply_prefixes = {
         "oe_apply:": ("/elastic_apply", "ozon-elastic-apply", "plan_run_id", "Ozon Elastic apply"),
         "oza_apply:": ("/ozon_actions_apply", "ozon-actions-optimizer-apply", "plan_run_id", "Ozon все акции apply"),
         "wba_apply:": ("/wb_actions_apply", "wb-actions-discount-apply", "plan_run_id", "WB акции apply"),
+        "wbmp_apply:": (
+            "/wb-actions-min-price",
+            "wb-best-price-action-apply",
+            "plan_run_id",
+            "Акции от минимальной цены apply",
+        ),
         "ozin_apply:": ("/ozon_inbox_apply", "ozon-inbox-apply", "source_run_id", "Ozon входящие apply"),
         "wbin_apply:": ("/wb_inbox_apply", "wb-inbox-apply", "source_run_id", "WB входящие apply"),
     }

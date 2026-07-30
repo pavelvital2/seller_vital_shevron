@@ -5,6 +5,10 @@ const fs = require('fs');
 const path = require('path');
 
 const { chromium, browserLaunchOptions } = require('../lib/playwright');
+const {
+  exportNormalizedStorageState,
+  normalizeOzonCookies,
+} = require('../lib/ozon_cookie_state');
 
 const projectRoot = path.resolve(__dirname, '../..');
 const defaultProfile = path.join(projectRoot, '.sessions', 'ozon', 'chrome-profile');
@@ -177,16 +181,14 @@ function normalizeSameSite(value) {
 }
 
 function normalizeCookie(cookie) {
-  const hasDomain = Boolean(cookie.domain);
   const normalized = {
     name: String(cookie.name || '').trim(),
     value: String(cookie.value || ''),
-    domain: hasDomain ? String(cookie.domain) : '.ozon.ru',
+    domain: cookie.domain ? String(cookie.domain) : '.ozon.ru',
     path: cookie.path ? String(cookie.path) : '/',
     secure: typeof cookie.secure === 'boolean' ? cookie.secure : true,
     httpOnly: typeof cookie.httpOnly === 'boolean' ? cookie.httpOnly : /^__Secure-|^__Host-|access|refresh|token|sid/i.test(String(cookie.name || '')),
     sameSite: normalizeSameSite(cookie.sameSite),
-    sourceHadDomain: hasDomain,
   };
 
   if (typeof cookie.expires === 'number' && Number.isFinite(cookie.expires) && cookie.expires > 0) {
@@ -194,19 +196,6 @@ function normalizeCookie(cookie) {
   }
 
   return normalized.name ? normalized : null;
-}
-
-function expandDomainVariants(cookie) {
-  if (cookie.sourceHadDomain) {
-    const { sourceHadDomain, ...clean } = cookie;
-    return [clean];
-  }
-
-  const variants = ['.ozon.ru', 'ozon.ru', 'seller.ozon.ru', '.seller.ozon.ru'];
-  return variants.map((domain) => {
-    const { sourceHadDomain, ...clean } = cookie;
-    return { ...clean, domain };
-  });
 }
 
 function loadCookies(cookieFile) {
@@ -226,12 +215,7 @@ function loadCookies(cookieFile) {
     cookies = parseCookieHeader(text);
   }
 
-  const normalized = cookies.map(normalizeCookie).filter(Boolean).flatMap(expandDomainVariants);
-  const deduped = new Map();
-  for (const cookie of normalized) {
-    deduped.set(`${cookie.domain}\t${cookie.path}\t${cookie.name}`, cookie);
-  }
-  return [...deduped.values()];
+  return normalizeOzonCookies(cookies.map(normalizeCookie).filter(Boolean)).cookies;
 }
 
 async function summarizePage(page) {
@@ -263,14 +247,7 @@ function classify(summary) {
 }
 
 async function exportState(context, statePath) {
-  fs.mkdirSync(path.dirname(statePath), { recursive: true });
-  if (fs.existsSync(statePath)) {
-    const backup = `${statePath}.bak-${new Date().toISOString().replace(/[:.]/g, '-')}`;
-    fs.copyFileSync(statePath, backup);
-    fs.chmodSync(backup, 0o600);
-  }
-  await context.storageState({ path: statePath });
-  fs.chmodSync(statePath, 0o600);
+  return exportNormalizedStorageState(context, statePath, { backup: true });
 }
 
 function maybeDeleteCookieFile(cookieFile) {
@@ -313,7 +290,7 @@ function maybeDeleteCookieFile(cookieFile) {
   const summary = await summarizePage(page);
   const status = classify(summary);
   const stateExported = status.loggedIn;
-  if (stateExported) await exportState(context, opts.state);
+  const cookieState = stateExported ? await exportState(context, opts.state) : null;
   const cookieFileDeleted = stateExported ? maybeDeleteCookieFile(cookieFile) : false;
 
   const result = {
@@ -332,6 +309,7 @@ function maybeDeleteCookieFile(cookieFile) {
     webdriver: summary.webdriver,
     statePath: opts.state,
     stateExported,
+    cookieState,
     cookieFileDeleted,
     cookieValuesPrinted: false,
     keepOpen: opts.keepOpen,

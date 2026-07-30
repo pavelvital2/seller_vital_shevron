@@ -4,8 +4,10 @@ from pathlib import Path
 
 from seller_agent.tasks import approved_cards_apply
 from seller_agent.tasks.approved_cards_apply import (
+    _passport_wants_wb_create,
     _passport_wants_ozon_create,
     _sync_approved_card_catalog_layers,
+    _verified_skus_from_content_verify,
     run_apply_approved_cards,
     run_plan_approved_cards,
 )
@@ -160,6 +162,72 @@ def test_passport_wants_ozon_create_only_with_explicit_owner_approved_action(tmp
     _write_json(passport_path, passport)
 
     assert _passport_wants_ozon_create(data_dir, sku) is False
+
+
+def test_passport_wants_wb_create_requires_action_and_numeric_nm_id(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    approved_dir = data_dir / "catalog" / "master_passport" / "approved"
+    approved_dir.mkdir(parents=True)
+    sku = "chev_nr_svo_pict0001"
+    path = approved_dir / f"{sku}.json"
+    passport = {
+        "identity": {
+            "internal_sku": sku,
+            "wb_nm_id": "assigned_by_marketplace_after_create",
+        },
+        "safety": {"dangerous_actions": ["wb_card_create"]},
+    }
+    path.write_text(json.dumps(passport), encoding="utf-8")
+
+    assert _passport_wants_wb_create(data_dir, sku) is True
+
+    passport["safety"]["dangerous_actions"] = []
+    path.write_text(json.dumps(passport), encoding="utf-8")
+    assert _passport_wants_wb_create(data_dir, sku) is False
+
+    passport["safety"]["dangerous_actions"] = ["wb_card_create"]
+    passport["identity"]["wb_nm_id"] = "607710999"
+    path.write_text(json.dumps(passport), encoding="utf-8")
+    assert _passport_wants_wb_create(data_dir, sku) is False
+
+
+def test_verified_skus_from_content_verify_keeps_successful_rows_in_partial_batch(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    for sku in ["sku_ok", "sku_warning"]:
+        _write_json(
+            data_dir / "catalog" / "master_passport" / "approved" / f"{sku}.json",
+            {
+                "identity": {
+                    "internal_sku": sku,
+                    "ozon_offer_id": sku,
+                    "ozon_product_id": "123",
+                    "wb_vendor_code": sku,
+                    "wb_nm_id": "456",
+                }
+            },
+        )
+    verify = {
+        "verify": {
+            "ozon": {
+                "results": [
+                    {"offer_id": "sku_ok", "status": "ok"},
+                    {"offer_id": "sku_warning", "status": "warning"},
+                ]
+            },
+            "wb": {
+                "results": [
+                    {"vendorCode": "sku_ok", "status": "ok"},
+                    {"vendorCode": "sku_warning", "status": "ok"},
+                ]
+            },
+        }
+    }
+
+    assert _verified_skus_from_content_verify(
+        data_dir=data_dir,
+        internal_skus=["sku_ok", "sku_warning"],
+        verify=verify,
+    ) == ["sku_ok"]
 
 
 def test_apply_approved_cards_runs_seller_sku_before_content(monkeypatch, tmp_path: Path) -> None:

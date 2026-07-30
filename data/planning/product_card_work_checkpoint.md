@@ -1,6 +1,6 @@
 # Product Card Work Checkpoint
 
-Дата чекпойнта: 2026-07-22
+Дата чекпойнта: 2026-07-26
 
 ## Назначение
 
@@ -11,7 +11,51 @@
 `AGENTS.md` остается источником истины. Этот checkpoint - быстрый слой
 восстановления контекста по текущей карточной работе.
 
-## Актуальная точка возврата 2026-07-22: позиция 24 на owner review
+## Ремонт mapping и pack_qty 2026-07-26
+
+После смены seller SKU обнаружено локальное расхождение: `93` Ozon-комплекта
+в derived catalog получили `pack_qty=1`, хотя Ozon-карточки и минимальные цены
+были корректны. Причина: stale native IDs в confirmed mapping/owner-review и
+default `pack_qty=1` при пустом `internal_sku`.
+
+Исправлены source mapping, owner-review IDs, unified/content/master слои и
+защита сборщика. Итоговая read-only проверка:
+
+- unified products `706`;
+- пары Ozon+WB `427`;
+- Ozon-only `170`, WB-only `109`;
+- отсутствующих/дублирующихся marketplace native ID `0`;
+- расхождений `pack_qty` с `kitN` `0`;
+- минимальные цены Ozon по сетке `597/597`;
+- Ozon-атрибуты количества нормализованных комплектов `95/95`;
+- marketplace write при ремонте не выполнялся.
+
+Run:
+`data/runs/2026-07-26/catalog_pack_qty_repair_verify_20260726T1732`.
+Дальше использовать только пересобранные `products.*` и `content_master.*`;
+старые отчеты, созданные до этого repair, не считать источником количества
+физических изделий без повторного пересчета.
+
+## Актуальная точка возврата 2026-07-25: пачка закрыта
+
+Owner-approved пачка из 12 карточек полностью применена и проверена.
+Последний открытый SKU `chev_pz_ng_text0038` закрыт после точечного изменения
+габаритов в Ozon LK и финального verify:
+
+- было: `130*40*4 мм`, `5 г`;
+- стало: `130*50*10 мм`, `10 г`;
+- Ozon: `Продается`, validation `success`, `product_errors=[]`;
+- Ozon и WB verify: `ok`;
+- Layer 2, Layer 3 и runtime: `closed`;
+- apply:
+  `ozon_lk_dimensions_recovery_chev_pz_ng_text0038_20260725T1132_apply`;
+- verify:
+  `verify_chev_pz_ng_text0038_final_20260725T1142`.
+
+Следующая карточка должна выбираться из актуального несогласованного backlog.
+Позицию 24 повторно в review не возвращать.
+
+## Историческая точка возврата 2026-07-22: позиция 24 на owner review
 
 Подготовлен и отправлен владельцу Layer 2 review-паспорт позиции `24` замороженного batch50:
 `chev_pz_ng_text0038`, Ozon-only нагрудный шеврон с позывным `Малой`.
@@ -3322,6 +3366,14 @@ Promotion run:
   Текстовые и атрибутные изменения это не блокирует.
 - Слайд 3 с UV-/влагостойкостью оставлен без изменения по решению владельца;
   claims не перенесены в описание или атрибуты.
+- 2026-07-25 подготовлены кандидаты WB 1–3 с утверждённым горизонтальным
+  watermark Vital Shevron: по два отдельных водяных знака на каждом слайде,
+  всего шесть защищённых зон. Файлы сохранены в
+  `data/catalog/card_audits/ozon_seo_20260719/0028_loop_fsin_0001/candidate_media/`
+  со статусом `ready_for_owner_review`. На слайде 3 изменены только
+  watermarks; UV-/влагостойкость и остальной контент сохранены. Marketplace
+  write не выполнялся; WB media update остаётся заблокирован до явного
+  согласования владельца.
 - Целевое название Ozon/WB:
   `Петлицы на липучке ФСИН, чёрно-серые` — 36 символов. В Layer 3 пока нет
   двух согласованных паспортов петлиц, поэтому отсутствие same-type эталонов
@@ -3532,3 +3584,1146 @@ Promotion run:
 - HTML отправлен в текущий Telegram-топик; ожидается решение владельца.
   Layer 3, marketplace dry-run, WB create и любые записи в Ozon/WB не
   выполнялись.
+
+## Подготовлена пачка из 4 Ozon-карточек с caps decline 2026-07-25
+
+- Свежим read-only сбором подтверждены четыре продающиеся карточки с ошибкой
+  Ozon `DESCRIPTION_DECLINE` по полю `Название`: `pict0128` — FBO 26,
+  `pict0129` — FBO 23, `pict0134` — FBO 23, `pict0136` — FBO 4.
+  Источники: `cards_state_failed_source_20260725T091833` и
+  `cards_state_failed_content_20260725T091940`.
+- Подтвержденные внутренние артикулы:
+  `chev_nr_svo_pict0047`, `chev_nr_raz_pict0044`,
+  `chev_nr_gv_pict0001`, `chev_nr_svo_pict0049`.
+  Первые, вторая и четвертая позиции Ozon-only; `pict0134` сопоставлена с WB
+  `vendorCode=grvspict0001_222154`, `nmID=607710999`.
+- В Layer 2 создана пачка
+  `data/catalog/card_audits/ozon_state_failed_titles_20260725/`: четыре
+  `audit.json`, четыре `passport_preview.json`, четыре HTML и индекс.
+  Предпросмотры паспортов не являются Layer 3 до согласования владельцем.
+- Лично просмотрено 25 изображений: по 5 Ozon у каждой карточки и 5 WB у
+  `pict0134`. Фото и порядок предложено оставить без media upload. Слайды 3
+  с UV-/влагостойкостью зафиксированы как `keep_current_untouched_no_upload`;
+  их формулировки не перенесены в описания или атрибуты.
+- Точные названия владельца сохранены без изменений; длины `48`, `56`, `56`,
+  `48` символов. Title validation пройден по двум owner-approved паспортам
+  обычных SVO-шевронов.
+- Для каждой позиции подготовлены описание из трех блоков, полный набор
+  целевых Ozon/WB-полей, 30 уникальных Ozon-хештегов с evidence, размер
+  изделия по фото, стандартная упаковка `100*100*10 мм` / `10*10*1 см`,
+  вес `10 г`, материал `Габардин`, состав `полиэстер, нейлон` и
+  `Нужен код маркировки=false`.
+- Четыре HTML прошли Chrome/Playwright validation: mobile `390/390`,
+  desktop `1366/1366`, горизонтального overflow нет, `imgCount=1`,
+  broken images `0`. Дополнительно визуально проверен mobile-render
+  `chev_nr_gv_pict0001`.
+- В scope не включены seller SKU update, WB create и Ozon/WB media upload.
+  Layer 3 promotion, marketplace dry-run и любые записи в Ozon/WB не
+  выполнялись. Следующий шаг — owner review четырех HTML; после согласования
+  обновить `owner_review`, выполнить штатный local promotion dry-run/write и
+  только затем отдельно готовить marketplace apply.
+
+## Согласована и записана в Layer 3 `chev_nr_svo_pict0047` 2026-07-25
+
+- Владелец скорректировал итоговое название на
+  `Шеврон на липучке СВО Сдавайся или умри` — 39 символов; слово `круглый`
+  удалено только из названия. Описание, форма и размер `80*80 мм` сохранены.
+- Явно согласована смена Ozon seller SKU:
+  `pict0128 -> chev_nr_svo_pict0047`.
+- Явно согласовано создание новой WB-карточки с
+  `vendorCode=chev_nr_svo_pict0047`; `nmID` назначается WB после создания,
+  баркод генерируется при apply. Остальные паспортные поля согласованы.
+- Для WB согласован перенос текущих Ozon-фото `1,2,3,4,5` в том же порядке
+  без watermark. Это обычный тематический СВО-шеврон без ведомственного герба
+  или геральдической эмблемы. Слайд 3 с UV-/влагостойкостью переносится без
+  редактирования.
+- Layer 2 и HTML обновлены:
+  `data/catalog/card_audits/ozon_state_failed_titles_20260725/0001_chev_nr_svo_pict0047/`.
+  HTML повторно проверен на mobile/desktop: overflow нет, broken images `0`.
+- Promotion dry-run
+  `promote_passport_chev_nr_svo_pict0047_20260725_owner_corrected_dry`
+  завершен `ok`; Layer 3 записан и локально проверен run
+  `promote_passport_chev_nr_svo_pict0047_20260725_owner_corrected_rewrite`.
+  Паспорт:
+  `data/catalog/master_passport/approved/chev_nr_svo_pict0047.json`.
+- Проверены dangerous actions:
+  `card_content_update`, `seller_sku_update`, `wb_card_create`,
+  `wb_media_update`; в WB media plan ровно 5 Ozon-фото.
+  Статус `owner_approved_pending_batch_apply`,
+  `marketplace_apply.status=not_applied`. Marketplace API и любые записи в
+  Ozon/WB не выполнялись.
+
+## Согласована и записана в Layer 3 `chev_nr_raz_pict0044` 2026-07-25
+
+- Владелец скорректировал итоговое название на
+  `Шеврон на липучке СВО Плохо там, где нет России` — 47 символов; слово
+  `круглый` удалено только из названия. Описание, круглая форма и размер
+  `85*85 мм` сохранены.
+- Явно согласована смена Ozon seller SKU:
+  `pict0129 -> chev_nr_raz_pict0044`.
+- Явно согласовано полное создание новой WB-карточки с
+  `vendorCode=chev_nr_raz_pict0044`; `nmID` назначается WB после создания,
+  баркод генерируется при apply. Остальные паспортные поля согласованы.
+- Для WB согласован перенос всех текущих Ozon-фото `1,2,3,4,5` в том же
+  порядке без watermark. Это обычный тематический СВО-шеврон без
+  ведомственного герба или геральдической эмблемы. Слайд 3 с
+  UV-/влагостойкостью переносится без редактирования.
+- Layer 2 и HTML обновлены:
+  `data/catalog/card_audits/ozon_state_failed_titles_20260725/0002_chev_nr_raz_pict0044/`.
+  HTML повторно проверен на mobile/desktop: overflow нет, broken images `0`.
+- Promotion dry-run
+  `promote_passport_chev_nr_raz_pict0044_20260725_owner_corrected_dry`
+  завершен `ok`; Layer 3 записан и локально проверен run
+  `promote_passport_chev_nr_raz_pict0044_20260725_owner_corrected_write`.
+  Паспорт:
+  `data/catalog/master_passport/approved/chev_nr_raz_pict0044.json`.
+- Проверены dangerous actions:
+  `card_content_update`, `seller_sku_update`, `wb_card_create`,
+  `wb_media_update`; в WB media plan ровно 5 Ozon-фото.
+  Статус `owner_approved_pending_batch_apply`,
+  `marketplace_apply.status=not_applied`. Marketplace API и любые записи в
+  Ozon/WB не выполнялись.
+
+## Согласована и записана в Layer 3 `chev_nr_gv_pict0001` 2026-07-25
+
+- Владелец согласовал итоговое название и остальные поля паспорта без
+  дополнительных текстовых правок.
+- Явно согласована унификация seller SKU на обеих площадках:
+  Ozon `pict0134 -> chev_nr_gv_pict0001`, WB
+  `grvspict0001_222154 -> chev_nr_gv_pict0001`.
+  WB `nmID=607710999` и текущий barcode сохраняются.
+- Для WB согласована точечная замена фото `1,2,3` на Ozon `1,2,3`;
+  текущие WB-фото `4,5` остаются. Слайд 3 с UV-/влагостойкостью переносится
+  без редактирования. Watermark не требуется.
+- Layer 2, HTML и паспорт обновлены:
+  `data/catalog/card_audits/ozon_state_failed_titles_20260725/0003_chev_nr_gv_pict0001/`
+  и `data/catalog/master_passport/approved/chev_nr_gv_pict0001.json`.
+- Promotion dry-run
+  `promote_passport_chev_nr_gv_pict0001_20260725_owner_corrected_dry`
+  и write-run
+  `promote_passport_chev_nr_gv_pict0001_20260725_owner_corrected_write`
+  завершены `ok`.
+- Dangerous actions: `card_content_update`, `seller_sku_update`,
+  `wb_media_update`. Статус `owner_approved_pending_batch_apply`;
+  marketplace write не выполнялся.
+
+## Согласована и записана в Layer 3 `chev_nr_svo_pict0049` 2026-07-25
+
+- Итоговое название владельца:
+  `Шеврон на липучке СВО Пожелай мне удачи` — 39 символов. Слово
+  `круглый` удалено только из названия; форма и размер `85*85 мм`
+  сохранены в описании и параметрах.
+- Явно согласована смена Ozon seller SKU:
+  `pict0136 -> chev_nr_svo_pict0049`.
+- Явно согласовано создание новой WB-карточки с
+  `vendorCode=chev_nr_svo_pict0049`; `nmID` назначается WB после создания,
+  barcode генерируется при apply.
+- Для WB согласован перенос Ozon-фото `1,2,3,4,5` в том же порядке без
+  watermark. Слайд 3 с UV-/влагостойкостью переносится без редактирования.
+- Layer 2, HTML и паспорт обновлены:
+  `data/catalog/card_audits/ozon_state_failed_titles_20260725/0004_chev_nr_svo_pict0049/`
+  и `data/catalog/master_passport/approved/chev_nr_svo_pict0049.json`.
+- Promotion dry-run
+  `promote_passport_chev_nr_svo_pict0049_20260725_owner_corrected_dry`
+  и write-run
+  `promote_passport_chev_nr_svo_pict0049_20260725_owner_corrected_write`
+  завершены `ok`.
+- Dangerous actions: `card_content_update`, `seller_sku_update`,
+  `wb_card_create`, `wb_media_update`. Статус
+  `owner_approved_pending_batch_apply`; marketplace write не выполнялся.
+
+## Применена owner-approved пачка из 12 карточек 2026-07-25
+
+- В единый apply вошли:
+  `chev_ng_fsin_text0003`, `chev_ng_mvd_text0003`,
+  `chev_nr_fsb_pict0001`, `chev_nr_gv_pict0001`,
+  `chev_nr_raz_pict0002`, `chev_nr_raz_pict0044`,
+  `chev_nr_sht_pict0001`, `chev_nr_svo_pict0027`,
+  `chev_nr_svo_pict0047`, `chev_nr_svo_pict0049`,
+  `chev_pz_ng_text0038`, `nash_kit2_nr_mvd_pict0002`.
+- Финальный dry-run
+  `apply_all_12_approved_cards_20260725T1052_plan` завершён `ok`:
+  seller SKU `12/12`, content `12/12`, WB create `8/8`, blocked `0`.
+  Apply run:
+  `apply_all_12_approved_cards_20260725T1052_apply`.
+- Seller SKU подтвержден по всем 12 карточкам: Ozon apply/verify для
+  оставшихся `9/9`, WB apply/verify для существующих `4/4`; три Ozon offer ID,
+  успешно изменённые до аварийной остановки первого запуска, восстановлены
+  idempotent verify без повторного marketplace write.
+- Созданы и проверены 8 WB-карточек:
+  `chev_ng_fsin_text0003` — `nmID=1293723042`,
+  `chev_ng_mvd_text0003` — `1293723043`,
+  `chev_nr_fsb_pict0001` — `1293723044`,
+  `chev_nr_raz_pict0044` — `1293723045`,
+  `chev_nr_svo_pict0027` — `1293723046`,
+  `chev_nr_svo_pict0047` — `1293723047`,
+  `chev_nr_svo_pict0049` — `1293723048`,
+  `chev_pz_ng_text0038` — `1293723049`.
+  Для каждой назначен и сохранён barcode; media upload `8/8`, errors `0`.
+  Fresh Cards API подтвердил фото: первая карточка `4`, остальные семь по
+  `5`; проверка выполнялась по `cards/list[].photos`. Позиционное сравнение
+  perceptual hash подтвердило совпадение source upload → WB CDN `39/39` без
+  перестановок. Для существующей `chev_nr_gv_pict0001` отдельно подтвержден
+  порядок `5/5`: Ozon 1–3 заменили WB 1–3, прежние WB 4–5 сохранены.
+- Финальный post-verify подтвердил WB `12/12` и Ozon `11/12`. Эти 11 SKU
+  закрыты в Layer 2/Layer 3 как `owner_approved_applied_verified`, в
+  `runtime/runtime.db` как `closed`; обновлён
+  `data/catalog/card_status/latest.json`.
+- `chev_pz_ng_text0038`: два полных API import были приняты как `imported`,
+  но top-level размеры остались `130*40*4 мм`, `5 г`. Screenshot владельца
+  показал баннер `Некорректные габариты и вес`, однако последующий live-review
+  редактора доказал, что поля по-прежнему содержали старые значения и были
+  доступны для редактирования. Ожидание складских замеров было ошибочным
+  выводом.
+- Выполнен отдельный точечный LK apply с baseline guard и exact request
+  validation: `130*40*4 мм`, `5 г` -> `130*50*10 мм`, `10 г`. Ozon ответил
+  `200`, затем карточка завершила обновление со статусом `Продается`,
+  validation `success`, `product_errors=[]`. Финальный verify подтвердил
+  название, описание, хештеги, цвета, маркировку, весовой атрибут, размеры,
+  вес и фото; WB также `ok`.
+- Фактическая Ozon-пунктуация без кавычек
+  `Шеврон на липучке позывной Малой, нагрудный, олива` записана как
+  marketplace-specific `ozon_title`; общий canonical/WB title не менялся.
+- Layer 2/Layer 3 синхронизированы в `owner_approved_applied_verified`,
+  runtime закрыт. WB:
+  `nmID=1293723049`, barcode `2053845676822`, фото `5/5`.
+- Исправлены подтвержденные дефекты batch-контура:
+  исторические разрешающие media policy statuses; fallback WB URL media из
+  `target_wb_photo_set`; числовая проверка реального `wb_nm_id`; idempotent
+  Ozon seller SKU recovery по `product_id`; запрет оптимистичного passport
+  update после warning/error; частичный status-sync verified SKU.
+  Профильные тесты: `52 passed`; полный test suite: `460 passed`.
+
+## Согласована и записана в Layer 3 `loop_fsin_0001` 2026-07-25
+
+- Владелец согласовал всю карточку, включая три подготовленных защищённых
+  WB-фото. Утверждённое название цвета:
+  `Петлицы ФСИН, чёрно-серые`.
+- Защищённые WB-фото 1–3 зафиксированы в
+  `data/catalog/card_audits/ozon_seo_20260719/0028_loop_fsin_0001/approved_media/`;
+  WB 4–5 остаются текущими. На фото 3 сохранён исходный слайд
+  UV-/влагостойкости, добавлены только согласованные watermarks.
+- Штатные локальные promotion runs:
+  `promote_passport_loop_fsin_0001_20260725_dry` и
+  `promote_passport_loop_fsin_0001_20260725_write` завершены `ok`.
+- Layer 3:
+  `data/catalog/master_passport/approved/loop_fsin_0001.json`, статус
+  `owner_approved_pending_batch_apply`; marketplace write не выполнялся.
+
+## Отправлена на согласование позиция 29 `chev_back_form_text0004` 2026-07-25
+
+- Исходная позиция Ozon `back0005`, WB-карточки нет. Лично просмотрены все
+  четыре Ozon-фото.
+- Предложенное название:
+  `Шеврон на липучке Security на спину, чёрно-жёлтый` — 49 символов.
+- Для WB предложено создать полную карточку с
+  `vendorCode=chev_back_form_text0004`, новым `nmID` и barcode; фото Ozon
+  `1,2,3,4` перенести без изменений. Геральдических знаков нет, watermark не
+  требуется. Слайд 3 с UV-/влагостойкостью не редактировать.
+- Подготовлены Layer 2 audit/HTML:
+  `data/catalog/card_audits/ozon_seo_20260719/0029_chev_back_form_text0004/`.
+  HTML и contact sheet отправлены в текущий Telegram-топик.
+- Browser validation: mobile `390/390`, desktop `1366/1366`, broken images
+  `0`. Marketplace write не выполнялся; ожидается решение владельца.
+
+## Согласована и записана в Layer 3 позиция 29 `chev_back_form_text0004` 2026-07-25
+
+- Владелец согласовал полный owner-review пакет без дополнительных
+  корректировок.
+- Layer 2 переведён в `owner_approved_layer3_written_verified_locally`.
+  Layer 3:
+  `data/catalog/master_passport/approved/chev_back_form_text0004.json`,
+  статус `owner_approved_pending_batch_apply`.
+- Штатные promotion dry-run
+  `promote_passport_chev_back_form_text0004_20260725_dry` и write-run
+  `promote_passport_chev_back_form_text0004_20260725_write` завершены `ok`.
+- В паспорт явно включены будущие действия:
+  Ozon seller SKU `back0005 -> chev_back_form_text0004`, создание WB-карточки
+  с `vendorCode=chev_back_form_text0004`, новым `nmID` и barcode, перенос
+  Ozon-фото `1,2,3,4` на WB без изменений. Слайд 3 UV-/влагостойкости не
+  редактировать; watermark не требуется.
+- Проверка Layer 3: 30 уникальных валидных Ozon-хештегов, Ozon-фото `4/4`,
+  WB-фото `4/4`, `wb_card_create` и `wb_media_update` присутствуют в
+  dangerous actions, пустые WB native ID сохранены как ожидаемое состояние до
+  создания.
+- Marketplace write не выполнялся; ожидается отдельная команда владельца
+  `применяй`.
+
+## Отправлена на согласование позиция 31 `loop_voisk_0005` 2026-07-25
+
+- Исходная карточка только на Ozon:
+  `offer_id=loop0006`, `product_id=2185760238`, `sku=2451182447`;
+  WB-карточки нет.
+- Предложенное название:
+  `Петлицы на липучке ВДВ, олива` — 29 символов. Неразрезанная пара
+  учитывается как одна товарная единица.
+- Лично просмотрены все 5 Ozon-фото. Ozon 1–5 предложено оставить без media
+  write. Для будущего WB фото 1–3 требуют защищённых версий: на каждом слайде
+  watermark должен закрывать обе эмблемы ВДВ; Ozon 4–5 нейтральны и могут
+  переноситься без изменений. Слайд 3 с UV-/влагостойкостью не редактировать.
+- WB create и WB media остаются заблокированными до подготовки и отдельного
+  согласования защищённых изображений 1–3. Текстовые параметры и Ozon seller
+  SKU можно согласовать независимо, но marketplace write не выполнялся.
+- Подготовлены Layer 2 audit/HTML:
+  `data/catalog/card_audits/ozon_seo_20260719/0031_loop_voisk_0005/`.
+  В текущий Telegram-топик отправлен только HTML-файл.
+- Проверено: 30 уникальных валидных Ozon-хештегов с 30 evidence-строками,
+  21 целевое поле Ozon, 18 полей WB; browser validation mobile `390/390`,
+  desktop `1366/1366`, broken images `0`.
+
+## Отправлена на согласование позиция 32 `chev_ng_fso_text0003` 2026-07-26
+
+- Позиция 31 `loop_voisk_0005` остаётся на рассмотрении владельца; её статус
+  и паспорт не изменялись.
+- Исходная позиция 32 только на Ozon:
+  `offer_id=form0052`, `product_id=2187574541`, `sku=2452571649`;
+  WB-карточки нет.
+- Предложенное название:
+  `Шеврон на липучке ФСО России нагрудный, чёрно-серый` — 51 символ.
+  Оно повторяет owner-approved построение аналогичного
+  `chev_ng_fso_text0002`, меняется только подтверждённый цвет.
+- Лично просмотрены все 5 Ozon-фото. Видна только текстовая надпись
+  `ФСО РОССИИ`, без герба или геральдической эмблемы, поэтому Ozon 1–5
+  предложено перенести на будущую WB-карточку в том же порядке без watermark.
+  Слайд 3 с UV-/влагостойкостью не редактировать.
+- Подготовлены Layer 2 audit/HTML:
+  `data/catalog/card_audits/ozon_seo_20260719/0032_chev_ng_fso_text0003/`.
+  В текущий Telegram-топик отправлен только HTML-файл.
+- Проверено: 30 уникальных валидных Ozon-хештегов с 30 evidence-строками,
+  21 целевое поле Ozon, 18 полей WB; browser validation mobile `390/390`,
+  desktop `1366/1366`, broken images `0`.
+- Marketplace write не выполнялся; ожидается решение владельца.
+
+## Отправлена на согласование позиция 30 `chev_kit2_nr_rg_pict0001` 2026-07-25
+
+- Текущие карточки: Ozon `offer_id=rosgkit20006`, `product_id=3210653444`,
+  `sku=3220790901`; WB `vendorCode=rosgkit20006`, `nmID=707892600`.
+- Предложенное название:
+  `Шевроны на липучке Росгвардия ОМОН СОБР ЦО, комплект 2 шт.` —
+  58 символов.
+- Лично просмотрены все 9 фото: Ozon 1–5 и WB 1–4. Защищённые WB-фото 1–3
+  сохранены без замены; WB 4 сохранено, нейтральное Ozon-фото 4 предложено
+  добавить как WB 5 без водяного знака. Слайд 3 с UV-/влагостойкостью не
+  редактировать.
+- Подготовлены Layer 2 audit/HTML:
+  `data/catalog/card_audits/ozon_seo_20260719/0030_chev_kit2_nr_rg_pict0001/`.
+  В текущий Telegram-топик отправлен только HTML-файл, без отдельной отправки
+  contact sheet.
+- Проверено: 30 уникальных валидных Ozon-хештегов, 20 целевых полей Ozon,
+  18 целевых полей WB; browser validation mobile `390/390`, desktop
+  `1366/1366`, broken images `0`.
+- Marketplace write не выполнялся; ожидается решение владельца.
+
+## Согласована и записана в Layer 3 позиция 30 `chev_kit2_nr_rg_pict0001` 2026-07-25
+
+- Владелец согласовал полный owner-review пакет без корректировок.
+- Layer 2 переведён в `owner_approved_layer3_written_verified_locally`.
+  Layer 3:
+  `data/catalog/master_passport/approved/chev_kit2_nr_rg_pict0001.json`,
+  статус `owner_approved_pending_batch_apply`.
+- Штатные promotion dry-run
+  `promote_passport_chev_kit2_nr_rg_pict0001_20260725_dry` и write-run
+  `promote_passport_chev_kit2_nr_rg_pict0001_20260725_write` завершены `ok`.
+- Проверка Layer 3: 30 уникальных Ozon-хештегов, Ozon-фото `5/5`,
+  WB-фото `5/5`; dangerous actions:
+  `card_content_update`, `seller_sku_update`, `wb_media_update`.
+- Marketplace write не выполнялся; ожидается отдельная команда владельца
+  `применяй`.
+
+## Подготовлены защищённые WB-фото 1–3 для `loop_voisk_0005` 2026-07-26
+
+- По прямой команде владельца подготовлены три кандидата WB-фото на основе
+  Ozon 1–3. На каждом изображении два водяных знака Vital Shevron закрывают
+  обе видимые эмблемы ВДВ.
+- На фото 2 сохранена размерная информация. На фото 3 сохранены исходный
+  слайд и текст про UV-/влагостойкость; кроме двух водяных знаков целевое
+  содержание не менялось.
+- Кандидаты сохранены в
+  `data/catalog/card_audits/ozon_seo_20260719/0031_loop_voisk_0005/candidate_media/`
+  и лично проверены визуально:
+  `wb_1_watermarked_candidate.png` — SHA-256
+  `e64fe075ea9cca1ada38123c220b86d752061923bf0aef271c052058ad4e8069`;
+  `wb_2_watermarked_candidate.png` —
+  `a9a9e15cad144bf4700998f6cb20c200dd79d788f269639b8a5777106ae4f7fe`;
+  `wb_3_watermarked_candidate.png` —
+  `101cada3cafbe28fc5c5e95ec892c5cf9d3b14e9119c4ad8364f1ac762af21f8`.
+- Layer 2 обновлён статусом `pending_owner_approval`. До явного согласования
+  владельца WB create/media остаются заблокированными. Marketplace write не
+  выполнялся.
+- Все три кандидата отправлены отдельными изображениями в текущий
+  Telegram-топик на согласование владельца.
+
+## Согласована и записана в Layer 3 позиция 31 `loop_voisk_0005` 2026-07-26
+
+- Владелец удалил из описаний Ozon/WB фразу
+  `Неразрезанная пара петлиц считается одной товарной единицей.`, согласовал
+  три защищённых WB-фото и остальной owner-review пакет.
+- Утверждённые WB-фото 1–3 сохранены в
+  `data/catalog/card_audits/ozon_seo_20260719/0031_loop_voisk_0005/approved_media/`;
+  WB 4–5 будут перенесены с Ozon без изменений.
+- Layer 3:
+  `data/catalog/master_passport/approved/loop_voisk_0005.json`, статус
+  `owner_approved_pending_batch_apply`.
+- Первый promotion dry-run
+  `promote_passport_loop_voisk_0005_20260726_owner_corrected_dry` корректно
+  остановился на `ozon_package_missing` и `wb_package_missing`: значения были
+  в Layer 2, но только под несовместимыми ключами. После добавления
+  эквивалентных алиасов без изменения значений и устранения legacy media
+  fallback успешны
+  `promote_passport_loop_voisk_0005_20260726_owner_corrected_dry3` и
+  `promote_passport_loop_voisk_0005_20260726_owner_corrected_write2`.
+- Проверено локально: исправленная фраза отсутствует в финальных описаниях;
+  WB-фото `5/5`, из них первые три — утверждённые локальные защищённые файлы;
+  dangerous actions включают `wb_card_create` и `wb_media_update`.
+  Marketplace write не выполнялся.
+
+## Согласована и записана в Layer 3 позиция 32 `chev_ng_fso_text0003` 2026-07-26
+
+- Владелец согласовал owner-review пакет без корректировок.
+- Layer 3:
+  `data/catalog/master_passport/approved/chev_ng_fso_text0003.json`, статус
+  `owner_approved_pending_batch_apply`.
+- Штатные promotion runs
+  `promote_passport_chev_ng_fso_text0003_20260726_owner_approved_dry` и
+  `promote_passport_chev_ng_fso_text0003_20260726_owner_approved_write`
+  завершены `ok`.
+- Проверено локально: Ozon-фото `5/5` остаются без media upload; будущий
+  WB-набор `5/5` переносится с Ozon в том же порядке без watermark;
+  dangerous actions включают `wb_card_create` и `wb_media_update`.
+  Marketplace write не выполнялся.
+
+## Отправлена на согласование позиция 33 `chev_ng_rg_text0002` 2026-07-26
+
+- Перед подготовкой исправлена устаревшая привязка номера: исходной Ozon-позиции
+  `form0053` соответствует внутренний артикул `chev_ng_rg_text0002`.
+  Артикул `chev_ng_rg_text0001` уже закреплён за `form0012` и повторно не
+  использован.
+- Исходная карточка только на Ozon:
+  `offer_id=form0053`, `product_id=2187599069`, `sku=2452587730`;
+  WB-карточки нет.
+- Предложенное название:
+  `Шеврон на липучке Росгвардия нагрудный, синий пиксель` — 53 символа.
+- Лично просмотрены все 5 Ozon-фото. Видна текстовая надпись
+  `РОСГВАРДИЯ`, геральдической эмблемы нет, поэтому для будущей WB-карточки
+  предложено перенести Ozon-фото `1–5` в том же порядке без watermark.
+  Слайд 3 с UV-/влагостойкостью не редактировать.
+- Подготовлены Layer 2 audit/HTML:
+  `data/catalog/card_audits/ozon_seo_20260719/0033_chev_ng_rg_text0002/`.
+  В текущий Telegram-топик отправлен только HTML-файл.
+- Проверено: 30 уникальных Ozon-хештегов совпадают с 30 evidence-строками,
+  21 целевое поле Ozon, 18 полей WB; browser validation mobile `390/390`,
+  desktop `1366/1366`, broken images `0`, горизонтального переполнения нет.
+- Marketplace write не выполнялся; ожидается решение владельца.
+
+## Согласована и записана в Layer 3 позиция 33 `chev_ng_rg_text0002` 2026-07-26
+
+- Владелец согласовал owner-review пакет без корректировок.
+- Layer 3:
+  `data/catalog/master_passport/approved/chev_ng_rg_text0002.json`, статус
+  `owner_approved_pending_batch_apply`.
+- Штатные promotion runs
+  `promote_passport_chev_ng_rg_text0002_20260726_owner_approved_dry` и
+  `promote_passport_chev_ng_rg_text0002_20260726_owner_approved_write`
+  завершены `ok`.
+- Проверено локально: 30 уникальных Ozon-хештегов; Ozon-фото `5/5` остаются
+  без media upload; будущий WB-набор `5/5` переносится с Ozon в том же
+  порядке без watermark; dangerous actions включают `wb_card_create` и
+  `wb_media_update`.
+- Marketplace write не выполнялся; ожидается отдельная команда владельца
+  `применяй`.
+
+## Отправлена на согласование позиция 34 `chev_ng_voisk_text0005` 2026-07-26
+
+- Позиция `chev_ng_rg_text0003` не возвращалась в review: она уже применена и
+  проверена 2026-07-22. Следующей актуальной незакрытой карточкой выбрана
+  Ozon-only позиция `form0055 -> chev_ng_voisk_text0005`.
+- Исходные идентификаторы Ozon:
+  `offer_id=form0055`, `product_id=2206210129`, `sku=2467115960`;
+  WB-карточки нет.
+- Предложенное название:
+  `Шеврон на липучке Инженерные войска нагрудный` — 45 символов.
+  Цвета `черный, желтый`, название цвета
+  `Инженерные войска, нагрудный, чёрно-жёлтый`; текущую модель Ozon
+  `Войска / model_id=651353398` предложено сохранить.
+- Лично просмотрены все 5 Ozon-фото. Ozon 1–5 остаются без media upload.
+  На фото 1–3 виден геральдический знак, поэтому для WB нужны защищённые
+  версии с watermark поверх каждого знака. Фото 4–5 нейтральны и могут быть
+  перенесены без изменений. На фото 3 UV-/влагостойкость и остальной слайд
+  не редактировать. Задача сохранена как `VS-DESIGN-049`.
+- Подготовлены Layer 2 audit/HTML:
+  `data/catalog/card_audits/ozon_seo_20260719/0034_chev_ng_voisk_text0005/`.
+  HTML отправлен в текущий Telegram-топик; отдельные изображения не
+  отправлялись.
+- Проверено: 30 уникальных Ozon-хештегов совпадают с 30 evidence-строками,
+  21 целевое поле Ozon, 18 полей WB; browser validation mobile `390/390`,
+  desktop `1366/1366`, broken images `0`, горизонтального переполнения нет.
+- WB media/create заблокированы до готовности и согласования защищённых фото
+  1–3. Marketplace write не выполнялся; ожидается решение владельца.
+
+## Согласована и записана в Layer 3 позиция 34 `chev_ng_voisk_text0005` 2026-07-26
+
+- Владелец согласовал название, описание, параметры, SEO и будущие операции.
+  Для медиа дано явное покарточное решение: перенести Ozon-фото `1–5` на WB
+  в том же порядке без изменений и без водяных знаков.
+- Задача `VS-DESIGN-049` закрыта со статусом `closed_owner_override`;
+  защищённые версии фото `1–3` для этой карточки не готовятся.
+  Слайд 3 с UV-/влагостойкостью переносится без редактирования.
+- Layer 3:
+  `data/catalog/master_passport/approved/chev_ng_voisk_text0005.json`, статус
+  `owner_approved_pending_batch_apply`.
+- Штатные promotion runs
+  `promote_passport_chev_ng_voisk_text0005_20260726_owner_approved_dry` и
+  `promote_passport_chev_ng_voisk_text0005_20260726_owner_approved_write`
+  завершены `ok`.
+- Проверено локально: 30 Ozon-хештегов, Ozon-фото `5/5`, WB-фото `5/5`;
+  будущий WB-набор содержит точные URL Ozon `1–5`, у всех позиций записано
+  owner-approved действие копирования без watermark. Marketplace write не
+  выполнялся; ожидается отдельная команда владельца `применяй`.
+
+## Отправлена на согласование позиция 35 `loop_fsb_0001` 2026-07-26
+
+- Следующей актуальной незакрытой карточкой выбрана Ozon-only позиция
+  `loop0001 -> loop_fsb_0001`; Layer 3 для неё отсутствует.
+- Исходные идентификаторы Ozon:
+  `offer_id=loop0001`, `product_id=2128423866`, `sku=2407398880`;
+  WB-карточки нет.
+- Предложенное название:
+  `Петлицы на липучке ФСБ, олива` — 29 символов.
+  Текущую модель Ozon `ФСБ / model_id=504942292` предложено сохранить.
+- Лично просмотрены все 5 Ozon-фото. На фото `1–3` видны по два
+  геральдических знака ФСБ; для будущей WB-карточки нужны защищённые версии,
+  закрывающие оба знака на каждом слайде. Ozon `4–5` нейтральны и могут быть
+  перенесены без изменений. Слайд 3 с UV-/влагостойкостью не редактировать.
+  Дизайнерская задача: `VS-DESIGN-050`.
+- Подготовлены Layer 2 audit/HTML:
+  `data/catalog/card_audits/ozon_seo_20260719/0035_loop_fsb_0001/`.
+  HTML подтверждённо отправлен в текущий Telegram-топик; отдельные изображения
+  не отправлялись.
+- Проверено: 30 уникальных Ozon-хештегов совпадают с 30 evidence-строками,
+  21 целевое поле Ozon, 18 полей WB; browser validation mobile `390/390`,
+  desktop `1366/1366`, broken images `0`, горизонтального переполнения нет.
+- Бизнес- и parser-показатели исходного row-level пакета имеют дату
+  2026-06-26/28 и показаны только как исторический приоритет, а не как
+  актуальные значения.
+- Marketplace write не выполнялся; ожидается решение владельца.
+
+### Фото WB для `loop_fsb_0001` подготовлены 2026-07-26
+
+- Подготовлены и отправлены в текущий Telegram-топик три защищённых кандидата
+  WB `1–3`; на каждом слайде по два горизонтальных watermark Vital Shevron,
+  закрывающих оба видимых геральдических знака ФСБ.
+- Лично проверено: на фото 2 сохранён и читается размер `35×25 мм`; на фото 3
+  сохранены UV-/влагостойкость, весь текст и остальное содержание слайда.
+- Кандидаты сохранены в
+  `data/catalog/card_audits/ozon_seo_20260719/0035_loop_fsb_0001/candidate_media/`.
+  Статус: `ready_for_owner_review`.
+- До визуального согласования владельца WB media/create остаются
+  заблокированными. Marketplace write не выполнялся.
+
+### `loop_fsb_0001` согласован вместе с фото WB 2026-07-26
+
+- Владелец согласовал весь паспорт и защищённые фото WB `1–3`. Файлы
+  перенесены без изменения байтов в
+  `data/catalog/card_audits/ozon_seo_20260719/0035_loop_fsb_0001/approved_media/`;
+  SHA-256 совпадают с просмотренными кандидатами.
+- Целевой WB-набор: утверждённые локальные фото `1–3` с двумя watermark на
+  каждом слайде; Ozon `4–5` переносить без изменений. Ozon `1–5` оставить без
+  media upload. Слайд 3 с UV-/влагостойкостью не редактировать.
+- Layer 2 закрыт как `owner_approved_pending_batch_apply`; дизайнерская задача
+  `VS-DESIGN-050` закрыта как `closed_owner_approved`.
+- Штатные promotion runs
+  `promote_passport_loop_fsb_0001_20260726_owner_approved_media_dry` и
+  `promote_passport_loop_fsb_0001_20260726_owner_approved_media_write`
+  завершены `ok`; Layer 3 создан:
+  `data/catalog/master_passport/approved/loop_fsb_0001.json`.
+- Проверено локально: название, 30 Ozon-хештегов, упаковка Ozon/WB, Ozon-фото
+  `5/5`, WB-фото `5/5`, dangerous actions
+  `card_content_update`, `seller_sku_update`, `wb_media_update`,
+  `wb_card_create`. Marketplace write не выполнялся; ожидается отдельная
+  команда владельца `применяй`.
+
+## Отправлена на согласование позиция 36 `loop_fso_0001` 2026-07-26
+
+- Следующей актуальной незакрытой карточкой выбрана Ozon-only позиция
+  `loop0016 -> loop_fso_0001`; исходные Ozon ID:
+  `product_id=2187635076`, `sku=2452621926`. WB-карточки нет.
+- Предложенное название:
+  `Петлицы на липучке ФСО, олива` — 29 символов. Текущую модель Ozon
+  `ФСО / model_id=504942326` предложено сохранить; будущую WB-карточку
+  создать в группе `ФСО`.
+- Лично просмотрены все 5 Ozon-фото. На фото `1–3` видны по два
+  геральдических знака ФСО; для будущей WB-карточки нужны защищённые версии,
+  закрывающие оба знака на каждом слайде. Ozon `4–5` нейтральны. Слайд 3 с
+  UV-/влагостойкостью не редактировать. Дизайнерская задача:
+  `VS-DESIGN-051`.
+- Подготовлен и подтверждённо отправлен в текущий Telegram-топик HTML:
+  `data/catalog/card_audits/ozon_seo_20260719/0036_loop_fso_0001/loop_fso_0001.html`.
+- Проверено: 30 уникальных Ozon-хештегов; полный целевой набор полей Ozon/WB;
+  browser validation mobile `390/390`, desktop `1366/1366`, одно встроенное
+  изображение, broken images `0`, горизонтального переполнения нет.
+  Финальные mobile/desktop screenshots лично просмотрены.
+- Marketplace write не выполнялся; ожидается решение владельца.
+
+### Фото WB для `loop_fso_0001` подготовлены и согласованы 2026-07-26
+
+- Подготовлены и отправлены в текущий Telegram-топик три защищённых кандидата
+  WB `1–3`; на каждом слайде по два горизонтальных watermark Vital Shevron,
+  закрывающих оба видимых геральдических знака ФСО.
+- Лично проверено: на фото 2 сохранены и читаются размеры `35×25 мм`; на
+  фото 3 сохранены UV-/влагостойкость, весь текст и остальное содержание.
+- Владелец согласовал все три изображения. Утверждённые файлы сохранены в
+  `data/catalog/card_audits/ozon_seo_20260719/0036_loop_fso_0001/approved_media/`;
+  SHA-256 совпадают с просмотренными кандидатами.
+
+### `loop_fso_0001` согласован вместе с фото WB 2026-07-26
+
+- Layer 2 закрыт как `owner_approved_pending_batch_apply`; дизайнерская задача
+  `VS-DESIGN-051` закрыта как `closed_owner_approved`.
+- Целевой WB-набор: утверждённые локальные фото `1–3`; Ozon `4–5` переносить
+  без изменений. Ozon `1–5` оставить без media upload. Слайд 3 с
+  UV-/влагостойкостью не редактировать.
+- Layer 3 пересобран штатным promotion с явным `overwrite`:
+  `data/catalog/master_passport/approved/loop_fso_0001.json`.
+  Финальные dry/write runs:
+  `promote_passport_loop_fso_0001_20260726_package_contents_fix_dry` и
+  `promote_passport_loop_fso_0001_20260726_package_contents_fix_write`.
+- Исправлен promotion-контракт: явная WB-комплектация из
+  `proposed_final_card.wb_attributes.package_contents` теперь сохраняется,
+  вместо обобщённого значения для шеврона. Focused tests: `17 passed`.
+- Проверено локально: название, 30 Ozon-хештегов, размеры и упаковка,
+  правильная WB-комплектация, Ozon-фото `5/5`, WB-фото `5/5`, dangerous
+  actions `card_content_update`, `seller_sku_update`, `wb_media_update`,
+  `wb_card_create`. Marketplace write не выполнялся.
+
+## Отправлена на согласование позиция 37 `loop_fso_0002` 2026-07-26
+
+- Следующей актуальной незакрытой карточкой выбрана Ozon-only позиция
+  `loop0017 -> loop_fso_0002`; исходные Ozon ID:
+  `product_id=2187646547`, `sku=2452629184`. WB-карточки нет.
+- Предложенное название:
+  `Петлицы на липучке ФСО, чёрно-серые` — 35 символов.
+  Текущую модель Ozon `ФСО / model_id=504942326` предложено сохранить;
+  будущую WB-карточку создать в группе `ФСО`.
+- Лично просмотрены все 5 Ozon-фото. На фото `1–3` видны по два
+  геральдических знака ФСО; для будущей WB-карточки нужны защищённые версии.
+  Ozon `4–5` нейтральны. Слайд 3 с UV-/влагостойкостью не редактировать.
+  Дизайнерская задача: `VS-DESIGN-052`.
+- Подготовлен и подтверждённо отправлен в текущий Telegram-топик HTML:
+  `data/catalog/card_audits/ozon_seo_20260719/0037_loop_fso_0002/loop_fso_0002.html`.
+- Проверено: 30 уникальных Ozon-хештегов с 30 evidence-строками,
+  21 целевое поле Ozon, 18 полей WB; browser validation mobile `390/390`,
+  desktop `1366/1366`, одно встроенное изображение, broken images `0`,
+  горизонтального переполнения нет. Финальные mobile/desktop screenshots
+  лично просмотрены.
+- Marketplace write не выполнялся; ожидается решение владельца.
+
+### Фото WB для `loop_fso_0002` подготовлены 2026-07-26
+
+- Подготовлены и подтверждённо отправлены в текущий Telegram-топик три
+  защищённых кандидата WB `1–3`; на каждом слайде по два горизонтальных
+  watermark Vital Shevron, закрывающих оба видимых геральдических знака ФСО.
+- Кандидаты сохранены в
+  `data/catalog/card_audits/ozon_seo_20260719/0037_loop_fso_0002/candidate_media/`:
+  `wb_1_watermarked_candidate.png`
+  (`ccd67256f7ab8c2e2efd65632bb6889f375b17677b5f241500b68e2091da6b97`),
+  `wb_2_watermarked_candidate.png`
+  (`8a0f94a0a93a7c1cf9cbd79ddfbe6ffac82ac5a995321de0cebceb55a982666c`),
+  `wb_3_watermarked_candidate.png`
+  (`d2cace2091d26a6a934702e200aab6dc28f856d4ffc7b2b5fcf21851c2c7d279`).
+- Лично проверено: на фото 2 сохранены размеры `35×25 мм`; на фото 3
+  сохранены UV-/влагостойкость, весь текст и остальное содержание.
+- Статус: `ready_for_owner_review`. До явного согласования владельца файлы не
+  переводятся в `approved_media`; marketplace write не выполнялся.
+
+### `loop_fso_0002` согласован вместе с фото WB 2026-07-26
+
+- Владелец согласовал весь паспорт и защищённые фото WB `1–3`. Файлы
+  перенесены без изменения байтов в
+  `data/catalog/card_audits/ozon_seo_20260719/0037_loop_fso_0002/approved_media/`;
+  SHA-256 совпадают с просмотренными кандидатами.
+- Целевой WB-набор: утверждённые локальные фото `1–3`; Ozon `4–5` переносить
+  без изменений. Ozon `1–5` оставить без media upload. Слайд 3 с
+  UV-/влагостойкостью не редактировать.
+- Layer 2 закрыт как `owner_approved_pending_batch_apply`; дизайнерская задача
+  `VS-DESIGN-052` закрыта как `closed_owner_approved`.
+- Layer 3 создан и проверен:
+  `data/catalog/master_passport/approved/loop_fso_0002.json`.
+  Финальные promotion runs:
+  `promote_passport_loop_fso_0002_20260726_owner_approved_media_overwrite_dry`
+  и
+  `promote_passport_loop_fso_0002_20260726_owner_approved_media_overwrite_write`.
+- Проверено локально: название, описание из трёх блоков, 30 Ozon-хештегов,
+  размеры и упаковка, Ozon-фото `5/5`, WB-фото `5/5`, утверждённые SHA-256,
+  правильная WB-комплектация, dangerous actions
+  `card_content_update`, `seller_sku_update`, `wb_media_update`,
+  `wb_card_create`. Marketplace write не выполнялся; ожидается отдельная
+  команда владельца `применяй`.
+
+## Отправлена на согласование позиция 38 `loop_voisk_0013` 2026-07-26
+
+- Следующей актуальной незакрытой карточкой выбрана Ozon-only позиция
+  `loop0018 -> loop_voisk_0013`; исходные Ozon ID:
+  `product_id=2187666955`, `sku=2452649040`. WB-карточки нет.
+- Предложенное название:
+  `Петлицы на липучке Сухопутные войска, полевые` — 45 символов.
+  Текущую модель Ozon `Войска / model_id=651353398` предложено сохранить;
+  будущую WB-карточку создать в группе `Войска`.
+- Лично просмотрены все 5 Ozon-фото. На фото `1–3` видны по два
+  геральдических знака Сухопутных войск; для будущей WB-карточки нужны
+  защищённые версии. Ozon `4–5` нейтральны. Слайд 3 с UV-/влагостойкостью
+  не редактировать. Дизайнерская задача: `VS-DESIGN-053`.
+- Подготовлен, проверен и подтверждённо отправлен в текущий Telegram-топик
+  HTML:
+  `data/catalog/card_audits/ozon_seo_20260719/0038_loop_voisk_0013/loop_voisk_0013.html`.
+- Проверено: 30 уникальных Ozon-хештегов с evidence-строками, полный целевой
+  набор полей Ozon/WB; browser validation mobile `390/390`, desktop
+  `1366/1366`, одно встроенное изображение, broken images `0`,
+  горизонтального переполнения нет. Финальные mobile/desktop screenshots
+  лично просмотрены.
+- Marketplace write не выполнялся; ожидается решение владельца.
+
+### Правки и фото WB для `loop_voisk_0013` подготовлены 2026-07-26
+
+- Владелец задал точное название:
+  `Петлица Сухопутные войска, олива`; слово `олива` зафиксировано с маленькой
+  буквы. Остальной текст, атрибуты, группировка и будущие операции согласованы.
+- Для WB подготовлены и лично проверены три защищённые версии Ozon `1–3`:
+  `data/catalog/card_audits/ozon_seo_20260719/0038_loop_voisk_0013/candidate_media/`.
+  На каждом фото оба видимых геральдических знака закрыты отдельными
+  горизонтальными watermark. На фото 2 сохранены размеры `35×25 мм`; фото 3
+  с UV-/влагостойкостью и остальным содержанием не изменялось.
+- Все три кандидата подтверждённо отправлены в текущий Telegram-топик
+  отдельными изображениями на согласование.
+- Layer 2 имеет статус `owner_approved_pending_media_review`; дизайнерская
+  задача `VS-DESIGN-053` переведена в `ready_for_owner_review`. До отдельного
+  визуального согласования фото Layer 3 не создаётся, WB media/create
+  заблокированы.
+- HTML пересобран с исправленным названием и повторно проверен в браузере:
+  mobile `390/390`, desktop `1366/1366`, broken images `0`, горизонтального
+  переполнения нет; обе контрольные screenshots лично просмотрены.
+- Marketplace write не выполнялся.
+
+### `loop_voisk_0013` согласован вместе с фото WB 2026-07-26
+
+- Владелец согласовал защищённые фото WB `1–3`; весь остальной паспорт был
+  согласован ранее. Файлы перенесены без изменения байтов в
+  `data/catalog/card_audits/ozon_seo_20260719/0038_loop_voisk_0013/approved_media/`;
+  SHA-256 совпадают с просмотренными кандидатами.
+- Layer 2 закрыт как `owner_approved_pending_batch_apply`; дизайнерская задача
+  `VS-DESIGN-053` закрыта как `closed_owner_approved`.
+- Layer 3 создан и проверен:
+  `data/catalog/master_passport/approved/loop_voisk_0013.json`.
+  Promotion runs:
+  `promote_passport_loop_voisk_0013_20260726_owner_approved_media_dry` и
+  `promote_passport_loop_voisk_0013_20260726_owner_approved_media_write`.
+- Проверено: точное название `Петлица Сухопутные войска, олива`, 30 чистых
+  Ozon-хештегов, упаковка Ozon/WB, комплектность, отдельные медиапланы Ozon/WB,
+  утверждённые локальные файлы и dangerous actions
+  `card_content_update`, `seller_sku_update`, `wb_media_update`,
+  `wb_card_create`.
+- Marketplace write не выполнялся; ожидается отдельная команда `применяй`.
+
+## Отправлена на согласование позиция 39 `loop_voisk_0015` 2026-07-26
+
+- Следующей актуальной Ozon-only карточкой выбрана
+  `loop0020 -> loop_voisk_0015`; Ozon:
+  `product_id=2187682712`, `sku=2452655353`. WB-карточки нет.
+- Предложенное название:
+  `Петлицы на липучке Сухопутные войска, чёрно-жёлтые` — 50 символов.
+  Цвета Ozon/WB: `черный`, `желтый`; название цвета:
+  `Петлицы Сухопутные войска, чёрно-жёлтые`.
+- Лично просмотрены все 5 Ozon-фото. На фото `1–3` видны по два
+  геральдических знака Сухопутных войск; для будущей WB-карточки нужны
+  защищённые версии. Ozon `4–5` нейтральны. Слайд 3 с UV-/влагостойкостью
+  не редактировать. Создана дизайнерская задача `VS-DESIGN-054`.
+- Подготовлен и подтверждённо отправлен в текущий Telegram-топик HTML:
+  `data/catalog/card_audits/ozon_seo_20260719/0039_loop_voisk_0015/loop_voisk_0015.html`.
+- Проверено: 30 уникальных Ozon-хештегов с evidence-строками, полный целевой
+  набор полей Ozon/WB, browser validation mobile `390/390`, desktop
+  `1366/1366`, broken images `0`, горизонтального переполнения нет.
+  Финальные mobile/desktop screenshots лично просмотрены.
+- Marketplace write не выполнялся; ожидается решение владельца.
+
+### `loop_voisk_0015` согласован вместе с фото WB 2026-07-26
+
+- Владелец согласовал весь паспорт и защищённые фото WB `1–3`. Три файла
+  повторно доставлены через актуальную MCP-привязку текущего Telegram-топика
+  после выявления ошибочной ручной отправки в старый `thread_id`.
+- Утверждённые файлы сохранены без изменения байтов в
+  `data/catalog/card_audits/ozon_seo_20260719/0039_loop_voisk_0015/approved_media/`;
+  SHA-256:
+  `f1bda493ca53362389fcf18e451f985870046dd1946423d3c707a3352108d6b3`,
+  `2186b4cedc3de78a6f3ffdb438cfc9b4d79d95da1711278a2eb2e99a8c3552a5`,
+  `354744f41c65c1c759023a94796397afffc9c7656a568dd9e254a860fd6866db`.
+- Целевой WB-набор: утверждённые локальные фото `1–3`; Ozon `4–5`
+  переносить без изменений. На фото 2 сохранены размеры `35×25 мм`; на
+  фото 3 сохранены UV-/влагостойкость и остальное содержание.
+- Layer 2 закрыт как `owner_approved_pending_batch_apply`; дизайнерская задача
+  `VS-DESIGN-054` закрыта как `closed_owner_approved`.
+- Layer 3 создан и проверен:
+  `data/catalog/master_passport/approved/loop_voisk_0015.json`.
+  Финальные promotion runs:
+  `promote_passport_loop_voisk_0015_20260726_owner_approved_media_final_dry`
+  и
+  `promote_passport_loop_voisk_0015_20260726_owner_approved_media_final_write`.
+- Проверено локально: название, описание, 30 Ozon-хештегов, упаковка Ozon/WB,
+  комплектность, Ozon-фото `5/5`, WB-фото `5/5`, утверждённые локальные
+  файлы, `wb.create.media_upload_status=owner_approved_assets_ready_for_future_apply`
+  и dangerous actions `card_content_update`, `seller_sku_update`,
+  `wb_media_update`, `wb_card_create`.
+- Marketplace write не выполнялся; ожидается отдельная команда `применяй`.
+
+## Отправлена на согласование позиция 40 `loop_voisk_0016` 2026-07-26
+
+- Следующей актуальной Ozon-only карточкой выбрана
+  `loop0021 -> loop_voisk_0016`; Ozon:
+  `product_id=2187691770`, `sku=2452663947`. WB-карточки нет.
+- Предложенное название:
+  `Петлицы на липучке Сухопутные войска, малая эмблема` — 51 символ.
+  Цвета Ozon/WB: `черный`, `желтый`; название цвета:
+  `Петлицы Сухопутные войска, малая эмблема`.
+- Лично просмотрены все 5 Ozon-фото. На фото `1–3` видны по две малые
+  эмблемы Сухопутных войск; для будущей WB-карточки нужны защищённые версии.
+  Ozon `4–5` нейтральны. Слайд 3 с UV-/влагостойкостью не редактировать.
+  Создана дизайнерская задача `VS-DESIGN-055`.
+- Подготовлен и отправлен через актуальную MCP-привязку текущего
+  Telegram-топика HTML:
+  `data/catalog/card_audits/ozon_seo_20260719/0040_loop_voisk_0016/loop_voisk_0016.html`.
+  Ранее выполненная ручная отправка в старый `thread_id` отмечена как
+  ошибочный маршрут и не считается подтверждением доставки.
+- Проверено: 30 Ozon-хештегов, полный целевой набор полей Ozon/WB, browser
+  validation mobile `390/390`, desktop `1366/1366`, broken images `0`,
+  горизонтального переполнения нет. Финальные mobile/desktop screenshots
+  лично просмотрены.
+- Marketplace write не выполнялся; ожидается решение владельца.
+
+### Фото WB для `loop_voisk_0016` подготовлены 2026-07-26
+
+- По отдельному запросу владельца подготовлены три защищённых кандидата WB
+  `1–3`; на каждом слайде оба видимых малых геральдических знака Сухопутных
+  войск закрыты отдельными белыми watermark `VITAL SHEVRON`.
+- Файлы сохранены в
+  `data/catalog/card_audits/ozon_seo_20260719/0040_loop_voisk_0016/candidate_media/`;
+  SHA-256:
+  `2a4ccf6f790e0410fa02702939e6f50c7ae779750b4fc68d0f3505a52da0e0e2`,
+  `984b7438f0681dd88b0c025b0299fb11c714b3147cd79c8ed01497e1b3b8ffec`,
+  `3557f2db05a0bfe06675aed284dd7f7f87fe61e814c69cc7a137ae87e8048c6c`.
+- Лично проверено: на фото 2 сохранены и читаются размеры `35×25 мм`; на
+  фото 3 сохранены точные подписи про Velcro, UV- и влагостойкость и остальное
+  содержание слайда.
+- Все три изображения подтверждённо отправлены через актуальную MCP-привязку
+  текущего Telegram-топика. Статус `ready_for_owner_review`; дизайнерская
+  задача `VS-DESIGN-055` также переведена в `ready_for_owner_review`.
+- До явного согласования фото не переводятся в `approved_media`, Layer 3 не
+  создаётся, marketplace media/create не выполняются.
+
+### Петлицы Сухопутных войск 0013/0015/0016 окончательно согласованы 2026-07-26
+
+- Владелец утвердил правило образца эмблемы: карточки с эмблемой со звездой
+  получают `с/о` в названии и фразу `эмблема старого образца` в описании;
+  карточка с эмблемой нового образца получает `н/о` в названии и расшифровку
+  `эмблема нового образца` только в описании.
+- Итоговые названия:
+  `Петлица Сухопутные войска, с/о, олива`;
+  `Петлицы на липучке Сухопутные войска, с/о, черно-желтые`;
+  `Петлицы на липучке Сухопутные войска, н/о, черно-желтые`.
+- Для `loop_voisk_0016` защищённые WB-фото 1–3 утверждены владельцем и без
+  изменения байтов скопированы в `approved_media`; SHA-256 совпадают с
+  согласованными кандидатами. UV-/влагостойкость на фото 3 не изменялась.
+- Layer 2 и HTML трёх карточек пересобраны и проверены на ширинах `390` и
+  `1366`: горизонтального переполнения и битых изображений нет.
+- Layer 3 обновлён для `loop_voisk_0013`, `loop_voisk_0015` и создан для
+  `loop_voisk_0016`. Dry-run/write runs имеют общий шаблон
+  `promote_passport_<sku>_20260726_pattern_owner_approved_<dry|write>`;
+  каждый write завершён `overall_status=ok`, `written_rows=1`.
+- Marketplace write не разрешён и не выполнялся; все три паспорта остаются
+  `owner_approved_pending_batch_apply` / `not_applied`.
+
+### Текущий остаток согласованных, но не применённых паспортов
+
+Дата пересчёта: 2026-07-26.
+
+- В `data/catalog/master_passport/approved/` находится 264 Layer 3 паспорта.
+- Из них 250 имеют `owner_approved_applied_verified / applied_verified`,
+  один — отдельный закрытый статус `owner_approved /
+  wb_applied_ozon_removed_policy`.
+- Точный остаток со связкой
+  `owner_approved_pending_batch_apply / not_applied` — **13 паспортов**:
+  `chev_back_form_text0004`, `chev_kit2_nr_rg_pict0001`,
+  `chev_ng_fso_text0003`, `chev_ng_rg_text0002`,
+  `chev_ng_voisk_text0005`, `loop_fsb_0001`, `loop_fsin_0001`,
+  `loop_fso_0001`, `loop_fso_0002`, `loop_voisk_0005`,
+  `loop_voisk_0013`, `loop_voisk_0015`, `loop_voisk_0016`.
+- Пересчёт выполнен двумя независимыми read-only проходами по всем Layer 3
+  JSON; оба дали 13. Marketplace API не вызывались.
+
+## Пачка из 13 паспортов применена и проверена 2026-07-26
+
+- Owner-approved batch:
+  `apply_13_approved_cards_20260726T1635`, plan
+  `plan_13_approved_cards_20260726T1630_v4`.
+- Seller SKU обновлены для всех 13; две существующие WB-карточки обновлены,
+  11 отсутствовавших WB-карточек созданы с новыми `nmID` и barcode.
+  WB media: `39/39` загрузок без ошибок, включая утвержденные локальные
+  защищенные изображения; фактическое число фото проверено.
+- Пять карточек Ozon применились сразу. Восемь карточек-петлиц Ozon были
+  отклонены по `FB_OBSCENE_MODEL_hashtag`; по решению владельца они повторно
+  применены без атрибута `23171` Ozon-only run
+  `recovery_8_loop_no_hashtags_ozon_apply_20260726T1646`.
+- `loop_fso_0001` и `loop_voisk_0013` потребовали точечного LK recovery
+  top-level названия, размеров и веса после принятого, но неполностью
+  отразившегося full import. Для `loop_voisk_0013` запрос был сначала
+  перехвачен и остановлен до сети в
+  `recovery_loop_voisk_0013_lk_item_update_guarded_plan_20260726T1656_v4`,
+  затем применен из этого плана. Цены обеих карточек после recovery не
+  изменились: `price=650`, `old_price=1300`, `min_price=530`,
+  `marketing_seller_price=530`.
+- Финальная read-only проверка
+  `final_verify_13_approved_cards_no_ozon_hashtags_20260726T1702`:
+  Ozon `13/13 ok`, WB `13/13 ok`, blocked rows `0`, product errors отсутствуют.
+- Layer 2 и Layer 3 всех 13 закрыты как
+  `owner_approved_applied_verified / applied_verified`; восемь восстановленных
+  runtime `card_work_items` закрыты run
+  `sync_8_recovered_cards_after_final_verify_20260726T1703`.
+- Предыдущий список «13 согласованных, но не применённых» в этом checkpoint
+  считается закрытым. `data/catalog/card_status/latest.json` теперь содержит
+  263 `applied_verified` и один отдельный закрытый policy-статус
+  `wb_applied_ozon_removed_policy`; незакрытых паспортов этой пачки нет.
+
+## Точный блокирующий Ozon-хештег петлиц найден 2026-07-26
+
+- Для восьми карточек-петлиц из исходной согласованной пачки найдено 14 общих
+  хештегов, которые до этой серии не применялись в подтверждённых карточках.
+  Диагностика выполнена на контрольной карточке `loop_fsb_0001`: за один
+  запуск менялся только один кандидат в Ozon-атрибуте `23171`, WB не
+  затрагивался.
+- Отдельно приняты Ozon и прошли модерацию:
+  `#петлица`, `#петлицы`, `#петлица_на_липучке`.
+- Точно отклонён только `#петлицаналипучке`. Seller API сначала вернул
+  `imported` без ошибок, но карточка получила статус `Не обновлен`.
+  Read-only проверка истории импорта Ozon подтвердила:
+  `Хештег: уберите мат или вульгарные слова`
+  (`FB_OBSCENE_MODEL_hashtag`).
+- После отклонения в Ozon сохранился предыдущий безопасный
+  `#петлица_на_липучке`. Название, описание, цвета, габариты, фото, цены,
+  seller SKU и product ID контрольной карточки не изменились; product errors
+  отсутствуют.
+- Контрольный verify:
+  `ozon_hashtag_probe_loop_fsb_0001_p04_lk_verify_20260726T1945`.
+  Диагностический скрипт:
+  `scripts/cards/ozon_hashtag_probe.py`.
+- Исправленная пачка из восьми карточек ещё не применена. Следующий безопасный
+  шаг: удалить только точный `#петлицаналипучке` из каждого согласованного
+  набора, проверить полный исправленный набор из 29 хештегов сначала на
+  `loop_fsb_0001`, затем подготовить отдельный Ozon-only checksummed plan на
+  восемь карточек для review владельца. До этого Layer 2/Layer 3 не считать
+  синхронизированными с текущим диагностическим состоянием `loop_fsb_0001`.
+
+### Контрольный набор из 29 хештегов принят Ozon 2026-07-26
+
+- Владелец явно согласовал контроль полного исправленного набора на
+  `loop_fsb_0001`.
+- Dry-run:
+  `ozon_hashtag_probe_loop_fsb_0001_set29_plan_20260726T1954`;
+  apply/verify:
+  `ozon_hashtag_probe_loop_fsb_0001_set29_apply_20260726T1957`.
+- В запросе было ровно 29 уникальных хештегов из исходного согласованного
+  набора; исключён только `#петлицаналипучке`. Write scope:
+  только Ozon-атрибут `23171`, WB не затрагивался.
+- Ozon task `5212680715` завершён: все 29 хештегов отображаются в точном
+  порядке, `moderate_status=approved`, `validation_status=success`, карточка
+  `Продается`, `product_errors=[]`.
+- Инварианты `name`, `description`, цвета, габариты, основное и дополнительные
+  фото, цены, `offer_id` и `product_id` совпали с baseline. Цены:
+  `price=650`, `old_price=1300`, `min_price=530`,
+  `marketing_seller_price=650`.
+- Layer 2 и Layer 3 `loop_fsb_0001` синхронизированы с фактическим набором из
+  29 хештегов и ссылкой на verify run. HTML сохранён как исторический
+  owner-review пакет и не переписывался.
+- Остальные семь карточек пока не обновлялись. Следующий шаг — подготовить
+  отдельный Ozon-only checksummed dry-run с их исходными согласованными
+  наборами за вычетом точного блокера; apply только после review владельца.
+
+### Исправленные Ozon-хештеги применены ко всей восьмёрке 2026-07-26
+
+- После явной команды владельца `доделай работу с хештегами` применены семь
+  ранее подготовленных checksummed Ozon-only планов:
+  `loop_fsin_0001`, `loop_fso_0001`, `loop_fso_0002`,
+  `loop_voisk_0005`, `loop_voisk_0013`, `loop_voisk_0015`,
+  `loop_voisk_0016`. Контрольная `loop_fsb_0001` повторно не отправлялась.
+- На каждой карточке изменён только Ozon-атрибут `23171`: установлен её
+  исходный согласованный набор из 30 хештегов без точного блокера
+  `#петлицаналипучке`, итого по 29 уникальных хештегов.
+- Индивидуальные apply/verify runs:
+  `ozon_hashtag_probe_loop_fsin_0001_set29_apply_20260726T2030`,
+  `ozon_hashtag_probe_loop_fso_0001_set29_apply_20260726T2032`,
+  `ozon_hashtag_probe_loop_fso_0002_set29_apply_20260726T2034`,
+  `ozon_hashtag_probe_loop_voisk_0005_set29_apply_20260726T2036`,
+  `ozon_hashtag_probe_loop_voisk_0013_set29_apply_20260726T2038`,
+  `ozon_hashtag_probe_loop_voisk_0015_set29_apply_20260726T2040`,
+  `ozon_hashtag_probe_loop_voisk_0016_set29_apply_20260726T2042`.
+- Все семь карточек получили `classification=accepted`: фактически видны
+  точные 29/29 хештегов, `moderate_status=approved`,
+  `validation_status=success`, статус `Продается`, `product_errors=[]`.
+  Для каждой отдельно подтверждено отсутствие drift названия, описания,
+  цветов, габаритов, фото, цен, `offer_id` и `product_id`.
+- Общая повторная read-only проверка всей восьмёрки:
+  `final_verify_8_loop_set29_hashtags_20260726T2035`. Результат:
+  Ozon `8/8 ok`, WB `8/8 ok`, blocked rows `0`; WB не изменялся.
+- Layer 2 и Layer 3 всей восьмёрки синхронизированы с фактическими наборами из
+  29 хештегов, ограничением
+  `excluded_hashtags=["#петлицаналипучке"]` и ссылками на финальный verify.
+  Local sync run:
+  `sync_7_ozon_set29_hashtags_20260726T2033`.
+- Хештеговая задача закрыта. Следующая рабочая точка карточного контура —
+  подготовка следующей незакрытой карточки после позиции 40
+  `loop_voisk_0016` по зафиксированному owner-review HTML-шаблону.
+
+## Отправлена на согласование позиция 41 `chev_nr_chvk_pict0001` 2026-07-26
+
+- После закрытия хештеговой задачи первой незакрытой карточкой исходной
+  очереди выбрана Ozon+WB позиция `chev_nr_chvk_pict0001`; Layer 2 и Layer 3
+  до этого отсутствовали.
+- Выполнен fresh read-only сбор:
+  `fetch_card_content_chev_nr_chvk_pict0001_20260726T2040`.
+  Ozon: `offer_id=pict0043`, `product_id=2206848675`, `sku=2467630723`;
+  WB: `vendorCode=chvkpict0013_pict0043_222098`, `nmID=593378161`,
+  `imtID=805781544`, barcode сохранён как native ID.
+- Предложенное единое название:
+  `Шеврон на липучке ЧВК Вагнер Африканский корпус` — 47 символов,
+  без кавычек и нерелевантного `СВО`.
+- Лично просмотрены все 10 фото: Ozon `5/5`, WB `5/5`. Наборы совпадают по
+  содержанию и порядку; предложено оставить текущие фото обеих площадок
+  `1–5` без media upload. Слайд 3 с UV-/влагостойкостью не редактировать и
+  не переносить эти claims в текст или атрибуты. Товар не ведомственный,
+  watermark не требуется.
+- Подготовлены Layer 2 audit и self-contained HTML:
+  `data/catalog/card_audits/ozon_seo_20260719/0041_chev_nr_chvk_pict0001/`.
+  HTML подтверждённо отправлен одним документом в текущий Telegram-топик;
+  отдельные изображения не отправлялись.
+- Проверено: 30 уникальных Ozon-хештегов и 30 evidence-строк; 18 полных
+  целевых полей Ozon и 18 WB; mobile `390/390`, desktop `1366/1366`,
+  одно встроенное изображение, broken images `0`, горизонтального
+  переполнения нет. Финальные mobile/desktop screenshots лично просмотрены.
+- Предлагаемая будущая унификация seller SKU:
+  Ozon `pict0043 -> chev_nr_chvk_pict0001`, WB
+  `chvkpict0013_pict0043_222098 -> chev_nr_chvk_pict0001`; native ID и
+  barcode сохранить. Группировку не менять.
+- Marketplace write и Layer 3 не выполнялись; статус
+  `submitted_for_owner_review`, ожидается решение владельца.
+
+## Позиции 41 и 42 согласованы и перенесены в Layer 3 2026-07-26
+
+- `chev_nr_chvk_pict0001` согласована владельцем с названием цвета
+  `Африканский корпус, оливковый`, моделью `ЧВК` и тремя осветлёнными фото.
+  Фото 1–3 закреплены отдельно для Ozon/WB, позиции 4–5 сохраняются.
+  Layer 3 создан runs
+  `promote_chev_nr_chvk_pict0001_20260726T2229_dryrun` и
+  `promote_chev_nr_chvk_pict0001_20260726T2231`.
+- `chev_nr_raz_pict0007` согласована владельцем без поправок. После
+  compatibility-fix в Layer 2 сохранены алиасы упаковки
+  `ozon_package_mm=100*100*10` и `wb_package_cm=10*10*1`, а также
+  `ozon_model_name=Русские`, чтобы promotion не потерял группировку.
+  Финальный Layer 3 записан runs
+  `promote_chev_nr_raz_pict0007_20260726T2239_model_fix_dry` и
+  `promote_chev_nr_raz_pict0007_20260726T2239_model_fix`.
+- Оба паспорта имеют статус `owner_approved_pending_batch_apply /
+  not_applied`. Marketplace write не выполнялся.
+
+## Отправлена на согласование позиция 43 `chev_nr_svo_pict0005` 2026-07-26
+
+- Fresh read-only сбор:
+  `fetch_card_content_chev_nr_svo_pict0005_20260726T2240`.
+  Ozon: `offer_id=pict0149`, `product_id=2729922942`, `sku=2864486292`;
+  WB: `vendorCode=razpict0011_pict0149`, `nmID=605078480`,
+  `imtID=613246444`, barcode сохранён как native ID.
+- Предложенное название:
+  `Шеврон на липучке СВО Вечная память` — 35 символов. Формула сверена с
+  owner-approved паспортами `chev_nr_svo_pict0047` и
+  `chev_nr_svo_pict0049`.
+- Лично просмотрены все фото: Ozon `5/5`, WB `4/4`. Ozon оставить без
+  media write. Целевой WB-порядок: текущие WB `1,2,3`, затем Ozon `4`,
+  затем текущий WB `4`; итогом пять фото. Товар не ведомственный,
+  watermark не требуется. Слайд 3 с UV-/влагостойкостью остаётся без
+  изменений, claims не перенесены в текст и атрибуты.
+- Фото 2 подтверждает размер изделия `80*85 мм`; Ozon-атрибут размера
+  содержит неполное `100`, весовой атрибут `5 г` расходится с top-level
+  `10 г`. Цель: изделие `80*85 мм`, упаковка Ozon `100*100*10 мм`,
+  WB `10*10*1 см`, вес `10 г`.
+- Подготовлены Layer 2 audit и self-contained HTML:
+  `data/catalog/card_audits/ozon_seo_20260719/0043_chev_nr_svo_pict0005/`.
+  HTML подтверждённо отправлен одним документом в текущий Telegram-топик.
+- Проверены mobile `390/390` и desktop `1366/1366`: одно встроенное
+  изображение, broken images `0`, горизонтального переполнения нет;
+  full-page screenshots лично просмотрены.
+- Предлагается будущая унификация seller SKU:
+  Ozon `pict0149 -> chev_nr_svo_pict0005`, WB
+  `razpict0011_pict0149 -> chev_nr_svo_pict0005`; native ID и barcode
+  сохранить. Ozon-модель `Черепа` и WB `imtID` не менять.
+- Marketplace write и Layer 3 не выполнялись; статус
+  `submitted_for_owner_review`, ожидается решение владельца.
+
+### Для позиции 41 подготовлен кандидат осветлённого главного фото
+
+- По запросу владельца подготовлен preview главного фото
+  `chev_nr_chvk_pict0001`, где слегка осветлено только изображение самого
+  шеврона. Файл:
+  `data/catalog/card_audits/ozon_seo_20260719/0041_chev_nr_chvk_pict0001/candidate_media/ozon_1_patch_lightened_preview.png`.
+- Кандидат подтверждённо отправлен в текущий Telegram-топик на согласование;
+  SHA-256:
+  `13d348be4899cf5e728e5c99008f268c977636d912b691fbad2fd2c056534a5c`.
+- Кандидат не включён в целевой фотосет. Marketplace media write не
+  выполнялся и до отдельного согласования владельца не разрешён.
+- По уточнению владельца подготовлен и отправлен второй вариант, где сам
+  шеврон осветлён ещё немного:
+  `candidate_media/ozon_1_patch_lightened_preview_v2.png`, SHA-256
+  `9a8f650e5d2f2a08ce7ba37bb3602aa82ff424e53f9855e0ce13c81ad4d33696`.
+  Владелец согласовал этот вариант 2026-07-26; первый вариант сохранён для
+  сравнения.
+- По тому же утверждённому уровню яркости подготовлены и подтверждённо
+  отправлены в текущий Telegram-топик ещё два preview:
+  `candidate_media/ozon_2_patch_lightened_preview_v2.png`, SHA-256
+  `dc4598464d3f63dfcc6bbea28f12f6d3506213441d596cda0aca56e6674c4d56`, и
+  `candidate_media/ozon_3_patch_lightened_preview_v2.png`, SHA-256
+  `5cecb0c0426ee1850a330ed8820c8ed1a7b5b0220da870a1b2cb39ad15519959`.
+  На фото 3 блок UV-/влагостойкости не является объектом правки.
+- Фото 2 и 3 ожидают согласования владельца. Целевой фотосет не изменён,
+  marketplace media write не выполнялся.
+
+## Отправлена на согласование позиция 42 `chev_nr_raz_pict0007` 2026-07-26
+
+- Пока владелец проверяет позицию 41, следующей незакрытой карточкой исходной
+  очереди выбрана Ozon+WB позиция `chev_nr_raz_pict0007`; Layer 2 и Layer 3
+  до этого отсутствовали.
+- Выполнен fresh read-only сбор:
+  `fetch_card_content_chev_nr_raz_pict0007_20260726T2115`.
+  Ozon: `offer_id=pict0156`, `product_id=2786193727`, `sku=2904994533`;
+  WB: `vendorCode=svopict0024_pict0156`, `nmID=600673311`,
+  `imtID=613252188`, barcode сохранён как native ID.
+- Предложенное единое название:
+  `Шеврон на липучке Не зли русских, сожрем и не подавимся` — 55 символов.
+  Нерелевантное `СВО` из текущего WB-названия удалено; порядок названия
+  проверен по двум owner-approved Layer 3 паспортам того же типа.
+- Лично просмотрены все 10 фото: Ozon `5/5`, WB `5/5`. Наборы совпадают по
+  содержанию и порядку; предложено оставить текущие фото обеих площадок
+  `1–5` без media upload. Слайд 3 с UV-/влагостойкостью не редактировать и
+  не переносить эти claims в текст или атрибуты. Товар не ведомственный,
+  watermark не требуется.
+- Подготовлены Layer 2 audit и self-contained HTML:
+  `data/catalog/card_audits/ozon_seo_20260719/0042_chev_nr_raz_pict0007/`.
+  HTML подтверждённо отправлен одним документом в текущий Telegram-топик;
+  отдельные изображения не отправлялись.
+- Проверено: 30 уникальных Ozon-хештегов и 30 evidence-строк; 18 полных
+  целевых полей Ozon и 18 WB; mobile `390/390`, desktop `1366/1366`,
+  одно встроенное изображение, broken images `0`, горизонтального
+  переполнения нет. Финальные mobile/desktop screenshots лично просмотрены.
+- Выявлен Ozon drift: `Размеры, мм` заполнено значением упаковки
+  `100*100*10`, хотя фото 2 подтверждает изделие `85*85 мм`; атрибут веса
+  `4497=7 г` расходится с top-level весом `10 г`. В целевом варианте:
+  изделие `85*85 мм`, упаковка `100*100*10 мм`, вес `10 г`.
+- Предлагаемая будущая унификация seller SKU:
+  Ozon `pict0156 -> chev_nr_raz_pict0007`, WB
+  `svopict0024_pict0156 -> chev_nr_raz_pict0007`; native ID и barcode
+  сохранить. Группировку `Русские` не менять.
+- Marketplace write и Layer 3 не выполнялись; статус
+  `submitted_for_owner_review`, ожидается решение владельца.

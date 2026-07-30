@@ -85,6 +85,33 @@ def test_promote_approved_card_passport_writes_layer3_passport(tmp_path: Path) -
     assert passport["seo"]["wb_tags"] == ["шеврон", "шеврон на липучке"]
 
 
+def test_promote_preserves_explicit_wb_items_and_package_contents(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    audit = _minimal_owner_approved_audit("loop_fso_0001")
+    audit["proposed_final_card"]["wb_attributes"] = {
+        "items_in_package": "1 шт.",
+        "package_contents": "петлицы на липучке, неразрезанная пара 1 шт.; мягкая ответная часть велкро 1 шт.",
+    }
+    audit_path = data_dir / "catalog" / "card_audits" / "batch" / "card" / "audit.json"
+    _write_json(audit_path, audit)
+
+    result = run_promote_approved_card_passport(
+        data_dir=data_dir,
+        audit_paths=[audit_path],
+        run_id="promote_explicit_wb_package_contents_test",
+        write=True,
+    )
+
+    assert result["overall_status"] == "ok"
+    passport_path = data_dir / "catalog" / "master_passport" / "approved" / "loop_fso_0001.json"
+    passport = json.loads(passport_path.read_text(encoding="utf-8"))
+    wb_attributes = {row["field"]: row["value"] for row in passport["wb"]["attributes"]}
+    assert wb_attributes["Количество предметов в упаковке"] == "1 шт."
+    assert wb_attributes["Комплектация"] == (
+        "петлицы на липучке, неразрезанная пара 1 шт.; мягкая ответная часть велкро 1 шт."
+    )
+
+
 def test_promote_supports_wb_camel_case_identity_contract(tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     audit = _minimal_owner_approved_audit("chev_kit2_nr_rg_pict0006")
@@ -206,6 +233,28 @@ def test_wb_departmental_media_policy_allows_neutral_wearing_slide() -> None:
 
     assert result["status"] == "ok"
     assert result["media_apply_status"] == "allowed_verified"
+
+
+def test_wb_departmental_media_policy_accepts_owner_approved_allowed_aliases() -> None:
+    for status in (
+        "no_watermark_required",
+        "owner_approved_media_update",
+        "ready_copy_ozon_photos_as_is",
+        "ready_copy_ozon_photos_as_is_after_owner_approval",
+        "watermarked_assets_1_2_3_owner_approved",
+        "owner_approved_copy_ozon_1_2_3_4_5_as_is_without_watermark",
+    ):
+        passport = {
+            "media": {
+                "target_wb_photo_set": [{"position": 1, "source": "Ozon 1"}],
+                "wb_departmental_symbol_policy": {
+                    "media_apply_status": status,
+                    "rule": "Owner-approved transfer without protected heraldic symbols.",
+                },
+            }
+        }
+
+        assert validate_wb_departmental_media_policy(passport)["status"] == "ok"
 
 
 def test_wb_departmental_media_policy_blocks_unprotected_symbol_assets() -> None:

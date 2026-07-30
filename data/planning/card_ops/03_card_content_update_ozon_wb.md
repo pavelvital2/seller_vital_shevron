@@ -349,6 +349,28 @@ POST /content/v2/cards/update
   `identity.ozon_offer_id`, а не по целевому
   `ozon_offer_id_after_seller_sku_update` WB-only паспорта.
 
+Подтвержденный recovery 2026-07-26:
+
+- при `FB_OBSCENE_MODEL_hashtag` и явном решении владельца `без хештегов`
+  удалить `23171` из целевого Ozon payload и проверить отсутствие атрибута;
+- планировать такой повтор только с `--marketplace ozon`, не трогая уже
+  подтвержденные WB-поля и медиа;
+- если Ozon принял full import, но сохранил старые top-level
+  название/габариты/вес, использовать отдельный checksummed LK dry-run;
+- `/api/v1/item/update` валидировать до сети: точные baseline/target,
+  `offer_id`, свежие `price/old_price`, barcode и фото. В LK payload главное
+  фото является первым элементом `images`, а Seller API считает его отдельно;
+- после apply дождаться атрибута `4497` и выполнить полный
+  `verify-card-content-update`. Не повторять write во время асинхронного
+  обновления.
+- Для точечной диагностики `FB_OBSCENE_MODEL_hashtag` использовать
+  `scripts/cards/ozon_hashtag_probe.py`: один кандидат, один план, один apply,
+  завершённая модерация и invariant verify. Подтвержденный блокер петлиц —
+  только `#петлицаналипучке`; `#петлица`, `#петлицы` и
+  `#петлица_на_липучке` прошли. Если API показывает `imported/errors=[]`, но
+  карточка — `Не обновлен`, открыть историю импорта read-only и не повторять
+  write вслепую.
+
 ## Ближайшая автоматизация
 
 Доработать:

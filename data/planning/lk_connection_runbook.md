@@ -91,11 +91,35 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 Внештатная ситуация `400 Request Header Or Cookie Too Large`:
 
 - причина: cookie header раздут дублями cookies по доменам после импорта;
-- способ решения: сделать backup `storage_state`, оставить один рабочий набор
-  cookies для Ozon-доменов, переименовать старый Chrome profile в backup,
-  запустить keeper заново и проверить `ozon_session_keepalive_cdp.js`;
+- с 2026-07-27 исправление автоматизировано общим модулем
+  `scripts/lib/ozon_cookie_state.js`: импорт не создаёт четыре копии cookie для
+  `.ozon.ru`, `ozon.ru`, `seller.ozon.ru`, `.seller.ozon.ru`, а import,
+  keeper, keepalive, persistent и interactive export атомарно нормализуют
+  `storage_state`;
+- перед засевом profile keeper автоматически ремонтирует уже раздутый state,
+  сохраняя backup только при фактическом изменении;
+- безопасный ручной recovery: сделать backup `storage_state`, установить
+  проверенный нормализованный state, переименовать старый Chrome profile в
+  backup, запустить keeper и проверить `ozon_session_keepalive_cdp.js`;
 - значения cookies в диагностику и отчеты не выводить, допустимы только счетчики
   cookies/доменов и статус `valuesPrinted=false`.
+
+Проверенное восстановление 2026-07-27:
+
+- рабочий VitalSewing на том же сервере, IP и Ozon-аккаунте подтвердил, что
+  симптом Vital Shevron не был доказательством блокировки общего IP;
+- у Vital Shevron было `68` cookies при `16` уникальных именах из-за
+  четырёхкратных доменных копий, а авторизационные значения уже устарели;
+- новый owner-provided cookie header сначала прошёл временный
+  `COOKIE_IMPORT_SUCCESS` с точным маркером `Vital Shevron`;
+- после нормализации рабочий state содержит `20` cookies на `.ozon.ru`,
+  `.ozone.ru` и `.xapi.ozon.ru`, без вредных seller/root aliases;
+- keeper и timer active/enabled, ручной systemd refresh завершился
+  `Result=success`, `ExecMainStatus=0`;
+- `sessions_status_20260727T205140` и
+  `status_preflight_20260727T205140` вернули `overall_status: ok`;
+- dashboard, analytics, products и prices открываются, значения cookies не
+  выводились.
 
 ## WB
 

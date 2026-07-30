@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
 
 from seller_agent.config import AppCredentials, OzonSellerCredentials
 from seller_agent.tasks import inbox_workflow
@@ -210,6 +211,70 @@ def test_ozon_messenger_apply_mark_read_only_does_not_run_send_helper(
     ]
 
 
+def test_ozon_messenger_apply_uses_verified_cdp_fallback_after_403(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    class FakeOzonAdapter:
+        def __init__(self, credentials: OzonSellerCredentials) -> None:
+            self.credentials = credentials
+
+        def post(self, path: str, payload: dict) -> dict:
+            if path == "/v2/chat/read":
+                raise RuntimeError("HTTP 403: Premium Plus required")
+            if path == "/v3/chat/history":
+                assert payload == {"chat_id": "chat-1", "limit": 50}
+                return {
+                    "messages": [
+                        {
+                            "message_id": "100",
+                            "is_read": True,
+                            "user": {"type": "NotificationUser"},
+                        }
+                    ]
+                }
+            raise AssertionError(path)
+
+    def fake_subprocess_run(args, **kwargs):  # type: ignore[no-untyped-def]
+        fallback_run_dir = Path(args[args.index("--run-dir") + 1])
+        result_path = (
+            fallback_run_dir
+            / "raw"
+            / "ozon_messenger_lk_mark_read"
+            / "mark_read_cdp_result.json"
+        )
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+        result_path.write_text('{"ok": true}\n', encoding="utf-8")
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(inbox_workflow, "OzonSellerAdapter", FakeOzonAdapter)
+    monkeypatch.setattr(inbox_workflow.subprocess, "run", fake_subprocess_run)
+
+    result = _apply_ozon_messenger(
+        credentials=AppCredentials(
+            ozon_seller=OzonSellerCredentials(client_id="client", api_key="key"),
+            ozon_performance=None,
+            wb=None,
+        ),
+        data_dir=tmp_path,
+        source_run_id="ozon_inbox_test",
+        actions=[
+            {
+                "action_type": "mark_chat_read",
+                "chat_id": "chat-1",
+                "from_message_id": "100",
+            }
+        ],
+        run_dir=tmp_path / "runs" / "ozon_inbox_test_apply",
+    )
+
+    assert result["status"] == "ok"
+    assert result["mark_read"][0]["ok"] is True
+    assert result["mark_read"][0]["fallback_verified"] is True
+    assert result["mark_read"][0]["api_error"] == "HTTP 403: Premium Plus required"
+    assert result["mark_read"][0]["error"] == ""
+
+
 def test_ozon_messenger_collection_paginates_chat_list(
     monkeypatch,
     tmp_path: Path,
@@ -334,6 +399,29 @@ def test_customer_question_with_na_zakaz_gets_reply_draft() -> None:
 
     assert action["action_type"] == "send_chat_message"
     assert "на заказ не изготавливаем" in action["draft_reply"].lower()
+
+
+def test_customer_photo_after_custom_order_question_uses_previous_text() -> None:
+    action = _classify_messenger_action(
+        chat_id="chat-1",
+        message={
+            "message_id": "m2",
+            "is_read": False,
+            "user": {"type": "Customer"},
+            "data": ["![](https://api-seller.ozon.ru/v2/chat/file/example.JPG)"],
+        },
+        previous_message={
+            "message_id": "m1",
+            "is_read": False,
+            "user": {"type": "Customer"},
+            "data": ["Можно сделать под заказ? Чтоб вот так получилось?"],
+        },
+    )
+
+    assert action["action_type"] == "send_chat_message"
+    assert "на заказ не изготавливаем" in action["draft_reply"].lower()
+    assert action["source_text"].startswith("Можно сделать под заказ?")
+    assert "example.JPG" in action["source_text"]
 
 
 def test_product_chat_header_without_question_asks_buyer_to_clarify() -> None:

@@ -184,6 +184,55 @@ def _split_regular_and_staged_rows(
     return regular_rows, staged_rows
 
 
+def _target_completion(
+    rows: list[dict[str, str]],
+    *,
+    verify_status: str,
+) -> dict[str, Any]:
+    intermediate_rows = [
+        row
+        for row in rows
+        if _upload_discount(row) != int(row["Финальная скидка"])
+    ]
+    transitions: dict[tuple[int, int, int], int] = {}
+    for row in intermediate_rows:
+        key = (
+            int(row.get("Текущая скидка") or 0),
+            _upload_discount(row),
+            int(row["Финальная скидка"]),
+        )
+        transitions[key] = transitions.get(key, 0) + 1
+    followup_required = len(intermediate_rows)
+    if followup_required and verify_status == "ok":
+        status = "safe_step_applied"
+    elif followup_required:
+        status = "incomplete"
+    elif verify_status == "ok":
+        status = "complete"
+    else:
+        status = "verify_incomplete"
+    return {
+        "status": status,
+        "rows_count": len(rows),
+        "direct_final_target_rows": len(rows) - followup_required,
+        "followup_required_rows": followup_required,
+        "followup_required": followup_required > 0,
+        "transitions": [
+            {
+                "current_discount": current_discount,
+                "uploaded_discount": uploaded_discount,
+                "final_discount": final_discount,
+                "rows_count": count,
+            }
+            for (
+                current_discount,
+                uploaded_discount,
+                final_discount,
+            ), count in sorted(transitions.items())
+        ],
+    }
+
+
 def _assert_no_drift(
     *,
     approved_payload: dict[str, Any],
@@ -295,6 +344,11 @@ def _write_report(path: Path, result: dict[str, Any]) -> None:
     applied = result.get("applied") or {}
     staged = applied.get("staged") if isinstance(applied.get("staged"), dict) else {}
     verify = result.get("verify") or {}
+    target_completion = (
+        result.get("target_completion")
+        if isinstance(result.get("target_completion"), dict)
+        else {}
+    )
     error_summary = verify.get("error_summary") if isinstance(verify.get("error_summary"), dict) else {}
     lines = [
         "# WB Actions Discount Apply Result",
@@ -325,6 +379,14 @@ def _write_report(path: Path, result: dict[str, Any]) -> None:
         f"- successful rows: `{verify.get('success_rows', 0)}`",
         f"- failed rows: `{verify.get('failed_rows', 0)}`",
         f"- poll attempts: `{len(result['verify']['polls'])}`",
+        "",
+        "## Final scheme target",
+        "",
+        f"- status: `{target_completion.get('status', 'unknown')}`",
+        f"- rows in apply: `{target_completion.get('rows_count', 0)}`",
+        f"- rows uploaded directly to final target: `{target_completion.get('direct_final_target_rows', 0)}`",
+        f"- rows requiring a fresh approved follow-up: `{target_completion.get('followup_required_rows', 0)}`",
+        f"- transitions: `{json.dumps(target_completion.get('transitions', []), ensure_ascii=False)}`",
         "",
         "## Staged discount",
         "",
@@ -887,6 +949,10 @@ def run_wb_actions_discount_apply(
         verify_status = "staged_discount_blocked"
     else:
         verify_status = regular_status
+    target_completion = _target_completion(
+        [*regular_rows, *staged_rows],
+        verify_status=verify_status,
+    )
     artifacts = {
         "run_dir": str(run_dir),
         "summary": str(run_dir / "summary.json"),
@@ -916,9 +982,17 @@ def run_wb_actions_discount_apply(
                 "staged_quarantine_apply_new_price": str(raw_dir / "staged_stage49_quarantine_apply_new_price.json"),
             }
         )
-    if verify_status == "ok" and not drift["skipped_due_to_drift_count"]:
+    if (
+        verify_status == "ok"
+        and not drift["skipped_due_to_drift_count"]
+        and not target_completion["followup_required"]
+    ):
         overall_status = "ok"
-    elif verify_status in {"partial", "submitted", "no_rows_to_apply"} or drift["skipped_due_to_drift_count"]:
+    elif (
+        verify_status in {"ok", "partial", "submitted", "no_rows_to_apply"}
+        or drift["skipped_due_to_drift_count"]
+        or target_completion["followup_required"]
+    ):
         overall_status = "warning"
     else:
         overall_status = "blocked"
@@ -962,6 +1036,7 @@ def run_wb_actions_discount_apply(
             "polls": polls,
             "details": details,
         },
+        "target_completion": target_completion,
         "artifacts": artifacts,
     }
     write_json(run_dir / "summary.json", result)

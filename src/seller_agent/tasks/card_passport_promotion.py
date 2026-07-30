@@ -16,6 +16,15 @@ WB_DEPARTMENTAL_MEDIA_POLICY_STATUSES = {
     "blocked_pending_watermarked_assets",
     "no_media_update_required",
     "not_applicable",
+    # Historical owner-approved passports use these equivalent "allowed"
+    # statuses. Rejecting them blocks an exact reviewed media package even
+    # when the policy explicitly says that no watermark is required.
+    "no_watermark_required",
+    "owner_approved_media_update",
+    "ready_copy_ozon_photos_as_is",
+    "ready_copy_ozon_photos_as_is_after_owner_approval",
+    "watermarked_assets_1_2_3_owner_approved",
+    "owner_approved_copy_ozon_1_2_3_4_5_as_is_without_watermark",
 }
 NO_MEDIA_UPDATE_ACTIONS = {
     "do_not_touch",
@@ -446,6 +455,15 @@ def _marketplace_attributes(
 ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     pack_qty = str(physical["pack_qty"])
     composition_text = "; ".join(composition)
+    wb_attributes = proposed.get("wb_attributes") if isinstance(proposed.get("wb_attributes"), dict) else {}
+    wb_items_in_package = (
+        _field_value(wb_attributes, "Количество предметов в упаковке", "items_in_package")
+        or f"{pack_qty} шт."
+    )
+    wb_package_contents = (
+        _field_value(wb_attributes, "Комплектация", "package_contents")
+        or _package_contents(pack_qty, is_patch=is_patch)
+    )
     ozon_attrs = [
         {"field": "Название", "value": content["ozon_title"]},
         {"field": "Аннотация", "value": content["ozon_description"]},
@@ -477,8 +495,8 @@ def _marketplace_attributes(
         {"field": "Вид декора для одежды", "value": _wb_decor_type(proposed, is_patch=is_patch)},
         {"field": "Состав", "value": composition_text},
         {"field": "Страна производства", "value": "Россия"},
-        {"field": "Количество предметов в упаковке", "value": f"{pack_qty} шт."},
-        {"field": "Комплектация", "value": _package_contents(pack_qty, is_patch=is_patch)},
+        {"field": "Количество предметов в упаковке", "value": wb_items_in_package},
+        {"field": "Комплектация", "value": wb_package_contents},
         {"field": "ТНВЭД", "value": "5810999000"},
         {"field": "КИЗ", "value": "false / unchecked"},
     ]

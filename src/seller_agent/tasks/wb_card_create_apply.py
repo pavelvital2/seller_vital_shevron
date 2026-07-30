@@ -20,6 +20,7 @@ from seller_agent.safety.approvals import (
     mark_approved_applied,
 )
 from seller_agent.tasks.wb_card_create_plan import WB_BARCODE_PLACEHOLDER
+from seller_agent.tasks.wb_media import materialize_wb_media_entry
 
 
 def _read_json(path: Path) -> Any:
@@ -193,6 +194,39 @@ def _poll_cards(
         time.sleep(max(poll_interval, 1))
 
 
+def _poll_media_counts(
+    *,
+    wb: WbContentAdapter,
+    run_dir: Path,
+    media_by_vendor: dict[str, list[dict[str, Any]]],
+    wait_seconds: int,
+    poll_interval: int,
+) -> dict[str, dict[str, Any]]:
+    vendor_codes = {code for code, media in media_by_vendor.items() if media}
+    if not vendor_codes:
+        return {}
+    expected = {code: len(media_by_vendor[code]) for code in vendor_codes}
+    deadline = time.monotonic() + max(wait_seconds, 0)
+    attempt = 0
+    found: dict[str, dict[str, Any]] = {}
+    while True:
+        attempt += 1
+        found = wb.find_cards_by_vendor_codes(vendor_codes)
+        actual = {
+            code: len((found.get(code) or {}).get("photos") or [])
+            for code in vendor_codes
+        }
+        write_json(
+            run_dir / f"verify_media_attempt_{attempt:02d}.json",
+            {"expected_photo_counts": expected, "actual_photo_counts": actual},
+        )
+        if all(actual.get(code) == count for code, count in expected.items()):
+            return found
+        if time.monotonic() >= deadline:
+            return found
+        time.sleep(max(poll_interval, 1))
+
+
 def _extract_relevant_error_batches(
     error_response: dict[str, Any],
     vendor_codes: set[str],
@@ -213,15 +247,90 @@ def _extract_relevant_error_batches(
     return relevant
 
 
-def _media_by_vendor(plan_items: list[dict[str, Any]]) -> dict[str, list[str]]:
+def _media_plan_for_item(item: dict[str, Any]) -> list[dict[str, Any]]:
+    media_plan = item.get("media_plan")
+    if isinstance(media_plan, list) and media_plan:
+        return [entry for entry in media_plan if isinstance(entry, dict)]
+    return [
+        {
+            "position": index,
+            "source_kind": "owner_approved_url",
+            "source_url": str(url).strip(),
+        }
+        for index, url in enumerate(item.get("images_from_ozon") or [], start=1)
+        if str(url).strip()
+    ]
+
+
+def _media_by_vendor(plan_items: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     return {
-        _vendor_code(item): [
-            str(url).strip()
-            for url in item.get("images_from_ozon") or []
-            if str(url).strip()
-        ]
+        _vendor_code(item): _media_plan_for_item(item)
         for item in plan_items
     }
+
+
+def _apply_media_plan(
+    *,
+    wb: WbContentAdapter,
+    data_dir: Path,
+    run_dir: Path,
+    vendor_code: str,
+    nm_id: int,
+    media_plan: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    has_local = any(item.get("source_kind") == "owner_approved_local" for item in media_plan)
+    if not has_local:
+        urls = [
+            str(item.get("source_url") or "").strip()
+            for item in media_plan
+            if str(item.get("source_url") or "").strip()
+        ]
+        if not urls:
+            return []
+        operation = _call_wb(
+            run_dir=run_dir,
+            name=f"media_save_{vendor_code}",
+            request_payload={"nmId": nm_id, "data": urls},
+            call=lambda payload: wb.save_media_links(
+                nm_id=int(payload["nmId"]),
+                urls=list(payload["data"]),
+            ),
+        )
+        operation["vendorCode"] = vendor_code
+        operation["positions"] = len(urls)
+        return [operation]
+
+    operations: list[dict[str, Any]] = []
+    for entry in sorted(media_plan, key=lambda item: int(item.get("position") or 0)):
+        position = int(entry.get("position") or 0)
+        path, actual_sha256 = materialize_wb_media_entry(
+            data_dir=data_dir,
+            run_dir=run_dir,
+            vendor_code=vendor_code,
+            entry=entry,
+        )
+        operation = _call_wb(
+            run_dir=run_dir,
+            name=f"media_file_{vendor_code}_{position:02d}",
+            request_payload={
+                "nmId": nm_id,
+                "photoNumber": position,
+                "path": str(path),
+                "sha256": actual_sha256,
+                "source_kind": entry.get("source_kind"),
+            },
+            call=lambda payload, file_path=path: wb.upload_media_file(
+                nm_id=int(payload["nmId"]),
+                photo_number=int(payload["photoNumber"]),
+                file_path=file_path,
+            ),
+        )
+        operation["vendorCode"] = vendor_code
+        operation["position"] = position
+        operation["sha256"] = actual_sha256
+        operations.append(operation)
+        time.sleep(1)
+    return operations
 
 
 def run_wb_card_create_verify(
@@ -465,24 +574,36 @@ def run_wb_card_create_apply(
     images_by_vendor = _media_by_vendor(plan_items)
     for vendor_code in vendor_codes:
         card = found_cards.get(vendor_code)
-        urls = images_by_vendor.get(vendor_code) or []
-        if not card or not urls:
+        media_plan = images_by_vendor.get(vendor_code) or []
+        if not card or not media_plan:
             continue
-        if card.get("photos"):
+        has_local = any(
+            item.get("source_kind") == "owner_approved_local" for item in media_plan
+        )
+        if card.get("photos") and not has_local:
             continue
         nm_id = int(card.get("nmID") or card.get("nmId"))
-        media_operations.append(
-            _call_wb(
+        media_operations.extend(
+            _apply_media_plan(
+                wb=wb,
+                data_dir=data_dir,
                 run_dir=run_dir,
-                name=f"media_save_{vendor_code}",
-                request_payload={"nmId": nm_id, "data": urls},
-                call=lambda payload: wb.save_media_links(
-                    nm_id=int(payload["nmId"]),
-                    urls=list(payload["data"]),
-                ),
+                vendor_code=vendor_code,
+                nm_id=nm_id,
+                media_plan=media_plan,
             )
         )
-        time.sleep(1)
+
+    if media_operations:
+        media_found = _poll_media_counts(
+            wb=wb,
+            run_dir=run_dir,
+            media_by_vendor=images_by_vendor,
+            wait_seconds=wait_seconds,
+            poll_interval=poll_interval,
+        )
+        found_cards.update(media_found)
+        write_json(run_dir / "found_cards_after_media.json", found_cards)
 
     try:
         error_response = wb.fetch_card_errors(limit=100)
@@ -500,7 +621,7 @@ def run_wb_card_create_apply(
     write_json(run_dir / "wb_card_errors_relevant.json", relevant_errors)
 
     media_failures = {
-        operation["name"].removeprefix("media_save_")
+        str(operation.get("vendorCode") or "")
         for operation in media_operations
         if not operation["ok"]
     }
@@ -514,6 +635,11 @@ def run_wb_card_create_apply(
             reason = "no images"
         elif vendor_code in media_failures:
             reason = "media upload failed"
+        elif len(card.get("photos") or []) != len(urls):
+            reason = (
+                f"photo count mismatch: expected {len(urls)}, "
+                f"actual {len(card.get('photos') or [])}"
+            )
         else:
             continue
         pending_media.append({"vendorCode": vendor_code, "reason": reason, "images": urls})

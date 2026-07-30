@@ -17,15 +17,17 @@ const runId = `ozon_actions_boost_probe_${startedAt.toISOString().replace(/[-:]/
 const runDir = path.join(projectRoot, 'data', 'runs', day, runId);
 const rawDir = path.join(runDir, 'raw');
 const processedDir = path.join(runDir, 'processed');
-const optimizerActionsPath = path.join(
-  projectRoot,
-  'data',
-  'runs',
-  '2026-07-05',
-  'ozon_actions_optimizer_plan_20260705T085900',
-  'processed',
-  'actions_safe_snapshot.json',
-);
+const optimizerActionsPath = process.env.OZON_ACTIONS_SNAPSHOT_PATH
+  ? path.resolve(projectRoot, process.env.OZON_ACTIONS_SNAPSHOT_PATH)
+  : path.join(
+    projectRoot,
+    'data',
+    'runs',
+    '2026-07-05',
+    'ozon_actions_optimizer_plan_20260705T085900',
+    'processed',
+    'actions_safe_snapshot.json',
+  );
 
 function ensureDir(dir) {
   fs.mkdirSync(dir, { recursive: true });
@@ -169,6 +171,7 @@ async function collect(page, label, navigateFn) {
       runDir,
       rawDir,
       processedDir,
+      optimizerActionsPath,
       summary: path.join(runDir, 'summary.json'),
     },
   };

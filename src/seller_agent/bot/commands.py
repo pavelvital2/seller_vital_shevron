@@ -24,7 +24,10 @@ from seller_agent.tasks.inbox_workflow import (
 )
 from seller_agent.tasks.registry import default_task_registry
 from seller_agent.tasks.ozon_production_work_plan import record_ozon_work_plan_decision
-from seller_agent.tasks.wb_actions_discount_plan import run_wb_actions_discount_plan
+from seller_agent.tasks.wb_actions_discount_plan import (
+    run_wb_actions_discount_plan,
+    wb_actions_report_stats,
+)
 from seller_agent.tasks.wb_production_work_plan import record_wb_work_plan_decision
 
 
@@ -56,6 +59,7 @@ SUPPORTED_COMMANDS = {
     "/runs",
     "/wb-actions",
     "/wb-actions-manual",
+    "/wb-actions-min-price",
 }
 
 TELEGRAM_TITLES = {
@@ -86,6 +90,7 @@ TELEGRAM_TITLES = {
     "/today": "Ежедневный отчет",
     "/wb-actions": "WB акции 70-55-55",
     "/wb-actions-manual": "Ручная акция",
+    "/wb-actions-min-price": "Акции от минимальной цены",
 }
 
 
@@ -143,6 +148,11 @@ def handle_telegram_command(
     ):
         return _wb_manual_actions_parameters(message)
     if (
+        active_conversation.get("stage") == "wb_min_price_discount_input"
+        and not _is_explicit_command_or_button(message)
+    ):
+        return _wb_min_price_actions_parameters(message)
+    if (
         active_conversation.get("stage") in {"wb_work_capacity_input", "wb_work_days_input"}
         and not _is_explicit_command_or_button(message)
     ):
@@ -179,6 +189,8 @@ def handle_telegram_command(
         return _wb_actions_plan(data_dir=data_dir, credentials=credentials)
     if command in {"/wb-actions-manual", "/wb_actions_manual"}:
         return _wb_manual_actions_start()
+    if command in {"/wb-actions-min-price", "/wb_actions_min_price"}:
+        return _wb_min_price_actions_start()
     if command in {"/period-report-ozon", "/period_report_ozon"}:
         return _period_report_start("ozon")
     if command in {"/period-report-wb", "/period_report_wb"}:
@@ -324,6 +336,26 @@ def handle_telegram_callback(
     if data.startswith("wbam_reject:"):
         plan_run_id = data.removeprefix("wbam_reject:").strip()
         return _wb_manual_actions_reject(plan_run_id)
+    if data.startswith("wbmp_review:"):
+        return _wb_min_price_actions_review(data.removeprefix("wbmp_review:").strip())
+    if data.startswith("wbmp_confirm:"):
+        return _wb_min_price_actions_plan(
+            outside_discount=data.removeprefix("wbmp_confirm:").strip(),
+            data_dir=data_dir,
+            credentials=credentials,
+        )
+    if data.startswith("wbmp_apply:"):
+        return _wb_min_price_actions_apply(
+            plan_run_id=data.removeprefix("wbmp_apply:").strip(),
+            data_dir=data_dir,
+            credentials=credentials,
+        )
+    if data == "wbmp_change":
+        return _wb_min_price_actions_start()
+    if data == "wbmp_cancel":
+        return _wb_min_price_actions_cancel()
+    if data.startswith("wbmp_reject:"):
+        return _wb_min_price_actions_reject(data.removeprefix("wbmp_reject:").strip())
     if data.startswith("ozin_apply:"):
         source_run_id = data.removeprefix("ozin_apply:").strip()
         return _ozon_inbox_apply(source_run_id=source_run_id, data_dir=data_dir, credentials=credentials)
@@ -369,6 +401,7 @@ OZON_MENU_KEYBOARD: dict[str, Any] = {
 WB_MENU_KEYBOARD: dict[str, Any] = {
     "keyboard": [
         [{"text": "WB акции"}, {"text": "Ручная акция"}],
+        [{"text": "Акции от минимальной цены"}],
         [{"text": "WB аналитика"}],
         [{"text": "Остатки и поставки"}],
         [{"text": "В работу"}],
@@ -466,6 +499,7 @@ def _help() -> TelegramCommandResult:
             "- Кнопка применения Ozon всех акций запускает отдельный apply-контур только по конкретному `plan_run_id`.",
             "- `/wb-actions` строит свежий dry-run WB акций по схеме 70-55-55 и показывает кнопку применения.",
             "- `/wb-actions-manual` запрашивает ручную схему, подтверждает параметры и только затем строит fresh dry-run.",
+            "- `/wb-actions-min-price` выбирает для каждого товара лучшую акцию не ниже минимальной цены.",
             "- Кнопка применения WB акций запускает apply только по конкретному показанному `plan_run_id`.",
             "- `/wb-analytics` строит свежую read-only аналитику WB по Parser Data API warehouse.",
             "- `/wb-stock-supplies` строит свежий read-only отчет по остаткам складов и всем активным FBW-поставкам WB.",
@@ -1851,6 +1885,269 @@ def _period_report_invalid(reason: str) -> TelegramCommandResult:
         ok=False,
         blocked_reason="invalid_period_report_parameters",
         text=f"Отчёт за период\n\n{reason}\n\nИзменений в кабинетах не выполнялось.",
+    )
+
+
+def _wb_min_price_actions_start() -> TelegramCommandResult:
+    return TelegramCommandResult(
+        command="/wb-actions-min-price",
+        ok=True,
+        mode="input",
+        text=(
+            "Акции от минимальной цены\n\n"
+            "Введите целую скидку от 0 до 99% для товаров, которым не подходит ни одна "
+            "активная акция.\n\n"
+            "Если скидку не задавать, используется значение по умолчанию `50%`.\n\n"
+            "После подтверждения бот построит свежий dry-run. На этом этапе скидки в WB "
+            "не изменяются."
+        ),
+        reply_markup={
+            "inline_keyboard": [
+                [{"text": "Использовать 50%", "callback_data": "wbmp_review:50"}],
+                [{"text": "Отменить", "callback_data": "wbmp_cancel"}],
+            ]
+        },
+        conversation_state={"stage": "wb_min_price_discount_input"},
+    )
+
+
+def _wb_min_price_actions_parameters(message: str) -> TelegramCommandResult:
+    value = str(message or "").strip().lower()
+    if value in {"", "-", "по умолчанию", "default", "пропустить"}:
+        return _wb_min_price_actions_review("50")
+    return _wb_min_price_actions_review(value)
+
+
+def _wb_min_price_actions_review(value: str) -> TelegramCommandResult:
+    discount = _parse_wb_outside_discount(value)
+    if discount is None:
+        return TelegramCommandResult(
+            command="/wb-actions-min-price",
+            ok=False,
+            mode="input",
+            blocked_reason="invalid_wb_outside_discount",
+            text=(
+                "Акции от минимальной цены\n\n"
+                "Скидка не распознана. Введите одно целое число от 0 до 99.\n\n"
+                "Если хотите использовать значение по умолчанию, нажмите "
+                "«Использовать 50%»."
+            ),
+            reply_markup={
+                "inline_keyboard": [
+                    [{"text": "Использовать 50%", "callback_data": "wbmp_review:50"}],
+                    [{"text": "Отменить", "callback_data": "wbmp_cancel"}],
+                ]
+            },
+            conversation_state={"stage": "wb_min_price_discount_input"},
+        )
+    return TelegramCommandResult(
+        command="/wb-actions-min-price",
+        ok=True,
+        mode="review",
+        text=(
+            "Акции от минимальной цены\n\n"
+            "Проверьте параметры:\n\n"
+            "- акция выбирается только если фактическая цена после скидки WB не ниже "
+            "минимальной цены товара;\n"
+            "- если подходят несколько акций, выбирается акция с самой высокой ценой;\n"
+            f"- скидка для товаров вне подходящих акций: `{discount}%`.\n\n"
+            "Подтверждение запустит только свежий расчёт. Изменений в WB пока не будет."
+        ),
+        reply_markup={
+            "inline_keyboard": [
+                [
+                    {
+                        "text": "Подтвердить параметры",
+                        "callback_data": f"wbmp_confirm:{discount}",
+                    }
+                ],
+                [{"text": "Изменить скидку", "callback_data": "wbmp_change"}],
+                [{"text": "Отменить", "callback_data": "wbmp_cancel"}],
+            ]
+        },
+    )
+
+
+def _wb_min_price_actions_plan(
+    *,
+    outside_discount: str,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+) -> TelegramCommandResult:
+    discount = _parse_wb_outside_discount(outside_discount)
+    if discount is None:
+        return TelegramCommandResult(
+            command="/wb-actions-min-price",
+            ok=False,
+            mode="dry_run",
+            blocked_reason="invalid_wb_outside_discount",
+            text=(
+                "Акции от минимальной цены\n\n"
+                "Расчёт заблокирован: подтверждённая скидка повреждена.\n\n"
+                "Изменений в WB не выполнялось."
+            ),
+        )
+    result = WorkflowRunner(data_dir=data_dir, credentials=credentials).run_task(
+        "wb-best-price-action-plan",
+        inputs={"outside_discount": discount},
+        allowed_modes={"dry_run"},
+    )
+    if not result.ok:
+        return TelegramCommandResult(
+            command="/wb-actions-min-price",
+            ok=False,
+            mode="dry_run",
+            blocked_reason=result.blocked_reason or "wb_best_price_plan_failed",
+            text=(
+                "Акции от минимальной цены\n\n"
+                "Свежий dry-run не построен.\n\n"
+                f"Причина: `{_safe_error(RuntimeError(result.error or result.status))}`\n\n"
+                "Изменений в WB не выполнялось."
+            ),
+        )
+    return _wb_min_price_actions_plan_result(result.summary, artifacts=result.artifacts)
+
+
+def _wb_min_price_actions_plan_result(
+    result: dict[str, Any],
+    *,
+    artifacts: dict[str, str],
+) -> TelegramCommandResult:
+    summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+    run_id = str(result.get("run_id") or "")
+    discount = _int(result.get("outside_action_discount"))
+    safe_to_apply = bool(result.get("safe_to_apply"))
+    lines = [
+        "Акции от минимальной цены",
+        "",
+        f"Итог: fresh dry-run построен со статусом `{result.get('overall_status') or 'н/д'}`.",
+        f"Run ID: `{run_id or 'н/д'}`",
+        f"Скидка вне подходящих акций: `{discount}%`.",
+        "",
+        "Сейчас:",
+        f"- товаров в расчёте: `{_int(summary.get('scope_total'))}`;",
+        f"- участвуют в активных акциях: `{_int(summary.get('currently_participating'))}`;",
+        f"- предложены хотя бы одной акцией: `{_int(summary.get('offered_any_action'))}`.",
+        "",
+        "После применения:",
+        f"- будут участвовать в лучшей допустимой акции: `{_int(summary.get('eligible_any_action'))}`;",
+        f"- останутся вне акций: `{_int(summary.get('outside_action'))}`;",
+        f"- скидка изменится: `{_int(summary.get('to_change_discount'))}`;",
+        f"- скидка не изменится: `{_int(summary.get('no_change_discount'))}`.",
+        "",
+        "Проверка ограничений:",
+        f"- целевая цена ниже минимума: `{_int(summary.get('target_below_minimum'))}`;",
+        f"- небезопасно для одного upload: `{_int(summary.get('unsafe_single_upload'))}`.",
+        "",
+        "Скидки в WB не изменялись. Полный HTML-отчёт приложен.",
+    ]
+    markup: dict[str, Any] = {}
+    if safe_to_apply and run_id and int(summary.get("to_change_discount") or 0) > 0:
+        markup = {
+            "inline_keyboard": [
+                [{"text": "Применить", "callback_data": f"wbmp_apply:{run_id}"}],
+                [{"text": "Отклонить", "callback_data": f"wbmp_reject:{run_id}"}],
+            ]
+        }
+    elif not safe_to_apply:
+        lines.extend(
+            [
+                "",
+                "Apply заблокирован: выберите другую скидку и постройте новый dry-run.",
+            ]
+        )
+    else:
+        lines.extend(["", "Изменений к применению нет."])
+    return TelegramCommandResult(
+        command="/wb-actions-min-price",
+        ok=True,
+        mode="dry_run",
+        text="\n".join(lines),
+        artifacts=artifacts,
+        reply_markup=markup,
+    )
+
+
+def _wb_min_price_actions_apply(
+    *,
+    plan_run_id: str,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+) -> TelegramCommandResult:
+    if not _valid_wb_min_price_plan_id(plan_run_id):
+        return TelegramCommandResult(
+            command="/wb-actions-min-price",
+            ok=False,
+            mode="apply",
+            blocked_reason="invalid_plan_run_id",
+            text=(
+                "Акции от минимальной цены\n\n"
+                "Apply заблокирован: идентификатор расчёта некорректен.\n\n"
+                "Изменений в WB не выполнялось."
+            ),
+        )
+    try:
+        result = _run_plan_apply_job(
+            task_id="wb-best-price-action-apply",
+            plan_run_id=plan_run_id,
+            data_dir=data_dir,
+            credentials=credentials,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return TelegramCommandResult(
+            command="/wb-actions-min-price",
+            ok=False,
+            mode="apply",
+            blocked_reason="wb_best_price_apply_failed",
+            text=(
+                "Акции от минимальной цены\n\n"
+                "Apply не выполнен или остановлен safety-контуром.\n\n"
+                f"Причина: `{_safe_error(exc)}`"
+            ),
+        )
+    return TelegramCommandResult(
+        command="/wb-actions-min-price",
+        ok=str(result.get("overall_status") or "") in {"ok", "warning"},
+        mode="apply",
+        text=(
+            "Акции от минимальной цены\n\n"
+            f"Итог: apply завершён со статусом `{result.get('overall_status') or 'н/д'}`.\n"
+            f"Run ID: `{result.get('run_id') or 'н/д'}`\n"
+            f"Отправлено строк: `{_int(_dict_value(result, 'apply').get('submitted_rows'))}`.\n"
+            f"Цены проверены: `{_int(_dict_value(result, 'price_verify').get('matched_rows'))}` / "
+            f"`{_int(_dict_value(result, 'price_verify').get('expected_rows'))}`.\n"
+            f"Участие в акциях: `{_int(_dict_value(result, 'action_verify').get('confirmed'))}` / "
+            f"`{_int(_dict_value(result, 'action_verify').get('target'))}`."
+        ),
+        artifacts=_safe_artifacts(result),
+    )
+
+
+def _wb_min_price_actions_cancel() -> TelegramCommandResult:
+    return TelegramCommandResult(
+        command="/wb-actions-min-price",
+        ok=True,
+        mode="cancelled",
+        text="Акции от минимальной цены\n\nОперация отменена. Изменений в WB не выполнялось.",
+        reply_markup=WB_MENU_KEYBOARD,
+    )
+
+
+def _wb_min_price_actions_reject(plan_run_id: str) -> TelegramCommandResult:
+    if not _valid_wb_min_price_plan_id(plan_run_id):
+        return TelegramCommandResult(
+            command="/wb-actions-min-price",
+            ok=False,
+            mode="cancelled",
+            blocked_reason="invalid_plan_run_id",
+            text="Акции от минимальной цены\n\nРасчёт не отклонён: идентификатор некорректен.",
+        )
+    return TelegramCommandResult(
+        command="/wb-actions-min-price",
+        ok=True,
+        mode="cancelled",
+        text=f"Акции от минимальной цены\n\nРасчёт `{plan_run_id}` отклонён. WB не изменён.",
+        reply_markup=WB_MENU_KEYBOARD,
     )
 
 
@@ -3489,124 +3786,7 @@ def _safe_artifacts(run: dict[str, Any]) -> dict[str, str]:
 
 
 def _wb_actions_report_stats(csv_path: str | None) -> dict[str, Any]:
-    if not csv_path:
-        return {"available": False}
-    path = Path(csv_path)
-    try:
-        with path.open(encoding="utf-8-sig", newline="") as handle:
-            rows = list(csv.DictReader(handle, delimiter=";"))
-    except (OSError, csv.Error):
-        return {"available": False}
-    required_columns = {
-        "Акций",
-        "Статусы в файлах акций",
-        "Причина",
-        "Текущая скидка",
-        "Скидка до порога",
-        "Финальная скидка",
-        "Скидка к загрузке",
-        "Осталось до целевой, п.п.",
-    }
-    if not rows or not required_columns.issubset(rows[0]):
-        return {"available": False}
-
-    target_distribution: dict[int, int] = {}
-    upload_distribution: dict[int, int] = {}
-    current_participating_distribution: dict[int, int] = {}
-    participating_after_distribution: dict[int, int] = {}
-    not_participating_after_distribution: dict[int, int] = {}
-    excluded_reason_distribution: dict[str, int] = {}
-    offered_in_active_promos = 0
-    current_participating = 0
-    threshold_eligible = 0
-    participating_after = 0
-    excluded_after = 0
-    newly_participating_after = 0
-    step_limited = 0
-
-    for row in rows:
-        reason = str(row.get("Причина") or "")
-        offered = _int_value(row.get("Акций")) > 0
-        listed_as_participating = _wb_status_is_participating(
-            str(row.get("Статусы в файлах акций") or "")
-        )
-        current_discount = _int_value(row.get("Текущая скидка"))
-        target_discount = _int_value(row.get("Финальная скидка"))
-        required_discount = _optional_int_value(row.get("Скидка до порога"))
-        discount_changes = current_discount != target_discount
-        current_qualifies = bool(
-            offered
-            and listed_as_participating
-            and required_discount is not None
-            and current_discount >= required_discount
-        )
-        target_qualifies = bool(
-            offered
-            and required_discount is not None
-            and target_discount >= required_discount
-        )
-        if offered:
-            offered_in_active_promos += 1
-        if current_qualifies:
-            current_participating += 1
-            current_participating_distribution[current_discount] = (
-                current_participating_distribution.get(current_discount, 0) + 1
-            )
-        if target_qualifies:
-            threshold_eligible += 1
-
-        participates_after = current_qualifies
-        if discount_changes:
-            participates_after = target_qualifies
-
-        if participates_after:
-            participating_after += 1
-            participating_after_distribution[target_discount] = (
-                participating_after_distribution.get(target_discount, 0) + 1
-            )
-            if not current_qualifies:
-                newly_participating_after += 1
-        elif current_qualifies:
-            excluded_after += 1
-            excluded_reason_distribution[reason] = excluded_reason_distribution.get(reason, 0) + 1
-
-        if not participates_after:
-            not_participating_after_distribution[target_discount] = (
-                not_participating_after_distribution.get(target_discount, 0) + 1
-            )
-        upload_discount = _int_value(row.get("Скидка к загрузке"))
-        target_distribution[target_discount] = target_distribution.get(target_discount, 0) + 1
-        upload_distribution[upload_discount] = upload_distribution.get(upload_discount, 0) + 1
-        if _int_value(row.get("Осталось до целевой, п.п.")) != 0:
-            step_limited += 1
-
-    total = len(rows)
-    return {
-        "available": True,
-        "total": total,
-        "offered_in_active_promos": offered_in_active_promos,
-        "offered_not_participating": offered_in_active_promos - current_participating,
-        "outside_active_promos": total - offered_in_active_promos,
-        "current_participating": current_participating,
-        "current_not_participating": total - current_participating,
-        "threshold_eligible": threshold_eligible,
-        "eligible_after": participating_after,
-        "excluded_after": excluded_after,
-        "newly_participating_after": newly_participating_after,
-        "not_participating_after": total - participating_after,
-        "step_limited": step_limited,
-        "current_participating_discount_distribution": current_participating_distribution,
-        "participating_after_discount_distribution": participating_after_distribution,
-        "not_participating_after_discount_distribution": not_participating_after_distribution,
-        "excluded_reason_distribution": excluded_reason_distribution,
-        "target_discount_distribution": target_distribution,
-        "upload_discount_distribution": upload_distribution,
-    }
-
-
-def _wb_status_is_participating(value: str) -> bool:
-    statuses = {item.strip().lower() for item in re.split(r"[,;]", value) if item.strip()}
-    return bool(statuses & {"да", "yes", "true", "1"})
+    return wb_actions_report_stats(csv_path)
 
 
 def _int_value(value: Any) -> int:
@@ -3614,15 +3794,6 @@ def _int_value(value: Any) -> int:
         return int(float(str(value or "0").replace(" ", "").replace(",", ".")))
     except (TypeError, ValueError):
         return 0
-
-
-def _optional_int_value(value: Any) -> int | None:
-    if value is None or not str(value).strip():
-        return None
-    try:
-        return int(float(str(value).replace(" ", "").replace(",", ".")))
-    except (TypeError, ValueError):
-        return None
 
 
 def _wb_report_stat(stats: dict[str, Any], key: str) -> int | None:
@@ -3929,6 +4100,23 @@ def _parse_internal_wb_scheme(value: str) -> tuple[int, int, int] | None:
     return values
 
 
+def _parse_wb_outside_discount(value: Any) -> int | None:
+    text = str(value or "").strip().removesuffix("%").strip()
+    if not text.isdigit():
+        return None
+    discount = int(text)
+    return discount if 0 <= discount <= 99 else None
+
+
+def _valid_wb_min_price_plan_id(value: str) -> bool:
+    return bool(
+        re.fullmatch(
+            r"wb_best_price_actions_plan_[0-9]{1,2}_[A-Za-z0-9_-]+",
+            str(value or "").strip(),
+        )
+    )
+
+
 def _wb_manual_actions_cancel(*, stage: str) -> TelegramCommandResult:
     detail = "Ввод параметров отменён." if stage == "parameters" else "Операция отменена."
     return TelegramCommandResult(
@@ -4027,6 +4215,9 @@ def _normalize_button_command(command: str) -> str:
         "wildberries акции": "/wb-actions",
         "ручная акция": "/wb-actions-manual",
         "wb ручная акция": "/wb-actions-manual",
+        "акции от минимальной цены": "/wb-actions-min-price",
+        "wb акции от минимальной цены": "/wb-actions-min-price",
+        "вб акции от минимальной цены": "/wb-actions-min-price",
         "wb аналитика": "/wb-analytics",
         "вб аналитика": "/wb-analytics",
         "wildberries аналитика": "/wb-analytics",

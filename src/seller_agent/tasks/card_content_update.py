@@ -15,6 +15,11 @@ from seller_agent.marketplaces.ozon.adapter import OzonSellerAdapter
 from seller_agent.marketplaces.wb.adapter import WbContentAdapter
 from seller_agent.reports.writer import ensure_dir, write_json
 from seller_agent.safety.approvals import assert_apply_not_repeated, canonical_checksum, mark_approved_applied
+from seller_agent.tasks.wb_media import (
+    build_wb_media_plan,
+    materialize_wb_media_entry,
+    validate_wb_media_plan,
+)
 
 
 OZON_ATTR_IDS = {
@@ -182,6 +187,14 @@ def _set_ozon_attr(
     ]
 
 
+def _remove_ozon_attr(attrs: list[dict[str, Any]], attr_id: int) -> None:
+    attrs[:] = [
+        attr
+        for attr in attrs
+        if int(attr.get("id") or 0) != attr_id
+    ]
+
+
 def _parse_ozon_package_mm(value: str) -> dict[str, int]:
     numbers = [int(item) for item in re.findall(r"\d+", value or "")]
     if len(numbers) < 3:
@@ -249,12 +262,19 @@ def _ozon_target(passport: dict[str, Any]) -> dict[str, Any]:
     content = passport.get("content") or {}
     physical = passport.get("physical") or {}
     seo = passport.get("seo") or {}
-    ozon_attrs = (passport.get("ozon") or {}).get("attributes") or []
+    ozon = passport.get("ozon") or {}
+    ozon_attrs = ozon.get("attributes") or []
+    hashtag_constraints = (
+        (ozon.get("write_constraints") or {}).get("hashtags") or {}
+    )
     hashtags = seo.get("ozon_hashtags")
     return {
         "title": _normalize_text(content.get("ozon_title") or content.get("canonical_title")),
         "description": _normalize_text(content.get("ozon_description") or content.get("canonical_description")),
         "hashtags": _normalize_ozon_hashtags(hashtags),
+        "hashtags_in_write_payload": (
+            hashtag_constraints.get("include_in_write_payload") is not False
+        ),
         "material": _field_value(ozon_attrs, "Материал") or "Габардин",
         "product_size": _normalize_text(physical.get("product_size_mm")),
         "pack_qty": _normalize_text(physical.get("pack_qty") or "1"),
@@ -283,7 +303,9 @@ def _build_ozon_payload(
     attrs = deepcopy(current.get("attributes") or [])
     _set_ozon_attr(attrs, OZON_ATTR_IDS["title"], [target["title"]])
     _set_ozon_attr(attrs, OZON_ATTR_IDS["description"], [target["description"]])
-    if target["hashtags"]:
+    if not target["hashtags_in_write_payload"]:
+        _remove_ozon_attr(attrs, OZON_ATTR_IDS["hashtags"])
+    elif target["hashtags"]:
         _set_ozon_attr(attrs, OZON_ATTR_IDS["hashtags"], [target["hashtags"]])
     _set_ozon_attr(attrs, OZON_ATTR_IDS["material"], [target["material"]])
     _set_ozon_attr(attrs, OZON_ATTR_IDS["size"], [target["product_size"]])
@@ -371,7 +393,9 @@ def _build_ozon_verify_payload(passport: dict[str, Any], current: dict[str, Any]
     attrs = deepcopy(current.get("attributes") or [])
     _set_ozon_attr(attrs, OZON_ATTR_IDS["title"], [target["title"]])
     _set_ozon_attr(attrs, OZON_ATTR_IDS["description"], [target["description"]])
-    if target["hashtags"]:
+    if not target["hashtags_in_write_payload"]:
+        _remove_ozon_attr(attrs, OZON_ATTR_IDS["hashtags"])
+    elif target["hashtags"]:
         _set_ozon_attr(attrs, OZON_ATTR_IDS["hashtags"], [target["hashtags"]])
     _set_ozon_attr(attrs, OZON_ATTR_IDS["color"], target["colors"])
     _set_ozon_attr(attrs, OZON_ATTR_IDS["color_name"], [target["color_name"]])
@@ -492,6 +516,23 @@ def _wb_media_urls_from_passport(passport: dict[str, Any]) -> list[str]:
     return urls
 
 
+def _wb_media_plan_from_passport(
+    passport: dict[str, Any],
+    *,
+    data_dir: Path,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    dangerous_actions = set((passport.get("safety") or {}).get("dangerous_actions") or [])
+    if "wb_media_update" not in dangerous_actions:
+        return [], []
+    media_plan = build_wb_media_plan(passport)
+    errors = validate_wb_media_plan(
+        data_dir=data_dir,
+        media_plan=media_plan,
+        require_contiguous=False,
+    )
+    return media_plan, errors
+
+
 def _plan_one(
     *,
     passport: dict[str, Any],
@@ -500,12 +541,13 @@ def _plan_one(
     skip_api: bool,
     price_rows: dict[str, dict[str, Any]],
     run_dir: Path,
+    marketplaces: set[str],
 ) -> dict[str, Any]:
     identity = passport.get("identity") or {}
     sku = _normalize_text(identity.get("internal_sku"))
     row: dict[str, Any] = {"internal_sku": sku, "identity": identity, "ready": True, "errors": [], "marketplaces": {}}
     ozon_offer_id = _normalize_text(identity.get("ozon_offer_id"))
-    if ozon_offer_id:
+    if ozon_offer_id and "ozon" in marketplaces:
         current_ozon = None
         ozon_dictionary_values: dict[int, dict[str, int]] = {}
         if credentials.ozon_seller and not skip_api:
@@ -549,7 +591,7 @@ def _plan_one(
             row["ready"] = False
             row["errors"].append("ozon_current_card_not_found")
     wb_vendor_code = _normalize_text(identity.get("wb_vendor_code"))
-    if wb_vendor_code:
+    if wb_vendor_code and "wb" in marketplaces:
         current_wb = None
         if credentials.wb and not skip_api:
             current_wb = WbContentAdapter(credentials.wb).find_cards_by_vendor_codes({wb_vendor_code}).get(wb_vendor_code)
@@ -557,14 +599,24 @@ def _plan_one(
         if current_wb:
             write_json(run_dir / f"wb_current_{sku}.json", current_wb)
             payload, changes, errors = _build_wb_payload(passport, current_wb)
+            media_plan, media_errors = _wb_media_plan_from_passport(
+                passport,
+                data_dir=data_dir,
+            )
+            errors.extend(media_errors)
             row["marketplaces"]["wb"] = {
-                "status": "ready" if payload else "blocked",
+                "status": "ready" if payload and not media_errors else "blocked",
                 "payload": payload,
                 "changes": changes,
                 "errors": errors,
-                "media_urls": _wb_media_urls_from_passport(passport),
+                "media_urls": [
+                    _normalize_text(item.get("source_url"))
+                    for item in media_plan
+                    if item.get("source_kind") == "owner_approved_url"
+                ],
+                "media_plan": media_plan,
             }
-            row["ready"] = row["ready"] and bool(payload)
+            row["ready"] = row["ready"] and bool(payload) and not media_errors
             row["errors"].extend(errors)
         else:
             row["marketplaces"]["wb"] = {"status": "blocked", "errors": ["wb_current_card_not_found"]}
@@ -584,12 +636,21 @@ def run_card_content_update_plan(
     internal_skus: list[str] | None = None,
     run_id: str | None = None,
     skip_api: bool = False,
+    marketplaces: list[str] | None = None,
 ) -> dict[str, Any]:
     started_at = datetime.now()
     run_id = run_id or f"card_content_update_plan_{started_at.strftime('%Y%m%dT%H%M%S')}"
     run_dir = ensure_dir(data_dir / "runs" / started_at.strftime("%Y-%m-%d") / run_id)
     paths = _passport_paths(data_dir=data_dir, passport_paths=passport_paths or [], internal_skus=internal_skus or [])
     prices = _price_rows(data_dir)
+    selected_marketplaces = set(marketplaces or ["ozon", "wb"])
+    invalid_marketplaces = selected_marketplaces - {"ozon", "wb"}
+    if invalid_marketplaces:
+        raise ValueError(
+            f"Unsupported marketplaces: {sorted(invalid_marketplaces)}"
+        )
+    if not selected_marketplaces:
+        raise ValueError("At least one marketplace is required")
     plan = [
         _plan_one(
             passport=_read_json(path),
@@ -598,6 +659,7 @@ def run_card_content_update_plan(
             skip_api=skip_api,
             price_rows=prices,
             run_dir=run_dir,
+            marketplaces=selected_marketplaces,
         )
         for path in paths
     ]
@@ -613,6 +675,7 @@ def run_card_content_update_plan(
         "ready_rows": ready_rows,
         "blocked_rows": len(plan) - ready_rows,
         "skip_api": skip_api,
+        "marketplaces": sorted(selected_marketplaces),
         "artifacts": {"run_dir": str(run_dir), "plan": str(plan_path)},
     }
     write_json(run_dir / "summary.json", summary)
@@ -623,8 +686,13 @@ def run_card_content_update_plan(
         task="card-content-update-plan",
         mode="dry_run",
         risk="high",
-        marketplaces=["ozon", "wb"],
-        inputs={"passport_paths": [str(path) for path in paths], "internal_skus": internal_skus or [], "skip_api": skip_api},
+        marketplaces=sorted(selected_marketplaces),
+        inputs={
+            "passport_paths": [str(path) for path in paths],
+            "internal_skus": internal_skus or [],
+            "skip_api": skip_api,
+            "marketplaces": sorted(selected_marketplaces),
+        },
         pending_id=run_id,
         lifecycle_status="pending_review",
     )
@@ -782,8 +850,10 @@ def _verify_ozon_payloads(ozon: OzonSellerAdapter, payloads: list[dict[str, Any]
         product_errors = product_info.get("errors") if isinstance(product_info.get("errors"), list) else []
         checks["name"] = _normalize_space(item.get("name")) == _normalize_space(target["name"])
         checks["description"] = _normalize_space(_first_attr_value(item, OZON_ATTR_IDS["description"])) == _normalize_space(target["description"])
-        if target["hashtags"]:
-            checks["hashtags"] = _same_list(_ozon_attr_values(item, OZON_ATTR_IDS["hashtags"]), target["hashtags"])
+        checks["hashtags"] = _same_list(
+            _ozon_attr_values(item, OZON_ATTR_IDS["hashtags"]),
+            target["hashtags"],
+        )
         checks["colors"] = _same_list(_ozon_attr_values(item, OZON_ATTR_IDS["color"]), target["colors"])
         checks["marking_required"] = _same_list(_ozon_attr_values(item, OZON_ATTR_IDS["marking_required"]), target["marking_required"])
         checks["package_weight_attr"] = _same_list(_ozon_attr_values(item, OZON_ATTR_IDS["package_weight"]), target["package_weight_attr"])
@@ -1027,7 +1097,9 @@ def run_card_content_update_apply(
     ozon_payload = [row["marketplaces"]["ozon"]["payload"] for row in plan if row.get("marketplaces", {}).get("ozon", {}).get("payload")]
     wb_payload = [row["marketplaces"]["wb"]["payload"] for row in plan if row.get("marketplaces", {}).get("wb", {}).get("payload")]
     wb_media_by_code = {
-        _normalize_text(row["marketplaces"]["wb"]["payload"].get("vendorCode")): list(row["marketplaces"]["wb"].get("media_urls") or [])
+        _normalize_text(row["marketplaces"]["wb"]["payload"].get("vendorCode")): list(
+            row["marketplaces"]["wb"].get("media_plan") or []
+        )
         for row in plan
         if row.get("marketplaces", {}).get("wb", {}).get("payload")
     }
@@ -1071,14 +1143,75 @@ def run_card_content_update_apply(
         media_results = []
         for payload in wb_payload:
             code = _normalize_text(payload.get("vendorCode"))
-            urls = wb_media_by_code.get(code) or []
-            if not urls:
+            media_plan = wb_media_by_code.get(code) or []
+            if not media_plan:
                 continue
-            request = {"nmId": int(payload.get("nmID")), "data": urls}
-            write_json(run_dir / f"wb_media_save_request_{code}.json", request)
-            response = wb.save_media_links(nm_id=int(payload.get("nmID")), urls=urls)
-            write_json(run_dir / f"wb_media_save_response_{code}.json", response)
-            media_results.append({"vendorCode": code, "urls": len(urls), "error": response.get("error"), "errorText": response.get("errorText")})
+            nm_id = int(payload.get("nmID"))
+            has_local = any(
+                item.get("source_kind") == "owner_approved_local"
+                for item in media_plan
+            )
+            if not has_local:
+                urls = [
+                    _normalize_text(item.get("source_url"))
+                    for item in media_plan
+                    if _normalize_text(item.get("source_url"))
+                ]
+                request = {"nmId": nm_id, "data": urls}
+                write_json(run_dir / f"wb_media_save_request_{code}.json", request)
+                response = wb.save_media_links(nm_id=nm_id, urls=urls)
+                write_json(run_dir / f"wb_media_save_response_{code}.json", response)
+                media_results.append(
+                    {
+                        "vendorCode": code,
+                        "mode": "links",
+                        "positions": len(urls),
+                        "error": response.get("error"),
+                        "errorText": response.get("errorText"),
+                    }
+                )
+                continue
+            for entry in sorted(
+                media_plan,
+                key=lambda item: int(item.get("position") or 0),
+            ):
+                position = int(entry.get("position") or 0)
+                path, actual_sha256 = materialize_wb_media_entry(
+                    data_dir=data_dir,
+                    run_dir=run_dir,
+                    vendor_code=code,
+                    entry=entry,
+                )
+                request = {
+                    "nmId": nm_id,
+                    "photoNumber": position,
+                    "path": str(path),
+                    "sha256": actual_sha256,
+                    "source_kind": entry.get("source_kind"),
+                }
+                write_json(
+                    run_dir / f"wb_media_file_request_{code}_{position:02d}.json",
+                    request,
+                )
+                response = wb.upload_media_file(
+                    nm_id=nm_id,
+                    photo_number=position,
+                    file_path=path,
+                )
+                write_json(
+                    run_dir / f"wb_media_file_response_{code}_{position:02d}.json",
+                    response,
+                )
+                media_results.append(
+                    {
+                        "vendorCode": code,
+                        "mode": "file",
+                        "position": position,
+                        "sha256": actual_sha256,
+                        "error": response.get("error"),
+                        "errorText": response.get("errorText"),
+                    }
+                )
         if media_results:
             write_json(run_dir / "wb_media_save_summary.json", media_results)
             time.sleep(3)

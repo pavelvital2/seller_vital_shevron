@@ -412,6 +412,47 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 - Ozon dashboard, analytics, products и prices открылись без login/ABT,
   `expectedStoreFound: true`, `stateExported: true`, `valuesPrinted: false`.
 
+### Постоянная нормализация Ozon cookies 2026-07-27
+
+Подтверждённая причина повторного сбоя:
+
+- `ozon_import_cookies_check.js` размножал cookies без явного домена сразу на
+  четыре aliases: `.ozon.ru`, `ozon.ru`, `seller.ozon.ru`,
+  `.seller.ozon.ru`;
+- keepalive экспортировал этот набор обратно в `storage_state`;
+- state вырос до `68` cookies при `16` уникальных именах, после чего Ozon
+  показывал `Похоже, нет соединения`/`__rr`;
+- работа VitalSewing с того же сервера, IP и аккаунта опровергла вывод о
+  блокировке общего IP.
+
+Исправление:
+
+- `scripts/lib/ozon_cookie_state.js` хранит один канонический cookie среди
+  root/seller aliases, сохраняя отдельные сервисные домены Ozon;
+- импорт cookies без домена использует только `.ozon.ru`;
+- import, keeper, CDP keepalive, persistent и interactive login экспортируют
+  state атомарно с mode `600`;
+- keeper/persistent перед `addCookies` автоматически ремонтируют раздутый
+  state и фиксируют только безопасные счётчики `inputCount`, `outputCount`,
+  `removedCount`, `aliasDuplicates`, `valuesPrinted=false`;
+- тесты: `tests/test_ozon_cookie_state.py`.
+
+Live-проверка:
+
+- исправленный import нового cookie header: `COOKIE_IMPORT_SUCCESS`,
+  `expectedStoreFound=true`, итоговый state `20` cookies;
+- keeper после restart увидел `22`, удалил `2` alias-копии и сохранил `20`;
+- ручной `vital-shevron-ozon-session-refresh.service` завершился
+  `Result=success`, `ExecMainStatus=0`;
+- `status_preflight_20260727T205140`: `overall_status=ok`.
+
+Правило диагностики:
+
+- `__rr` или `Похоже, нет соединения` не считать доказательством блокировки
+  IP, пока не сравнён другой рабочий контур на том же сервере/аккаунте;
+- сначала сравнить CDP port/profile, cookie counts/domains без значений,
+  selected company и временный import свежих cookies.
+
 ## WB Watchdog
 
 WB watchdog запускается через:

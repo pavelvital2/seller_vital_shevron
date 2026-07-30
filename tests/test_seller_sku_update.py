@@ -7,6 +7,8 @@ from seller_agent.config import AppCredentials, OzonSellerCredentials, WbCredent
 from seller_agent.tasks.registry import get_task_definition
 from seller_agent.tasks.seller_sku_update import (
     _build_wb_vendor_update_variant,
+    _ozon_precheck,
+    _update_local_layers,
     normalize_seller_sku_operations,
     run_seller_sku_update_apply,
     run_seller_sku_update_verify,
@@ -91,6 +93,88 @@ def test_build_wb_vendor_update_variant_preserves_card_fields() -> None:
     assert variant["dimensions"] == {"length": 10, "width": 10, "height": 1}
     assert variant["characteristics"] == [{"id": 1, "value": ["Россия"]}]
     assert variant["sizes"] == [{"skus": ["2047000000000"], "techSize": "0"}]
+
+
+def test_ozon_precheck_treats_matching_new_offer_as_already_applied(
+    tmp_path: Path,
+) -> None:
+    class FakeOzon:
+        def fetch_product_attributes(self, offer_ids):
+            if offer_ids == ["old_offer"]:
+                return []
+            return [{"id": 123, "offer_id": "new_offer"}]
+
+    result = _ozon_precheck(
+        ozon=FakeOzon(),
+        operation={
+            "internal_sku": "new_offer",
+            "ozon": {
+                "old_offer_id": "old_offer",
+                "new_offer_id": "new_offer",
+                "product_id": "123",
+            },
+        },
+        run_dir=tmp_path,
+        skip_api=False,
+    )
+
+    assert result["status"] == "already_applied"
+    assert result["ready"] is True
+    assert result["errors"] == []
+
+
+def test_local_layer_update_keeps_mapping_sources_aligned(tmp_path: Path) -> None:
+    mapping_dir = tmp_path / "catalog" / "mapping"
+    unified_dir = tmp_path / "catalog" / "unified"
+    mapping_dir.mkdir(parents=True)
+    unified_dir.mkdir(parents=True)
+    (mapping_dir / "ozon_wb_internal_sku_confirmed.csv").write_text(
+        "\n".join(
+            [
+                "internal_sku,ozon_offer_id,ozon_product_id,wb_vendor_code,wb_nm_id,notes",
+                "chev_kit2_test_0001,old_ozon,123,old_wb,456,confirmed",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (unified_dir / "internal_sku_assignment_owner_review.csv").write_text(
+        "\n".join(
+            [
+                "review_status,source_marketplace,source_id,source_secondary_id,current_internal_product_id,approved_internal_sku,notes",
+                "owner_confirmed_internal_sku,ozon,old_ozon,123,ozon:old_ozon,chev_kit2_test_0001,approved",
+                "owner_confirmed_internal_sku,wb,old_wb,456,wb:old_wb,chev_kit2_test_0001,approved",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    changed = _update_local_layers(
+        data_dir=tmp_path,
+        plan=[
+            {
+                "internal_sku": "chev_kit2_test_0001",
+                "ozon": {
+                    "new_offer_id": "chev_kit2_test_0001",
+                    "product_id": "123",
+                },
+                "wb": {
+                    "new_vendor_code": "chev_kit2_test_0001",
+                    "nm_id": "456",
+                },
+            }
+        ],
+        run_id="seller_sku_update_apply_test",
+    )
+
+    mapping = (mapping_dir / "ozon_wb_internal_sku_confirmed.csv").read_text(encoding="utf-8")
+    owner_review = (
+        unified_dir / "internal_sku_assignment_owner_review.csv"
+    ).read_text(encoding="utf-8")
+    assert "chev_kit2_test_0001,chev_kit2_test_0001,123,chev_kit2_test_0001,456" in mapping
+    assert "ozon,chev_kit2_test_0001,123,ozon:chev_kit2_test_0001" in owner_review
+    assert "wb,chev_kit2_test_0001,456,wb:chev_kit2_test_0001" in owner_review
+    assert changed["catalog/mapping/ozon_wb_internal_sku_confirmed.csv"] == 1
+    assert changed["catalog/unified/internal_sku_assignment_owner_review.csv"] == 2
 
 
 def test_apply_seller_sku_update_requires_owner_confirmation(tmp_path: Path) -> None:

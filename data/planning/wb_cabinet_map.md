@@ -249,6 +249,18 @@ API-first:
   `POST /api/v2/upload/task` принимает `nmID`, `price`, `discount`; поля
   минимальной цены/блокировки автоакций в нем не подтверждены.
 
+Live research 2026-07-29:
+
+- колонка и XLSX-действие доступны в кабинете Vital Shevron;
+- frontend `discounts-prices-v2-front v4.4.2` читает
+  `autoDiscountLock.minPrice`, `locked`, `endTime`;
+- внутренние LK-маршруты формирования и загрузки XLSX перечислены в
+  `data/reference/api_docs/wb/endpoints/autoaction_min_price.md`;
+- это не публичный Seller API, поэтому write по ним без отдельного
+  owner-approved контура запрещен;
+- в текущем XLSX `477/478` товаров категории `Декор для одежды` имеют
+  минимальную цену `0`, блокировок нет.
+
 ### Карантин цен
 
 ```text

@@ -133,12 +133,17 @@ def build_job_result_presentation(
         return _ozon_actions_plan_result(job, summary)
     if job.task_id == "wb-actions-discount-plan":
         return _wb_actions_plan_result(job, summary, update=update)
+    if job.task_id == "wb-best-price-action-plan":
+        return _wb_best_price_action_plan_result(job, summary)
     if job.task_id in {"ozon-inbox", "wb-inbox"}:
         return _inbox_plan_result(job, summary, data_dir=data_dir)
+    if job.task_id == "wb-actions-discount-apply":
+        return _wb_actions_apply_result(job, summary)
+    if job.task_id == "wb-best-price-action-apply":
+        return _wb_best_price_action_apply_result(job, summary)
     if job.task_id in {
         "ozon-elastic-apply",
         "ozon-actions-optimizer-apply",
-        "wb-actions-discount-apply",
         "ozon-inbox-apply",
         "wb-inbox-apply",
     }:
@@ -460,6 +465,115 @@ def _wb_actions_plan_result(
     return "\n".join(lines), markup
 
 
+def _wb_best_price_action_plan_result(
+    job: JobRecord,
+    result: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    summary = _dict(result.get("summary"))
+    run_id = str(result.get("run_id") or "")
+    outside_discount = _int(result.get("outside_action_discount"))
+    safe_to_apply = bool(result.get("safe_to_apply"))
+    changed = _int(summary.get("to_change_discount"))
+    lines = [
+        "Акции от минимальной цены",
+        "",
+        f"Итог: fresh dry-run построен со статусом `{result.get('overall_status') or 'н/д'}`.",
+        f"Run ID: `{run_id or 'н/д'}`",
+        f"Job ID: `{job.job_id}`",
+        f"Скидка вне подходящих акций: `{outside_discount}%`.",
+        "",
+        "Сейчас:",
+        f"- товаров в расчёте: `{_int(summary.get('scope_total'))}`;",
+        f"- участвуют в активных акциях: `{_int(summary.get('currently_participating'))}`;",
+        f"- предложены хотя бы одной акцией: `{_int(summary.get('offered_any_action'))}`;",
+        f"- не предложены активным акциям: `{_int(summary.get('not_offered'))}`.",
+        "",
+        "После применения:",
+        f"- будут участвовать в лучшей допустимой акции: `{_int(summary.get('eligible_any_action'))}`;",
+        f"- останутся вне акций: `{_int(summary.get('outside_action'))}`;",
+        f"- из них доступны акциям, но цена ниже минимума: "
+        f"`{_int(summary.get('offered_but_below_minimum'))}`;",
+        f"- скидка изменится: `{changed}`;",
+        f"- скидка не изменится: `{_int(summary.get('no_change_discount'))}`.",
+        "",
+        "Целевые скидки:",
+        *_discount_distribution_lines(summary.get("target_discount_distribution")),
+        "",
+        "Safety:",
+        f"- целевая цена ниже минимума: `{_int(summary.get('target_below_minimum'))}`;",
+        f"- небезопасно для одного upload: `{_int(summary.get('unsafe_single_upload'))}`.",
+        "",
+        "Скидки в WB не изменялись. Полный HTML-отчёт приложен.",
+    ]
+    markup: dict[str, Any] = {}
+    if safe_to_apply and changed > 0 and run_id:
+        markup = {
+            "inline_keyboard": [
+                [{"text": "Применить", "callback_data": f"wbmp_apply:{run_id}"}],
+                [{"text": "Отклонить", "callback_data": f"wbmp_reject:{run_id}"}],
+            ]
+        }
+    elif not safe_to_apply:
+        lines.extend(
+            [
+                "",
+                "Apply заблокирован. Укажите другую скидку и постройте новый dry-run.",
+            ]
+        )
+    else:
+        lines.extend(["", "Изменений к применению нет."])
+    return "\n".join(lines), markup
+
+
+def _wb_best_price_action_apply_result(
+    job: JobRecord,
+    summary: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    minimum = _dict(summary.get("minimum_verify"))
+    applied = _dict(summary.get("apply"))
+    price = _dict(summary.get("price_verify"))
+    action = _dict(summary.get("action_verify"))
+    drift = _dict(summary.get("drift"))
+    lines = [
+        "Акции от минимальной цены apply",
+        "",
+        f"Итог: apply завершён со статусом `{summary.get('overall_status') or job.status}`.",
+        f"Job ID: `{job.job_id}`",
+        f"Approved plan: `{job.params.get('plan_run_id') or 'н/д'}`",
+        f"Apply run: `{summary.get('run_id') or 'н/д'}`",
+        "",
+        "Проверка перед записью:",
+        f"- минимальные цены: `{_int(minimum.get('verified'))}` / `{_int(minimum.get('target'))}`;",
+        f"- drift: `{_int(drift.get('drift_rows_count'))}` товаров.",
+        "",
+        "Применение:",
+        f"- отправлено строк: `{_int(applied.get('submitted_rows'))}`;",
+        f"- upload ID: `{applied.get('upload_id') or 'н/д'}`;",
+        f"- upload verify: `{applied.get('upload_verify_status') or 'н/д'}`.",
+        "",
+        "Итоговая проверка:",
+        f"- цены и скидки: `{_int(price.get('matched_rows'))}` / "
+        f"`{_int(price.get('expected_rows'))}`;",
+        f"- выбранные акции: `{_int(action.get('confirmed'))}` / `{_int(action.get('target'))}`.",
+        "",
+        "Полный apply/verify отчёт приложен.",
+    ]
+    return "\n".join(lines), {}
+
+
+def _discount_distribution_lines(value: Any) -> list[str]:
+    distribution = value if isinstance(value, dict) else {}
+    if not distribution:
+        return ["- данных нет."]
+    return [
+        f"- скидка `{discount}%`: `{_int(count)}` товаров;"
+        for discount, count in sorted(
+            distribution.items(),
+            key=lambda item: int(str(item[0])),
+        )
+    ]
+
+
 def _inbox_plan_result(
     job: JobRecord,
     summary: dict[str, Any],
@@ -541,6 +655,83 @@ def _apply_result(job: JobRecord, summary: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _wb_actions_apply_result(
+    job: JobRecord,
+    summary: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    verify = _dict(summary.get("verify"))
+    drift = _dict(summary.get("drift"))
+    applied = _dict(summary.get("applied"))
+    target_completion = _dict(summary.get("target_completion"))
+    followup_rows = _int(target_completion.get("followup_required_rows"))
+    transitions = (
+        target_completion.get("transitions")
+        if isinstance(target_completion.get("transitions"), list)
+        else []
+    )
+    scheme = str(summary.get("scheme") or "")
+    if followup_rows:
+        conclusion = (
+            "ближайший безопасный upload применён и проверен, "
+            "но конечная схема достигнута не полностью"
+        )
+    else:
+        conclusion = "конечная схема применена и проверена"
+    lines = [
+        "WB акции apply",
+        "",
+        f"Итог: {conclusion}.",
+        f"Статус: `{summary.get('overall_status') or job.status}`.",
+        f"Схема: `{scheme or 'н/д'}`",
+        f"Job ID: `{job.job_id}`",
+        f"Approved plan: `{summary.get('approved_plan_run_id') or job.params.get('plan_run_id') or 'н/д'}`",
+        f"Apply run: `{summary.get('run_id') or 'н/д'}`",
+        "",
+        "Проверка ближайшего upload:",
+        f"- отправлено строк: `{_int(applied.get('payload_rows_count'))}`;",
+        f"- успешно проверено: `{_int(verify.get('success_rows'))}` / `{_int(verify.get('expected_rows'))}`;",
+        f"- ошибок: `{_int(verify.get('failed_rows'))}`;",
+        f"- пропущено из-за drift: `{_int(drift.get('skipped_due_to_drift_product_count'))}` товаров.",
+        "",
+        "Конечная схема:",
+        f"- сразу достигли конечной скидки: `{_int(target_completion.get('direct_final_target_rows'))}`;",
+        f"- остановились на безопасном промежуточном шаге: `{followup_rows}`;",
+    ]
+    for transition in transitions:
+        if not isinstance(transition, dict):
+            continue
+        lines.append(
+            "- переход "
+            f"`{_int(transition.get('current_discount'))}% → "
+            f"{_int(transition.get('uploaded_discount'))}% → "
+            f"{_int(transition.get('final_discount'))}%`: "
+            f"`{_int(transition.get('rows_count'))}` товаров."
+        )
+    markup: dict[str, Any] = {}
+    if followup_rows:
+        lines.extend(
+            [
+                "",
+                f"Осталось довести до конечной скидки: `{followup_rows}` товаров.",
+                "Следующая кнопка строит свежий dry-run. Скидки без нового подтверждения не изменяются.",
+            ]
+        )
+        parts = scheme.split("-")
+        if len(parts) == 3 and all(part.isdigit() and 0 <= int(part) <= 99 for part in parts):
+            markup = {
+                "inline_keyboard": [
+                    [
+                        {
+                            "text": "Рассчитать следующий шаг",
+                            "callback_data": f"wbam_confirm:{scheme}",
+                        }
+                    ]
+                ]
+            }
+    lines.extend(["", "Полный apply/verify отчёт приложен, если он сформирован."])
+    return "\n".join(lines), markup
+
+
 def _job_summary(job: JobRecord) -> dict[str, Any]:
     summary = job.result.get("summary")
     return summary if isinstance(summary, dict) else {}
@@ -559,6 +750,8 @@ def _job_title(job: JobRecord) -> str:
         "ozon-elastic-plan": "Ozon Elastic",
         "ozon-actions-optimizer-plan": "Ozon все акции",
         "wb-actions-discount-plan": "WB акции",
+        "wb-best-price-action-plan": "Акции от минимальной цены",
+        "wb-best-price-action-apply": "Акции от минимальной цены apply",
         "ozon-inbox": "Ozon входящие",
         "wb-inbox": "WB входящие",
     }

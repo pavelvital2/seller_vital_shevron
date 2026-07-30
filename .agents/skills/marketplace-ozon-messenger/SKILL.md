@@ -53,6 +53,12 @@ description: "Use for Ozon Messenger and notification workflows: buyer chats, un
   the redacted Messenger probe and check whether the LK page shows websocket
   auth failure `ws1006`. A general Ozon keepalive/status `ok` does not prove
   Messenger websocket health.
+- If the approved send helper finds the textarea but click is intercepted by
+  the Ozon modal `Загрузите документы на бренд`, do not click
+  `Загрузить документы`. With owner approval, click `Больше не показывать`
+  once and verify on a new page that the modal is absent. Without that
+  approval, the helper may hide only this exact known overlay locally for the
+  current page; this must not change account settings or approved message text.
 - Marketplace notifications can be marked read through `/v2/chat/read` when the
   runbook confirms `chat_id` and `from_message_id`.
 - `/ozon-inbox` must paginate `/v3/chat/list` by `cursor` up to the working
@@ -68,6 +74,11 @@ description: "Use for Ozon Messenger and notification workflows: buyer chats, un
   documented LK/CDP fallback to open the target chat in the Vital Shevron
   contour without sending a message, then verify through `/v3/chat/history`
   that no `Customer is_read=false` remains.
+- If the newest unread Customer message contains only a photo/file and the
+  immediately preceding unread Customer message contains the actual question,
+  build one reply action from both messages: use the previous text for draft
+  classification, retain the media evidence in the owner report, and target
+  the newest message id so the entire unread tail closes after apply.
 
 ## Output
 

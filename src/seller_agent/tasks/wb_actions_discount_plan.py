@@ -108,6 +108,141 @@ class PromoAggregate:
     rows_count: int = 0
 
 
+def wb_actions_report_stats(csv_path: str | Path | None) -> dict[str, Any]:
+    """Calculate exact current and projected WB action participation from a plan CSV."""
+    if not csv_path:
+        return {"available": False}
+    path = Path(csv_path)
+    try:
+        with path.open(encoding="utf-8-sig", newline="") as handle:
+            rows = list(csv.DictReader(handle, delimiter=";"))
+    except (OSError, csv.Error):
+        return {"available": False}
+    required_columns = {
+        "Акций",
+        "Статусы в файлах акций",
+        "Причина",
+        "Текущая скидка",
+        "Скидка до порога",
+        "Финальная скидка",
+        "Скидка к загрузке",
+        "Осталось до целевой, п.п.",
+    }
+    if not rows or not required_columns.issubset(rows[0]):
+        return {"available": False}
+
+    target_distribution: dict[int, int] = {}
+    upload_distribution: dict[int, int] = {}
+    current_participating_distribution: dict[int, int] = {}
+    participating_after_distribution: dict[int, int] = {}
+    not_participating_after_distribution: dict[int, int] = {}
+    excluded_reason_distribution: dict[str, int] = {}
+    offered_in_active_promos = 0
+    current_participating = 0
+    threshold_eligible = 0
+    participating_after = 0
+    excluded_after = 0
+    newly_participating_after = 0
+    step_limited = 0
+
+    for row in rows:
+        reason = str(row.get("Причина") or "")
+        offered = _report_int(row.get("Акций")) > 0
+        listed_as_participating = _report_status_is_participating(
+            str(row.get("Статусы в файлах акций") or "")
+        )
+        current_discount = _report_int(row.get("Текущая скидка"))
+        target_discount = _report_int(row.get("Финальная скидка"))
+        required_discount = _report_optional_int(row.get("Скидка до порога"))
+        discount_changes = current_discount != target_discount
+        current_qualifies = bool(
+            offered
+            and listed_as_participating
+            and required_discount is not None
+            and current_discount >= required_discount
+        )
+        target_qualifies = bool(
+            offered
+            and required_discount is not None
+            and target_discount >= required_discount
+        )
+        if offered:
+            offered_in_active_promos += 1
+        if current_qualifies:
+            current_participating += 1
+            current_participating_distribution[current_discount] = (
+                current_participating_distribution.get(current_discount, 0) + 1
+            )
+        if target_qualifies:
+            threshold_eligible += 1
+
+        participates_after = target_qualifies if discount_changes else current_qualifies
+        if participates_after:
+            participating_after += 1
+            participating_after_distribution[target_discount] = (
+                participating_after_distribution.get(target_discount, 0) + 1
+            )
+            if not current_qualifies:
+                newly_participating_after += 1
+        elif current_qualifies:
+            excluded_after += 1
+            excluded_reason_distribution[reason] = excluded_reason_distribution.get(reason, 0) + 1
+
+        if not participates_after:
+            not_participating_after_distribution[target_discount] = (
+                not_participating_after_distribution.get(target_discount, 0) + 1
+            )
+        upload_discount = _report_int(row.get("Скидка к загрузке"))
+        target_distribution[target_discount] = target_distribution.get(target_discount, 0) + 1
+        upload_distribution[upload_discount] = upload_distribution.get(upload_discount, 0) + 1
+        if _report_int(row.get("Осталось до целевой, п.п.")) != 0:
+            step_limited += 1
+
+    total = len(rows)
+    return {
+        "available": True,
+        "total": total,
+        "offered_in_active_promos": offered_in_active_promos,
+        "offered_not_participating": offered_in_active_promos - current_participating,
+        "outside_active_promos": total - offered_in_active_promos,
+        "current_participating": current_participating,
+        "current_not_participating": total - current_participating,
+        "threshold_eligible": threshold_eligible,
+        "eligible_after": participating_after,
+        "excluded_after": excluded_after,
+        "newly_participating_after": newly_participating_after,
+        "not_participating_after": total - participating_after,
+        "step_limited": step_limited,
+        "current_participating_discount_distribution": current_participating_distribution,
+        "participating_after_discount_distribution": participating_after_distribution,
+        "not_participating_after_discount_distribution": not_participating_after_distribution,
+        "excluded_reason_distribution": excluded_reason_distribution,
+        "target_discount_distribution": target_distribution,
+        "upload_discount_distribution": upload_distribution,
+    }
+
+
+def _report_status_is_participating(value: str) -> bool:
+    statuses = {item.strip().lower() for item in re.split(r"[,;]", value) if item.strip()}
+    return bool(statuses & {"да", "yes", "true", "1"})
+
+
+def _report_int(value: Any) -> int:
+    try:
+        return int(float(str(value or "0").replace(" ", "").replace(",", ".")))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _report_optional_int(value: Any) -> int | None:
+    if value is None or not str(value).strip():
+        return None
+    try:
+        return int(float(str(value).replace(" ", "").replace(",", ".")))
+    except (TypeError, ValueError):
+        return None
+
+
 def parse_scheme(value: str) -> Scheme:
     match = re.fullmatch(r"(\d+)-(\d+)-(\d+)", value.strip())
     if not match:

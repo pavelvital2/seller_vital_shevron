@@ -625,6 +625,27 @@ NODE_PATH=/home/Codex/agent-tools/node/node_modules \
   `reviews_questions_20260621T165709_pending` закрыт как `no_actions_verify`,
   чтобы он не висел в статусах на согласование.
 
+### Штатный Ozon apply 2026-07-27
+
+- Source inbox:
+  `ozon_inbox_verify_cookie_recovery_20260727T2059`.
+- Job Worker:
+  `job_ozon-inbox-apply_20260727T181528Z_0b6aa2d2`, status `success`.
+- Approved-пакет:
+  `ozon_inbox_verify_cookie_recovery_20260727T2059_reviews_pending_approved_20260727T211538`.
+- Результат: публичные ответы `3/3`, отметки просмотренными `32/32`,
+  вопросы `0`.
+- Счётчик Ozon: `NOT_VIEWED 36 -> 1`, `PROCESSED 2694 -> 2697`,
+  `VIEWED 5128 -> 5160`.
+- Cleanup закрыл исходный inbox pending, reviews pending и approved package:
+  `3/3`, ошибок `0`.
+- Fresh verify через Job Worker
+  `job_ozon-inbox_20260727T181606Z_dc6b7929` проверил `359` чатов и
+  подтвердил отсутствие Messenger actions из согласованного пакета.
+- Остался один новый отзыв `5` без текста и медиа по `pict0110`; он появился
+  после исходного среза, сохранён отдельным pending
+  `ozon_inbox_verify_after_apply_20260727T2116_reviews_pending` и не применён.
+
 ### Штатный apply 2026-06-20
 
 - Pending-пакет: `data/pending/reviews_questions_20260620T_owner_request_pending`.

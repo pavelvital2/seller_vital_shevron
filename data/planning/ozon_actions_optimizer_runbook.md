@@ -258,3 +258,49 @@ read-only -> dry-run -> review -> approved -> fresh dry-run -> drift-check -> ap
 - Команда не учитывает продажи, маржу, CPC и изменение конверсии. Это
   оптимизатор участия в акциях по условиям акции, а не финальная оценка
   прибыльности.
+
+## Отдельный owner-override для распродажи залежавшихся остатков
+
+Подтверждено владельцем 2026-07-30: для явно выделенных групп залежавшегося
+ассортимента может быть согласован режим абсолютного максимального бустинга
+без ограничения `min_price`.
+
+Этот режим не меняет стандартный оптимизатор и не разрешает ему пропускать
+проверку `target_action_price >= min_price`. Он оформляется только отдельным
+checksummed dry-run, где по каждой строке явно показаны:
+
+- owner-approved группа;
+- `price_max_elastic -> max_boost`;
+- текущий `min_price` и величина снижения ниже него;
+- отключение `min_price_for_auto_actions_enabled`;
+- консервативная экономика до CPC;
+- точная CPC-ставка и hard stop;
+- срок распродажи и окончательное решение по остатку.
+
+Свежий probe Vital Shevron от 2026-07-30 подтвердил:
+
+- Elastic: максимальный бустинг `75%` по товарному
+  `price_max_elastic`;
+- акции `Максимальный бустинг`: фиксированный бустинг `55%` из
+  `action.description`;
+- при выборе абсолютного максимума сначала сравнивается подтверждённый
+  процент бустинга, затем более высокая цена при одинаковом проценте.
+
+Первый review-пакет:
+
+```text
+data/runs/2026-07-30/ozon_dormant_reset_plan_20260730T0908/
+```
+
+Apply из обычного `apply-ozon-actions-optimizer` для такого пакета запрещён:
+он не управляет owner override минимальной цены и CPC как одной зависимой
+операцией. Нужен отдельный apply-контур:
+
+```text
+checksum -> API-only preflight -> fresh prices/actions/CPC ->
+full-scope drift-check -> disable min-price accounting for approved rows ->
+verify -> action activate/update -> verify -> CPC update/add -> verify ->
+schedule controls
+```
+
+Если любой этап verify не подтверждён, последующие write-этапы не выполнять.

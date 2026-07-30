@@ -6,6 +6,7 @@ const path = require('path');
 const readline = require('readline');
 
 const { chromium, browserLaunchOptions } = require('../lib/playwright');
+const { exportNormalizedStorageState } = require('../lib/ozon_cookie_state');
 
 const projectRoot = path.resolve(__dirname, '../..');
 const defaultProfile = path.join(projectRoot, '.sessions', 'ozon', 'chrome-profile');
@@ -246,14 +247,7 @@ async function chooseCompanyIfNeeded(page) {
 }
 
 async function exportState(context) {
-  fs.mkdirSync(path.dirname(opts.state), { recursive: true });
-  if (fs.existsSync(opts.state)) {
-    const backup = `${opts.state}.bak-${new Date().toISOString().replace(/[:.]/g, '-')}`;
-    fs.copyFileSync(opts.state, backup);
-    fs.chmodSync(backup, 0o600);
-  }
-  await context.storageState({ path: opts.state });
-  fs.chmodSync(opts.state, 0o600);
+  return exportNormalizedStorageState(context, opts.state, { backup: true });
 }
 
 function publicResult(status, summary, stateExported) {

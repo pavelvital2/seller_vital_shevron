@@ -14,6 +14,11 @@ from seller_agent.core.run_manifest import write_summary_run_manifest
 from seller_agent.marketplaces.ozon.adapter import OzonSellerAdapter
 from seller_agent.marketplaces.wb.adapter import WbContentAdapter
 from seller_agent.reports.writer import ensure_dir, write_json
+from seller_agent.tasks.wb_media import (
+    build_wb_media_plan,
+    media_urls_if_remote_only,
+    validate_wb_media_plan,
+)
 
 
 WB_TITLE_MAX_LEN = 60
@@ -428,8 +433,27 @@ def _passport_variant(
 
 def _passport_images(passport: dict[str, Any]) -> list[str]:
     urls: list[str] = []
-    for item in (passport.get("media") or {}).get("target_assets") or []:
+    media = passport.get("media") or {}
+    target_assets = media.get("target_assets") or []
+    for item in target_assets:
         url = str(item.get("url") or "").strip()
+        if url and url not in urls:
+            urls.append(url)
+    if urls:
+        return urls
+
+    no_upload_actions = {
+        "do_not_touch",
+        "keep_current",
+        "keep_current_no_upload",
+        "keep_current_untouched_no_upload",
+        "no_media_upload",
+    }
+    for item in media.get("target_wb_photo_set") or []:
+        action = str(item.get("action") or "").strip()
+        if action in no_upload_actions:
+            continue
+        url = str(item.get("source_url") or item.get("url") or "").strip()
         if url and url not in urls:
             urls.append(url)
     return urls
@@ -471,8 +495,19 @@ def _build_owner_approved_plan_items(
             missing.append({"name": "title", "required": True})
         if not variant.get("description"):
             missing.append({"name": "description", "required": True})
-        if not _passport_images(passport):
+        media_plan = build_wb_media_plan(passport)
+        media_errors = validate_wb_media_plan(
+            data_dir=data_dir,
+            media_plan=media_plan,
+            require_contiguous=any(
+                item.get("source_kind") == "owner_approved_local"
+                for item in media_plan
+            ),
+        )
+        if not media_plan:
             missing.append({"name": "media.target_assets", "required": True})
+        for error in media_errors:
+            missing.append({"name": "media.target_wb_photo_set", "required": True, "error": error})
         item = {
             "master_sku": sku,
             "title": variant["title"],
@@ -482,7 +517,8 @@ def _build_owner_approved_plan_items(
             "wb_title_max_len": WB_TITLE_MAX_LEN,
             "target": target,
             "draft_variant": variant,
-            "images_from_ozon": _passport_images(passport),
+            "images_from_ozon": media_urls_if_remote_only(media_plan),
+            "media_plan": media_plan,
             "filled_characteristics_count": len(_filled_characteristic_ids(variant)),
             "subject_characteristics_count": "",
             "missing_characteristics": missing,
@@ -687,7 +723,9 @@ def run_wb_card_create_plan(
         "high_confidence_items": sum(1 for item in plan_items if item["target"]["confidence"] == "high"),
         "manual_review_items": sum(1 for item in plan_items if item["needs_manual_review"]),
         "title_shortened_items": sum(1 for item in plan_items if item["title_shortened"]),
-        "media_upload_items": sum(1 for item in plan_items if item["images_from_ozon"]),
+        "media_upload_items": sum(
+            1 for item in plan_items if item.get("media_plan") or item["images_from_ozon"]
+        ),
         "strict_card_rule": "copy all applicable Ozon fields, fill all WB characteristics, upload Ozon photos",
         "will_apply": False,
     }
@@ -696,7 +734,11 @@ def run_wb_card_create_plan(
         {
             "vendorCode": item["master_sku"],
             "images": item["images_from_ozon"],
-            "apply_note": "Call /content/v3/media/save after WB nmID is known",
+            "media": item.get("media_plan") or [],
+            "apply_note": (
+                "Use /content/v3/media/file for every position when local approved files are present; "
+                "otherwise use /content/v3/media/save after WB nmID is known"
+            ),
         }
         for item in plan_items
     ]

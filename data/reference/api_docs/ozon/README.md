@@ -28,6 +28,10 @@
 - `endpoints/supply_order.md` - заявки, поставки и bundle-состав.
 - `endpoints/cluster_list.md` - `/v2/cluster/list`, mapping кластера назначения,
   `macrolocal_cluster_id` и складов размещения.
+- `endpoints/product_import_prices.md` - обновление цен и официальное
+  ограничение `min_price >= 50%` от текущей цены продавца.
+- `endpoints/performance_campaign_products.md` - раздельные методы добавления
+  товаров в CPC-кампанию и обновления ставок.
 
 ## Правило обновления
 

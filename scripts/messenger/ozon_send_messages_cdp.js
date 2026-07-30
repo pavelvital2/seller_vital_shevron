@@ -96,6 +96,20 @@ async function visibleTextarea(page) {
   return null;
 }
 
+async function dismissKnownNonTransactionalOverlay(page) {
+  return page.evaluate(() => {
+    const root = document.querySelector('#ods-window-target-container');
+    if (!root) return { dismissed: false, reason: 'overlay_root_missing' };
+    const text = String(root.innerText || '').replace(/\s+/g, ' ').trim();
+    if (!/Загрузите документы на бренд/i.test(text)) {
+      return { dismissed: false, reason: 'overlay_not_known' };
+    }
+    root.style.setProperty('display', 'none', 'important');
+    root.setAttribute('data-codex-local-dismissed', 'brand-documents');
+    return { dismissed: true, reason: 'brand_documents_overlay_hidden_locally' };
+  });
+}
+
 async function findSendButton(page) {
   return page.evaluateHandle(() => {
     const buttons = [...document.querySelectorAll('button')];
@@ -119,10 +133,11 @@ async function sendOne(page, action) {
   const url = `https://seller.ozon.ru/app/messenger?id=${encodeURIComponent(action.chat_id)}&group=customers_v2`;
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.waitForTimeout(5000);
+  const overlay = await dismissKnownNonTransactionalOverlay(page);
 
   const input = await visibleTextarea(page);
   if (!input) {
-    return { chat_id: action.chat_id, ok: false, skipped: false, reason: 'message_input_not_found' };
+    return { chat_id: action.chat_id, ok: false, skipped: false, reason: 'message_input_not_found', overlay };
   }
 
   await input.click();
@@ -154,6 +169,7 @@ async function sendOne(page, action) {
     reason: verify.bodyHasText ? '' : 'sent_text_not_visible_after_click',
     verify,
     url,
+    overlay,
   };
 }
 

@@ -31,6 +31,8 @@ Owner-approved HTML по карточке является review-пакетом
 | Создание карточки на WB из owner-approved HTML / Layer 3 passport | `data/planning/card_ops/01_wb_card_create_from_html.md` | частично автоматизировано: `plan-wb-card-create`, `apply-wb-card-create`; есть ограничение legacy plan |
 | Смена артикулов продавца Ozon/WB на внутренний артикул | `data/planning/card_ops/02_seller_sku_update_ozon_wb.md` | автоматизировано: `plan-seller-sku-update`, `apply-seller-sku-update` |
 | Изменение параметров существующих карточек Ozon/WB | `data/planning/card_ops/03_card_content_update_ozon_wb.md` | быстрый путь: `apply-approved-card`; batch-путь: `plan-approved-cards`, затем `apply-approved-cards --plan-run-id`; verify-only: `verify-card-content-update`; ручной debug-путь: `plan-card-content-update`, `apply-card-content-update` |
+| Изоляция одного отклоняемого Ozon-хештега | `data/planning/ozon_product_card_content_runbook.md` | `scripts/cards/ozon_hashtag_probe.py`; один кандидат, одна контрольная карточка, только атрибут `23171`, checksummed plan/apply и delayed verify |
+| Точечный recovery top-level габаритов/веса Ozon после принятого, но не применившегося API import | `data/planning/ozon_product_card_content_runbook.md` | `scripts/cards/ozon_lk_dimensions_apply.js`; только после read-only baseline и перехваченного dry-run, с `--confirmed-by-user`, exact target guard и delayed verify |
 | Promotion owner-approved Layer 2 audit/HTML в Layer 3 passport | этот файл | автоматизировано: `promote-approved-card-passport`; также встроено как preflight в `apply-approved-cards` |
 | Создание карточки на Ozon из owner-approved HTML / Layer 3 passport | `data/planning/card_ops/04_ozon_card_create_later.md` | автоматизировано: `plan-ozon-card-create`, `apply-ozon-card-create`; встроено в `apply-approved-cards` только при явном `safety.dangerous_actions=ozon_card_create` и `--ozon-create-min-price`; WB price fallback требует manual review |
 | Удаление не созданной Ozon-карточки без SKU или архивирование созданной карточки | `data/planning/card_ops/05_ozon_product_remove.md` | автоматизировано: `plan-ozon-product-remove`, `apply-ozon-product-remove` |
@@ -183,9 +185,11 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   и approved passports, удаляет склеенные WB-only дубли и сохраняет WB barcode;
 - запускает нормализованный post-verify по финальным internal SKU после
   content/SKU/create/catalog-sync;
-- после `post_verify_status=ok` вызывает `card_status_sync`: закрывает Layer 2
-  audit, Layer 3 passport, пишет `data/catalog/card_status/latest.json` и
-  обновляет `card_work_items` в `runtime/runtime.db`;
+- после post-verify вызывает `card_status_sync` для каждой карточки, у которой
+  все требуемые Ozon/WB строки подтверждены `ok`: закрывает её Layer 2 audit,
+  Layer 3 passport, пишет `data/catalog/card_status/latest.json` и переводит
+  её `card_work_items` в `closed`; warning одной карточки не оставляет
+  остальные подтвержденные строки pending;
 - пишет один общий run/report для пачки.
 
 Подтверждено 2026-07-12 на batch apply `apply_10_approved_cards_20260712T0824`:
@@ -216,7 +220,10 @@ Layer 2/Layer 3 через `card_status_sync`. Без этого созданн�
 а не реальным WB `nmID`. До ответа официального WB API с числовым `nmID`
 карточку считать `ozon_only`; нельзя переводить catalog layers в `ozon_wb` по
 placeholder. Текущий `plan-wb-card-create` получает изображения только из
-URL-полей `media.target_assets`, но официальный WB API также поддерживает
+URL-полей `media.target_assets`; с 2026-07-25 при пустом `target_assets`
+используется упорядоченный fallback из URL-полей
+`media.target_wb_photo_set`, кроме явных `keep_current*`/`do_not_touch`.
+Официальный WB API также поддерживает
 прямую загрузку локального файла через `POST /content/v3/media/file` с
 заголовками `X-Nm-Id` и `X-Photo-Number`. Для owner-approved watermarked-файлов
 из `target_wb_photo_set[].local_path` нужно сохранить exact media plan с
@@ -248,6 +255,42 @@ data/catalog/master_passport/approved/<internal_sku>.json
 старым payload, а Ozon/WB verify будет временно сверять старые и новые
 идентификаторы. Если после apply появляется warning, считать результат только
 по финальному `post_apply_content_verify` на новых internal SKU.
+
+Подтверждено 2026-07-25 на пачке из 12 карточек:
+
+- placeholder `wb_nm_id` не блокирует WB create; реальным считается только
+  числовой `nmID` и нужен явный `safety.dangerous_actions=wb_card_create`;
+- если old Ozon offer уже отсутствует, а new offer найден с тем же ожидаемым
+  `product_id`, seller SKU считается `already_applied`, повторный write
+  запрещён, выполняются verify и локальная синхронизация;
+- после warning/error стадии нельзя оптимистично менять passport status;
+- при частичном post-verify закрываются только подтвержденные SKU, остальные
+  остаются `content_applied`/`applied` с точной причиной;
+- фактические WB-фото проверяются в `cards/list[].photos`, а не в
+  `mediaFiles`.
+
+Подтверждено 2026-07-26 перед пачкой из 13 карточек: Layer 3 может хранить
+точные owner-approved статусы медиаплана
+`watermarked_assets_1_2_3_owner_approved` и
+`owner_approved_copy_ozon_1_2_3_4_5_as_is_without_watermark`. Они являются
+разрешающими эквивалентами `allowed_verified`, а не блокировками. Safety
+preflight обязан принять их, но по-прежнему блокировать
+`blocked_pending_watermarked_assets`. После изменения allowlist нужно
+пересобрать новый `plan-approved-cards`, чтобы получить новый checksum и
+чистый `wb_media_blocked_skus=[]`; старый план не применять.
+
+Подтверждено 2026-07-26 на этой пачке:
+
+- Ozon-only recovery существующих карточек:
+  `plan-card-content-update --marketplace ozon`;
+- при owner-approved варианте без хештегов Layer 3 должен иметь пустой
+  `seo.ozon_hashtags` и constraint, запрещающий включать `23171` в payload;
+- для persistent top-level drift после принятого import использовать
+  `scripts/cards/ozon_lk_dimensions_apply.js` только с перехватом и проверкой
+  `/api/v1/item/update` до сети, свежими ценами и точными guards фото/barcode;
+- итог закрывать только после `verify-card-content-update` и
+  `card_status_sync`; подтвержденная пачка:
+  `final_verify_13_approved_cards_no_ozon_hashtags_20260726T1702`.
 
 ## Debug-путь изменения существующих карточек
 

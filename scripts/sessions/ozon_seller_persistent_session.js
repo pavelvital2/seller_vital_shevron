@@ -5,6 +5,10 @@ const fs = require('fs');
 const path = require('path');
 
 const { chromium, browserLaunchOptions } = require('../lib/playwright');
+const {
+  exportNormalizedStorageState,
+  readNormalizedStorageState,
+} = require('../lib/ozon_cookie_state');
 
 const projectRoot = path.resolve(__dirname, '../..');
 const defaultProfile = path.join(projectRoot, '.sessions', 'ozon', 'chrome-profile');
@@ -93,19 +97,12 @@ async function summarizePage(page) {
 }
 
 async function exportState(context, statePath) {
-  fs.mkdirSync(path.dirname(statePath), { recursive: true });
-  if (fs.existsSync(statePath)) {
-    const backup = `${statePath}.bak-${new Date().toISOString().replace(/[:.]/g, '-')}`;
-    fs.copyFileSync(statePath, backup);
-    fs.chmodSync(backup, 0o600);
-  }
-  await context.storageState({ path: statePath });
-  fs.chmodSync(statePath, 0o600);
+  return exportNormalizedStorageState(context, statePath, { backup: true });
 }
 
 async function seedProfileFromState(context, statePath) {
   if (!fs.existsSync(statePath)) return false;
-  const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+  const { state, stats } = readNormalizedStorageState(statePath, { repair: true });
   if (Array.isArray(state.cookies) && state.cookies.length) await context.addCookies(state.cookies);
 
   const page = await context.newPage();
@@ -118,7 +115,7 @@ async function seedProfileFromState(context, statePath) {
     }, entries).catch(() => null);
   }
   await page.close().catch(() => null);
-  return true;
+  return { seeded: true, cookieState: stats };
 }
 
 (async () => {
@@ -135,7 +132,7 @@ async function seedProfileFromState(context, statePath) {
     args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-blink-features=AutomationControlled'],
   }));
 
-  const seeded = opts.seed ? await seedProfileFromState(context, opts.state) : false;
+  const seedResult = opts.seed ? await seedProfileFromState(context, opts.state) : false;
   const page = context.pages()[0] || await context.newPage();
   await page.goto(opts.url, { waitUntil: 'domcontentloaded', timeout: 90000 });
   await page.waitForTimeout(8000);
@@ -143,7 +140,7 @@ async function seedProfileFromState(context, statePath) {
   const summary = await summarizePage(page);
   const status = classify(summary);
   const stateExported = status.loggedIn || opts.forceExport;
-  if (stateExported) await exportState(context, opts.state);
+  const cookieState = stateExported ? await exportState(context, opts.state) : null;
 
   const result = {
     profile: opts.profile,
@@ -157,7 +154,9 @@ async function seedProfileFromState(context, statePath) {
     needsLogin: status.needsLogin,
     userAgent: summary.userAgent,
     webdriver: summary.webdriver,
-    seeded,
+    seeded: Boolean(seedResult),
+    seedCookieState: seedResult?.cookieState || null,
+    cookieState,
     stateExported,
     exportedAt: stateExported ? new Date().toISOString() : '',
     keepOpen: opts.keepOpen,

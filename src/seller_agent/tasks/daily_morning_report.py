@@ -19,8 +19,10 @@ from seller_agent.marketplaces.wb.promotion_adapter import WbPromotionAdapter
 from seller_agent.marketplaces.wb.statistics_adapter import WbStatisticsAdapter
 from seller_agent.reports.writer import ensure_dir, write_json
 from seller_agent.sessions.state import combined_session_status
+from seller_agent.tasks.approvals import run_approvals_status
 from seller_agent.tasks.reviews_questions import _run_ozon_lk_fallback
 from seller_agent.tasks.status_preflight import run_status_preflight
+from seller_agent.tasks.wb_actions_discount_plan import wb_actions_report_stats
 
 
 RUN_PREFIXES = [
@@ -136,32 +138,19 @@ def _latest_preflight(
 
 
 def _pending_packages(data_dir: Path) -> list[dict[str, Any]]:
-    pending_dir = data_dir / "pending"
-    if not pending_dir.exists():
-        return []
-    applied_by_pending: dict[str, str] = {}
-    for run in latest_run_dirs(data_dir, prefixes=["actions_apply_"], limit=50):
-        summary = _safe_read_json(Path(run["summary_path"])) if run["summary_path"] else None
-        if isinstance(summary, dict) and summary.get("pending_id") and summary.get("overall_status") == "ok":
-            applied_by_pending[str(summary["pending_id"])] = str(summary.get("run_id") or run["run_id"])
-
-    packages: list[dict[str, Any]] = []
-    for path in sorted((item for item in pending_dir.iterdir() if item.is_dir()), key=lambda item: item.name):
-        manifest_path = path / "manifest.json"
-        manifest = _safe_read_json(manifest_path) if manifest_path.exists() else {}
-        pending_id = str(manifest.get("pending_id") or path.name) if isinstance(manifest, dict) else path.name
-        applied_run_id = applied_by_pending.get(pending_id)
-        packages.append(
-            {
-                "pending_id": pending_id,
-                "path": str(path),
-                "manifest": str(manifest_path) if manifest_path.exists() else "",
-                "status": "applied" if applied_run_id else manifest.get("status", "unknown") if isinstance(manifest, dict) else "unknown",
-                "created_at": manifest.get("created_at", "") if isinstance(manifest, dict) else "",
-                "applied_run_id": applied_run_id or "",
-            }
-        )
-    return packages
+    status = run_approvals_status(data_dir=data_dir, include_closed=False, limit=10000)
+    return [
+        {
+            "pending_id": str(row.get("id") or ""),
+            "kind": str(row.get("kind") or ""),
+            "path": str(row.get("path") or ""),
+            "manifest": str(row.get("manifest") or ""),
+            "status": str(row.get("lifecycle_status") or "unknown"),
+            "created_at": str(row.get("created_at") or ""),
+            "applied_run_id": str(row.get("apply_run_id") or ""),
+        }
+        for row in status.get("rows", [])
+    ]
 
 
 def _recommendations_summary(data_dir: Path) -> dict[str, Any]:
@@ -307,6 +296,15 @@ def _format_money(value: Any) -> str:
     except (TypeError, ValueError):
         return "н/д"
     return f"{number:,.0f}".replace(",", " ") + " ₽"
+
+
+def _format_money_precise(value: Any) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "н/д"
+    whole, decimals = f"{number:,.2f}".split(".")
+    return f"{whole.replace(',', ' ')},{decimals} ₽"
 
 
 def _format_int(value: Any) -> str:
@@ -1600,6 +1598,7 @@ def _actions_v3(actions: dict[str, Any], *, business: dict[str, Any] | None = No
     wb_summary = ((actions.get("latest_wb_actions") or {}).get("summary") or {}).get("summary") or {}
     ozon_reason_details = _ozon_action_reason_details(ozon_run) if ozon_summary else {}
     wb_reason_details = _wb_action_reason_details(wb_run, business=business) if wb_summary else {}
+    wb_stats = wb_actions_report_stats(_artifact_path(wb_run, "csv")) if wb_summary else {"available": False}
 
     ozon_total = ozon_summary.get("merged_unique_products")
     ozon_active = ozon_summary.get("active_rows")
@@ -1609,6 +1608,39 @@ def _actions_v3(actions: dict[str, Any], *, business: dict[str, Any] | None = No
             ozon_not_active = max(0, int(ozon_total) - int(ozon_active))
         except (TypeError, ValueError):
             ozon_not_active = None
+    ozon_add = ozon_summary.get("add_to_action")
+    ozon_remove = ozon_summary.get("deactivate_from_action")
+    ozon_after = None
+    if ozon_active is not None and ozon_add is not None and ozon_remove is not None:
+        try:
+            ozon_after = int(ozon_active) + int(ozon_add) - int(ozon_remove)
+        except (TypeError, ValueError):
+            ozon_after = None
+
+    wb_products_in_actions = (
+        wb_stats.get("current_participating")
+        if wb_stats.get("available")
+        else wb_summary.get("in_promos")
+    )
+    wb_products_not_in_actions = (
+        wb_stats.get("current_not_participating")
+        if wb_stats.get("available")
+        else wb_summary.get("outside_promos")
+    )
+    wb_not_participating_reason = (
+        "акция доступна, но текущая скидка ниже требования: "
+        f"{wb_stats.get('offered_not_participating')}; "
+        f"нет доступной активной акции: {wb_stats.get('outside_active_promos')}"
+        if wb_stats.get("available")
+        else _format_action_reason_counts(wb_reason_details)
+    )
+    ozon_not_participating_reason = (
+        f"нулевой остаток: {_metric_int(ozon_reason_details.get('zero_stock'))}; "
+        f"цена акции ниже минимального порога: {_metric_int(ozon_reason_details.get('above_threshold'))}; "
+        f"кандидаты на добавление: {_metric_int(ozon_add)}"
+        if ozon_summary
+        else "нет свежего dry-run"
+    )
 
     return {
         "ozon": {
@@ -1618,11 +1650,17 @@ def _actions_v3(actions: dict[str, Any], *, business: dict[str, Any] | None = No
             "participating_actions": 1 if ozon_summary else None,
             "products_in_actions": ozon_active,
             "products_not_in_actions": ozon_not_active,
-            "not_in_action_reasons": (
-                _format_action_reason_counts(ozon_reason_details)
-                if ozon_summary
-                else "нет свежего dry-run"
+            "available_but_not_participating": ozon_add,
+            "outside_active_promos": ozon_summary.get("skip_candidate"),
+            "planned_to_add": ozon_add,
+            "planned_to_remove": ozon_remove,
+            "products_after_plan": ozon_after,
+            "products_not_in_actions_after_plan": (
+                int(ozon_total) - int(ozon_after)
+                if ozon_total is not None and ozon_after is not None
+                else None
             ),
+            "not_in_action_reasons": ozon_not_participating_reason,
             "reason_details": ozon_reason_details,
             "action_name": ozon_summary.get("action_name"),
         },
@@ -1631,13 +1669,24 @@ def _actions_v3(actions: dict[str, Any], *, business: dict[str, Any] | None = No
             "source": (actions.get("latest_wb_actions") or {}).get("run_id") or "",
             "active_actions": wb_summary.get("active_promos"),
             "participating_actions": wb_summary.get("active_promos"),
-            "products_in_actions": wb_summary.get("in_promos"),
-            "products_not_in_actions": wb_summary.get("outside_promos"),
-            "not_in_action_reasons": (
-                _format_action_reason_counts(wb_reason_details)
-                if wb_summary
-                else "нет свежего dry-run"
+            "products_total": wb_stats.get("total") if wb_stats.get("available") else wb_summary.get("total_goods"),
+            "products_available_in_actions": (
+                wb_stats.get("offered_in_active_promos")
+                if wb_stats.get("available")
+                else wb_summary.get("in_promos")
             ),
+            "products_in_actions": wb_products_in_actions,
+            "products_not_in_actions": wb_products_not_in_actions,
+            "available_but_not_participating": wb_stats.get("offered_not_participating"),
+            "outside_active_promos": (
+                wb_stats.get("outside_active_promos")
+                if wb_stats.get("available")
+                else wb_summary.get("outside_promos")
+            ),
+            "products_after_plan": wb_stats.get("eligible_after"),
+            "products_not_in_actions_after_plan": wb_stats.get("not_participating_after"),
+            "current_discount_distribution": wb_stats.get("current_participating_discount_distribution"),
+            "not_in_action_reasons": wb_not_participating_reason if wb_summary else "нет свежего dry-run",
             "reason_details": wb_reason_details,
             "future_actions": wb_summary.get("future_promos"),
         },
@@ -1737,6 +1786,20 @@ def _metric_bool(value: Any) -> str:
     return "не подтверждено"
 
 
+def _discount_distribution(value: Any) -> str:
+    if not isinstance(value, dict) or not value:
+        return "не подтверждено"
+    rows: list[tuple[int, int]] = []
+    for discount, count in value.items():
+        try:
+            rows.append((int(discount), int(count)))
+        except (TypeError, ValueError):
+            continue
+    if not rows:
+        return "не подтверждено"
+    return "; ".join(f"{discount}%: {count}" for discount, count in sorted(rows, reverse=True))
+
+
 def _project_health(preflight: dict[str, Any] | None, sessions: dict[str, Any]) -> dict[str, Any]:
     checks = preflight.get("checks", {}) if isinstance(preflight, dict) else {}
     return {
@@ -1785,7 +1848,7 @@ def _decision_items(
     if preflight_status != "ok":
         items.append(f"Разобрать preflight status: {preflight_status or 'missing'}.")
 
-    open_pending = [package for package in pending_packages if package.get("status") != "applied"]
+    open_pending = pending_packages
     if open_pending:
         items.append(f"Проверить pending-пакеты: {len(open_pending)} шт.")
 
@@ -2120,12 +2183,12 @@ def _expense_value(section: dict[str, Any], key: str) -> Any:
 def _expense_breakdown_lines(label: str, section: dict[str, Any], keys: list[str]) -> list[str]:
     if section.get("status") != "ok":
         return [f"- {label}: не подтверждено ({_source_issue(section)})"]
-    lines = [f"- {label}: всего расходов `{_metric_money(section.get('total_expenses'))}`"]
+    lines = [f"- {label}: всего расходов `{_format_money_precise(section.get('total_expenses'))}`"]
     for key in keys:
         value = _expense_value(section, key)
         if value in (None, "", 0, 0.0):
             continue
-        lines.append(f"  - {EXPENSE_LABELS.get(key, key)}: `{_metric_money(value)}`")
+        lines.append(f"  - {EXPENSE_LABELS.get(key, key)}: `{_format_money_precise(value)}`")
     return lines
 
 
@@ -2284,7 +2347,7 @@ def _write_seller_v3_report(path: Path, result: dict[str, Any]) -> None:
         f"| Связанные пары Ozon+WB | {_metric_int(unified_catalog.get('both_marketplaces_products'))} |",
         f"| Только Ozon, активные | {_metric_int(unified_catalog.get('active_ozon_only_products'))} |",
         f"| Только WB, активные | {_metric_int(unified_catalog.get('active_wb_only_products'))} |",
-        f"| Прочие/отложенные товарные записи | {_metric_int(unified_catalog.get('non_target_or_deferred_products'))} |",
+        f"| Из них вне целевого ассортимента | {_metric_int(unified_catalog.get('non_target_or_deferred_products'))} |",
         f"| Активны на Ozon | {_metric_int(unified_catalog.get('active_ozon_products'))} |",
         f"| Активны на WB | {_metric_int(unified_catalog.get('active_wb_products'))} |",
         f"| Обновлен | {unified_catalog.get('modified_at', 'не подтверждено')} |",
@@ -2309,6 +2372,13 @@ def _write_seller_v3_report(path: Path, result: dict[str, Any]) -> None:
         f"| WB: корректировки/зачисления, ₽ | — | {_metric_money(wb_expenses.get('total_credits_and_adjustments')) if wb_expenses.get('status') == 'ok' else 'не подтверждено'} |",
         f"| WB: начисление с корректировками после рекламы, ₽ | — | {_metric_money(wb_expenses.get('cash_after_adjustments_and_ads')) if wb_expenses.get('status') == 'ok' else 'не подтверждено'} |",
         f"| Источник | {ozon_expenses.get('source', 'не подтверждено')} | {wb_expenses.get('source', 'не подтверждено')} |",
+        "",
+        "Примечания к денежным показателям:",
+        "",
+        "- Заказы и выкупы относятся к разным событиям за выбранную дату: заказ мог быть создан раньше, а выкуплен в отчетный день.",
+        "- Для WB сумма выкупов в операционном блоке рассчитана по `priceWithDisc` (цена покупателя), "
+        "а реализовано в финансовом блоке — по `retailAmountSum`/`finishedPrice` из финансового отчета. "
+        "Эти суммы имеют разную расчетную базу и не должны совпадать.",
         "",
         "Расшифровка расходов:",
         "",
@@ -2344,6 +2414,16 @@ def _write_seller_v3_report(path: Path, result: dict[str, Any]) -> None:
         f"| Требуют внимания сейчас: отзывы | {_metric_int(ozon_communications.get('unanswered_feedbacks')) if ozon_communications.get('status') in {'ok', 'warning'} else 'не подтверждено'} | {_metric_int(wb_communications.get('unanswered_feedbacks')) if wb_communications.get('status') == 'ok' else 'не подтверждено'} |",
         f"| Требуют внимания сейчас: вопросы | {_metric_int(ozon_communications.get('unanswered_questions')) if ozon_communications.get('status') in {'ok', 'warning'} else 'не подтверждено'} | {_metric_int(wb_communications.get('unanswered_questions')) if wb_communications.get('status') == 'ok' else 'не подтверждено'} |",
         "",
+        *(
+            [
+                "Ограничение Ozon: официальный API отзывов и вопросов вернул ошибку; "
+                "показаны только видимые непросмотренные отзывы и новые вопросы из LK/CDP. "
+                "Количество за период может быть ниже фактического.",
+                "",
+            ]
+            if ozon_communications.get("status") == "warning"
+            else []
+        ),
         "## Остатки На Текущий Момент",
         "",
         "| Метрика | Ozon | WB |",
@@ -2364,10 +2444,17 @@ def _write_seller_v3_report(path: Path, result: dict[str, Any]) -> None:
         "| Метрика | Ozon | WB |",
         "| --- | ---: | ---: |",
         f"| Активные акции, шт. | {_metric_int(ozon_actions.get('active_actions'))} | {_metric_int(wb_actions.get('active_actions'))} |",
-        f"| Участвуем в акциях, шт. | {_metric_int(ozon_actions.get('participating_actions'))} | {_metric_int(wb_actions.get('participating_actions'))} |",
-        f"| Товаров участвует | {_metric_int(ozon_actions.get('products_in_actions'))} | {_metric_int(wb_actions.get('products_in_actions'))} |",
-        f"| Товаров не участвует | {_metric_int(ozon_actions.get('products_not_in_actions'))} | {_metric_int(wb_actions.get('products_not_in_actions'))} |",
+        f"| Товаров в расчете | {_metric_int((ozon_actions.get('products_in_actions') or 0) + (ozon_actions.get('products_not_in_actions') or 0)) if ozon_actions.get('products_in_actions') is not None and ozon_actions.get('products_not_in_actions') is not None else 'не подтверждено'} | {_metric_int(wb_actions.get('products_total'))} |",
+        f"| Фактически участвует сейчас | {_metric_int(ozon_actions.get('products_in_actions'))} | {_metric_int(wb_actions.get('products_in_actions'))} |",
+        f"| Фактически не участвует сейчас | {_metric_int(ozon_actions.get('products_not_in_actions'))} | {_metric_int(wb_actions.get('products_not_in_actions'))} |",
+        f"| Акция доступна, но товар не участвует | {_metric_int(ozon_actions.get('available_but_not_participating'))} | {_metric_int(wb_actions.get('available_but_not_participating'))} |",
+        f"| Нет доступной активной акции / остается вне | {_metric_int(ozon_actions.get('outside_active_promos'))} | {_metric_int(wb_actions.get('outside_active_promos'))} |",
+        f"| После применения текущего dry-run участвовало бы | {_metric_int(ozon_actions.get('products_after_plan'))} | {_metric_int(wb_actions.get('products_after_plan'))} |",
+        f"| После применения текущего dry-run не участвовало бы | {_metric_int(ozon_actions.get('products_not_in_actions_after_plan'))} | {_metric_int(wb_actions.get('products_not_in_actions_after_plan'))} |",
         f"| Основные причины неучастия | {ozon_actions.get('not_in_action_reasons', 'не подтверждено')} | {wb_actions.get('not_in_action_reasons', 'не подтверждено')} |",
+        "",
+        f"- WB, скидки фактически участвующих товаров: {_discount_distribution(wb_actions.get('current_discount_distribution'))}.",
+        "- Строки «после применения dry-run» являются расчетом; этот отчет ничего не меняет в магазинах.",
         "",
         "Расшифровка причин по акциям:",
         "",
@@ -2394,7 +2481,7 @@ def _write_seller_v3_report(path: Path, result: dict[str, Any]) -> None:
         "",
         "## Операционные Риски",
         "",
-        f"- пакеты на согласование: `{len([item for item in result['pending_packages'] if item.get('status') != 'applied'])}`",
+        f"- открытые пакеты на согласование: `{len(result['pending_packages'])}`",
         f"- ошибки/блокировки: `{len(source_issues)}` источников без полных данных",
     ])
 

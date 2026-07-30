@@ -44,6 +44,9 @@ class OzonPerformanceAdapter:
     def put(self, path: str, payload: Any) -> Any:
         return request_json("PUT", f"{self.base_url}{path}", headers=self._headers(), payload=payload)
 
+    def patch(self, path: str, payload: Any) -> Any:
+        return request_json("PATCH", f"{self.base_url}{path}", headers=self._headers(), payload=payload)
+
     def fetch_access_token_metadata(self) -> dict[str, Any]:
         data = request_json(
             "POST",
@@ -79,4 +82,34 @@ class OzonPerformanceAdapter:
         response = self.put(f"/api/client/campaign/{campaign_id}/products", {"bids": bids})
         if isinstance(response, dict) and int(response.get("status") or 0) >= 400:
             raise RuntimeError(f"Ozon Performance API bid update failed: {response.get('message') or response}")
+        return response
+
+    def add_campaign_products(self, campaign_id: str, bids: list[dict[str, str]]) -> Any:
+        response = self.post(f"/api/client/campaign/{campaign_id}/products", {"bids": bids})
+        if isinstance(response, dict) and int(response.get("status") or 0) >= 400:
+            raise RuntimeError(f"Ozon Performance API product add failed: {response.get('message') or response}")
+        return response
+
+    def remove_campaign_products(self, campaign_id: str, skus: list[str]) -> Any:
+        response = self.post(
+            f"/api/client/campaign/{campaign_id}/products/delete",
+            {"sku": skus},
+        )
+        if isinstance(response, dict) and int(response.get("status") or 0) >= 400:
+            raise RuntimeError(
+                f"Ozon Performance API product removal failed: "
+                f"{response.get('message') or response}"
+            )
+        return response
+
+    def update_campaign_weekly_budget(self, campaign_id: str, weekly_budget: str) -> Any:
+        response = self.patch(
+            f"/api/client/campaign/{campaign_id}",
+            {"weeklyBudget": weekly_budget},
+        )
+        if isinstance(response, dict) and int(response.get("status") or 0) >= 400:
+            raise RuntimeError(
+                f"Ozon Performance API weekly budget update failed: "
+                f"{response.get('message') or response}"
+            )
         return response

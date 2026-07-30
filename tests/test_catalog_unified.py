@@ -97,6 +97,112 @@ def test_build_unified_products_applies_owner_review_to_marketplace_only_rows() 
     assert products[0].notes == "owner_approved_internal_sku;not_cross_marketplace_mapped"
 
 
+def test_build_unified_products_recovers_confirmed_mapping_after_seller_sku_update() -> None:
+    products, issues, summary = build_unified_products(
+        ozon_rows=[
+            {
+                "offer_id": "chev_kit2_pz_text0001",
+                "product_id": "101",
+                "sku": "901",
+                "title": "Ozon current",
+                "status": "visible",
+            }
+        ],
+        wb_rows=[
+            {
+                "vendor_code": "chev_kit2_pz_text0001",
+                "nm_id": "201",
+                "title": "WB current",
+                "status": "present",
+            }
+        ],
+        mapping_rows=[
+            {
+                "review_status": "confirmed",
+                "internal_sku": "chev_kit2_pz_text0001",
+                "ozon_offer_id": "old_ozon",
+                "ozon_product_id": "101",
+                "wb_vendor_code": "old_wb",
+                "wb_nm_id": "201",
+            }
+        ],
+    )
+
+    assert issues == []
+    assert len(products) == 1
+    assert products[0].mapping_status == "confirmed"
+    assert products[0].ozon_offer_id == "chev_kit2_pz_text0001"
+    assert products[0].wb_vendor_code == "chev_kit2_pz_text0001"
+    assert products[0].pack_qty == "2"
+    assert summary["recovered_mapping_ozon"] == 1
+    assert summary["recovered_mapping_wb"] == 1
+    assert summary["pack_qty_identity_mismatches"] == 0
+
+
+def test_build_unified_products_merges_owner_approved_current_seller_skus() -> None:
+    products, issues, summary = build_unified_products(
+        ozon_rows=[
+            {
+                "offer_id": "chev_kit4_fssp_pict0001",
+                "product_id": "101",
+                "sku": "901",
+                "title": "Ozon current",
+                "status": "visible",
+            }
+        ],
+        wb_rows=[
+            {
+                "vendor_code": "chev_kit4_fssp_pict0001",
+                "nm_id": "201",
+                "title": "WB current",
+                "status": "present",
+            }
+        ],
+        mapping_rows=[],
+        owner_review_rows=[
+            {
+                "review_status": "owner_confirmed_internal_sku",
+                "source_marketplace": "ozon",
+                "source_id": "old_ozon",
+                "current_internal_product_id": "ozon:old_ozon",
+                "approved_internal_sku": "chev_kit4_fssp_pict0001",
+            }
+        ],
+    )
+
+    assert issues == []
+    assert len(products) == 1
+    assert products[0].mapping_status == "confirmed"
+    assert products[0].internal_sku == "chev_kit4_fssp_pict0001"
+    assert products[0].pack_qty == "4"
+    assert products[0].ozon_offer_id == "chev_kit4_fssp_pict0001"
+    assert products[0].wb_vendor_code == "chev_kit4_fssp_pict0001"
+    assert summary["seller_sku_aligned_owner_products"] == 1
+    assert summary["pack_qty_identity_mismatches"] == 0
+
+
+def test_build_unified_products_reads_pack_qty_from_normalized_seller_sku() -> None:
+    products, issues, summary = build_unified_products(
+        ozon_rows=[
+            {
+                "offer_id": "chev_kit3_svo_pict0001",
+                "product_id": "101",
+                "sku": "901",
+                "title": "Unmapped current",
+                "status": "visible",
+            }
+        ],
+        wb_rows=[],
+        mapping_rows=[],
+    )
+
+    assert issues == []
+    assert products[0].internal_sku == ""
+    assert products[0].pack_qty == "3"
+    assert products[0].notes == "not_confirmed_in_mapping;pack_qty_from_current_seller_sku"
+    assert summary["pack_qty_identity_mismatches"] == 0
+
+
 def test_build_unified_products_reports_duplicate_confirmed_mapping_values() -> None:
     _products, issues, summary = build_unified_products(
         ozon_rows=[{"offer_id": "oz-1", "title": "Ozon"}],

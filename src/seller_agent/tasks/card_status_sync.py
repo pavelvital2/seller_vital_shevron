@@ -91,12 +91,14 @@ def _sync_marketplace_apply(
     )
     if post_verify_run_id:
         apply_state["post_verify_run_id"] = post_verify_run_id
+        apply_state["last_verify_run_id"] = post_verify_run_id
     if content_update_run_id:
         apply_state["content_update_run_id"] = content_update_run_id
     if seller_sku_update_run_id:
         apply_state["seller_sku_update_run_id"] = seller_sku_update_run_id
     if catalog_sync_run_id:
         apply_state["catalog_sync_run_id"] = catalog_sync_run_id
+    apply_state.pop("pending_verify_reason", None)
 
 
 def sync_card_apply_status(

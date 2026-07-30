@@ -1,5 +1,6 @@
 import pytest
 
+import seller_agent.tasks.card_content_update as card_content_update
 from seller_agent.config import AppCredentials
 from seller_agent.tasks.card_content_update import (
     _build_ozon_payload,
@@ -16,6 +17,80 @@ from seller_agent.tasks.card_content_update import (
 )
 from seller_agent.tasks.approved_cards_apply import run_apply_approved_cards
 from seller_agent.tasks.registry import get_task_definition
+from seller_agent.tasks.wb_media import build_wb_media_plan
+
+
+def test_wb_media_plan_does_not_duplicate_incremental_url_when_falling_back_to_full_assets() -> None:
+    passport = {
+        "media": {
+            "target_wb_photo_set": [
+                {"position": 1, "action": "keep_current_protected"},
+                {
+                    "position": 5,
+                    "action": "add_neutral_wearing_slide_unchanged",
+                    "source_url": "https://ir.ozone.ru/new.jpg",
+                },
+            ],
+            "target_assets": [
+                {
+                    "position": position,
+                    "url": f"https://basket-34.wbbasket.ru/current-{position}.webp",
+                }
+                for position in range(1, 5)
+            ]
+            + [{"position": 5, "url": "https://ir.ozone.ru/new.jpg"}],
+        }
+    }
+
+    media_plan = build_wb_media_plan(passport)
+
+    assert [row["position"] for row in media_plan] == [1, 2, 3, 4, 5]
+    assert [row["source_url"] for row in media_plan].count("https://ir.ozone.ru/new.jpg") == 1
+
+
+def test_plan_one_ozon_only_does_not_read_or_build_wb(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    passport = {
+        "identity": {
+            "internal_sku": "loop_test_0001",
+            "ozon_offer_id": "loop_test_0001",
+            "wb_vendor_code": "loop_test_0001",
+        }
+    }
+    monkeypatch.setattr(
+        card_content_update,
+        "_find_local_ozon",
+        lambda data_dir, offer_id: {"offer_id": offer_id},
+    )
+    monkeypatch.setattr(
+        card_content_update,
+        "_build_ozon_payload",
+        lambda **kwargs: ({"offer_id": "loop_test_0001"}, [], []),
+    )
+
+    def fail_wb_read(*args, **kwargs):
+        raise AssertionError("WB must not be read for an Ozon-only plan")
+
+    monkeypatch.setattr(card_content_update, "_find_local_wb", fail_wb_read)
+
+    row = card_content_update._plan_one(
+        passport=passport,
+        data_dir=tmp_path,
+        credentials=AppCredentials(
+            ozon_seller=None,
+            ozon_performance=None,
+            wb=None,
+        ),
+        skip_api=True,
+        price_rows={},
+        run_dir=tmp_path,
+        marketplaces={"ozon"},
+    )
+
+    assert row["ready"] is True
+    assert set(row["marketplaces"]) == {"ozon"}
 
 
 def test_build_wb_payload_preserves_identity_and_sizes() -> None:
@@ -194,6 +269,61 @@ def test_build_ozon_payload_overwrites_marking_and_package_weight_attrs() -> Non
     assert marking_attr["values"] == [{"dictionary_value_id": 0, "value": "false"}]
     assert package_weight_attr["values"] == [{"dictionary_value_id": 0, "value": "30"}]
     assert payload["weight"] == 30
+
+
+def test_build_ozon_payload_omits_current_hashtags_when_owner_disables_field() -> None:
+    passport = {
+        "content": {
+            "ozon_title": "Петлицы на липучке ФСБ, олива",
+            "ozon_description": "Описание",
+        },
+        "physical": {
+            "product_size_mm": "80*30*5 мм",
+            "package_dimensions_ozon_mm": "100*40*10 мм",
+            "package_weight_g": 10,
+            "pack_qty": 1,
+        },
+        "seo": {"ozon_hashtags": []},
+        "ozon": {
+            "attributes": [
+                {"field": "Цвет", "value": "оливковый"},
+                {"field": "Название цвета", "value": "Петлицы ФСБ, олива"},
+            ],
+            "write_constraints": {
+                "hashtags": {
+                    "include_in_write_payload": False,
+                    "reason_code": "FB_OBSCENE_MODEL_hashtag",
+                }
+            },
+        },
+    }
+    current = {
+        "offer_id": "loop_fsb_0001",
+        "barcode": "123",
+        "description_category_id": 17038663,
+        "type_id": 970925348,
+        "primary_image": "https://example.test/main.jpg",
+        "images": ["https://example.test/2.jpg"],
+        "attributes": [
+            {
+                "id": 23171,
+                "values": [{"dictionary_value_id": 0, "value": "#петлицы_фсб"}],
+            },
+            {
+                "id": 10096,
+                "values": [{"dictionary_value_id": 61605, "value": "оливковый"}],
+            },
+        ],
+    }
+
+    payload, _, errors = _build_ozon_payload(
+        passport=passport,
+        current=current,
+        price_row={"ozon_price": "454", "ozon_old_price": "539"},
+    )
+
+    assert errors == []
+    assert not any(attr["id"] == 23171 for attr in payload["attributes"])
 
 
 def test_ozon_attribute_update_items_contains_all_payload_attrs() -> None:

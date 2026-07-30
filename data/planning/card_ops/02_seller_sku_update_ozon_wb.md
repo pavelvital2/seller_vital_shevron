@@ -121,9 +121,18 @@ Verify:
 
 Команда обновляет:
 
+- `data/catalog/mapping/ozon_wb_internal_sku_confirmed.csv`;
+- `data/catalog/unified/internal_sku_assignment_owner_review.csv`;
 - `data/catalog/unified/products.*`;
 - `data/catalog/content/content_master.*`;
 - `data/catalog/processed/master_catalog.*`, пока legacy слой используется.
+
+Confirmed mapping и owner-review являются source-слоями, а не только
+derived-артефактами. После успешного verify в них нужно заменить старые
+`ozon_offer_id`/`wb_vendor_code`, сохранить неизменные `product_id`/`nmID` и
+обновить составные source IDs. Если обновить только `products.*`, следующий
+`fetch-catalog -> build-unified-catalog` снова восстановит старые ссылки,
+разделит пару Ozon/WB и может ошибочно присвоить комплекту `pack_qty=1`.
 
 Если операция была связана с owner-approved паспортом карточки, дополнительно
 проверить и при необходимости обновить:
@@ -142,6 +151,19 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   -m seller_agent.cli build-content-master
 ```
+
+После пересборки обязательно проверить:
+
+- `issue_count=0`;
+- `pack_qty_identity_mismatches=0`;
+- `recovered_mapping_ozon=0` и `recovered_mapping_wb=0` после нормализации
+  source mapping;
+- native ID Ozon/WB присутствуют в unified catalog без дублей;
+- `pack_qty` совпадает с `kitN` в утвержденном internal SKU.
+
+Recovery 2026-07-26 подтвердил эту последовательность на полном каталоге:
+`catalog_pack_qty_repair_verify_20260726T1732`, marketplace write при
+восстановлении локальных слоев не выполнялся.
 
 ## Подтвержденный пример
 

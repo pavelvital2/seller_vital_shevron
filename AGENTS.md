@@ -92,6 +92,10 @@
   reporting, pricing, promotion, карточного checkpoint и production runtime:
   полный test/preflight/systemd контроль, найденные риски и состояние перед
   commit/push.
+- `data/planning/revision_2026-07-30.md` - полная ревизия после расширения
+  карточного, pricing, promotion, inbox и liquidation-контуров: tests,
+  TaskRegistry, Job Worker, systemd, API/LK preflight, риски и checkpoint
+  перед commit/push.
 - `data/planning/recommendations_index.md` - реестр рекомендаций.
 - `data/planning/followups.md` - контрольные follow-up задачи, которые нельзя
   потерять между сессиями агентов.

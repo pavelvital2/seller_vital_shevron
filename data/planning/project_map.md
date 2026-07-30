@@ -404,11 +404,25 @@
 - `src/seller_agent/tasks/wb_promotion_bids_apply.py` - применение
   согласованных ставок WB promotion через Promotion API с fresh report,
   drift-check и verify.
+- `scripts/analytics/wb_sales_growth_control.py` - итоговый read-only контроль
+  WB CPC: Promotion API, фактические продажи, остатки, акции и Parser Data API,
+  сравнение одинаковых периодов и товарные группы решений.
+- `scripts/analytics/apply_wb_campaign_start.py` - exact approved запуск одной
+  paused WB CPC-кампании через `/adv/v0/start`: checksummed snapshot состава и
+  ставок, idempotency guard и verify `status=9` без изменения настроек.
+- `scripts/analytics/apply_wb_sales_growth_bids.py` - exact approved применение
+  ростового пакета WB CPC из семидневного контроля: fresh ставки, цены и
+  остатки, защита маржи `50 руб.`, partial drift skip, idempotency и verify.
 - `scripts/` - JS/Bash helpers для ЛК, сессий, отзывов/вопросов и операций.
 - `scripts/card_reviews/prepare_owner_review.py` - быстрый сборщик
   owner-review HTML из Layer 2 `audit.json`: применяет guardrail-правки
   карточного аудита, встраивает фото в HTML, проверяет mobile/desktop
   верстку через Playwright и пишет результат для отправки владельцу.
+- `scripts/cards/ozon_hashtag_probe.py` - диагностический checksummed
+  plan/apply для изоляции одного отклоняемого Ozon-хештега на одной
+  контрольной карточке: меняет только атрибут `23171`, ждёт модерацию,
+  проверяет инварианты и требует read-only подтверждение в истории импорта,
+  если Seller API скрывает причину ошибки.
 - `scripts/lib/ozon_cdp_guard.js` - обязательный guard для Ozon LK/CDP
   сценариев: до `chromium.connectOverCDP` проверяет локальный порт `9544` и
   Chrome `--user-data-dir` Vital Shevron, чтобы не подключиться к TAKTERRA или
@@ -457,6 +471,10 @@
   с 2026-07-18 установлен, enabled/active в user systemd вместе с
   `--runtime-jobs` в основном Telegram bot unit; read-only `/status` smoke
   завершился success и доставил text/report владельцу.
+- `deploy/systemd/user/vital-shevron-liquidation-daily-reminder.service`
+- `deploy/systemd/user/vital-shevron-liquidation-daily-reminder.timer` -
+  ежедневное read-only напоминание в `09:00 МСК` о контроле распродажи
+  залежалых когорт Ozon/WB и их CPC hard stop.
 
 Ozon CDP port по умолчанию: `9544`.
 
@@ -556,6 +574,9 @@ Ozon CDP port по умолчанию: `9544`.
 - `data/planning/revision_2026-07-24.md` - актуальная ревизия накопленных
   reporting, pricing, promotion, карточных и runtime изменений; полный
   `pytest`, live API/LK preflight, systemd и runtime recovery audit.
+- `data/planning/revision_2026-07-30.md` - полная ревизия накопленных
+  карточных, pricing, promotion, inbox, session и liquidation-изменений;
+  полный test/compile/runtime/API/LK контроль и checkpoint перед commit/push.
 - `data/planning/daily_morning_report_runbook.md`
 - `data/planning/marketplace_period_report_runbook.md`
 - `data/planning/reviews_questions_runbook.md`
@@ -567,6 +588,9 @@ Ozon CDP port по умолчанию: `9544`.
 - `data/planning/ozon_actions_optimizer_runbook.md` - read-only/dry-run
   и apply-контур всех доступных Ozon акций, включая LK boost snapshot для
   обычных акций `STOCK_DISCOUNT` и Telegram-команду `/ozon-actions`.
+- `data/planning/ozon_stars_profitability_runbook.md` - read-only оценка
+  экономики Ozon `Звёздные товары`, порог окупаемости и контролируемое
+  отключение после отдельного owner approval.
 - `data/planning/ozon_cpc_efficiency_runbook.md`
 - `data/planning/wb_promotion_runbook.md`
 - `data/planning/wb_actions_runbook.md`

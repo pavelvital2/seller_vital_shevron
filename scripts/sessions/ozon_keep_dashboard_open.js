@@ -5,6 +5,10 @@ const fs = require('fs');
 const path = require('path');
 
 const { chromium, browserLaunchOptions } = require('../lib/playwright');
+const {
+  exportNormalizedStorageState,
+  readNormalizedStorageState,
+} = require('../lib/ozon_cookie_state');
 
 const projectRoot = path.resolve(__dirname, '../..');
 const profile = process.env.OZON_SELLER_PROFILE || path.join(projectRoot, '.sessions', 'ozon', 'chrome-profile');
@@ -39,7 +43,7 @@ function classify(summary) {
 async function seedProfileFromState(context, stateFile) {
   if (!fs.existsSync(stateFile)) return false;
 
-  const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+  const { state, stats } = readNormalizedStorageState(stateFile, { repair: true });
   if (Array.isArray(state.cookies) && state.cookies.length) {
     await context.addCookies(state.cookies);
   }
@@ -54,7 +58,7 @@ async function seedProfileFromState(context, stateFile) {
     }, entries).catch(() => null);
   }
   await page.close().catch(() => null);
-  return true;
+  return { seeded: true, cookieState: stats };
 }
 
 (async () => {
@@ -76,7 +80,7 @@ async function seedProfileFromState(context, stateFile) {
     ],
   }));
 
-  const seeded = await seedProfileFromState(context, statePath);
+  const seedResult = await seedProfileFromState(context, statePath);
   const page = context.pages()[0] || await context.newPage();
   await page.goto('https://seller.ozon.ru/app/dashboard/main', { waitUntil: 'domcontentloaded', timeout: 90000 }).catch(() => null);
   await page.waitForTimeout(10000);
@@ -85,10 +89,7 @@ async function seedProfileFromState(context, stateFile) {
   const status = classify(summary);
   const open = !status.blocked && !status.needsLogin && /seller\.ozon\.ru\/app\//i.test(summary.url);
 
-  if (open) {
-    await context.storageState({ path: statePath });
-    fs.chmodSync(statePath, 0o600);
-  }
+  const cookieState = open ? await exportNormalizedStorageState(context, statePath) : null;
 
   console.log(JSON.stringify({
     status: open ? 'OPEN' : 'NOT_OPEN',
@@ -100,7 +101,9 @@ async function seedProfileFromState(context, stateFile) {
     needsLogin: status.needsLogin,
     cdp,
     statePath,
-    seeded,
+    seeded: Boolean(seedResult),
+    seedCookieState: seedResult?.cookieState || null,
+    cookieState,
     stateExported: open,
     valuesPrinted: false,
     keptOpen: true,

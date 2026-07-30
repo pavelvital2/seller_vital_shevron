@@ -1,15 +1,32 @@
 {
   "approval_status_counts": {
     "owner_approved": 1,
-    "owner_approved_applied_verified": 238
+    "owner_approved_applied_verified": 263
   },
-  "generated_at": "2026-07-22T14:33:55",
+  "generated_at": "2026-07-26T17:07:29",
+  "last_sync": {
+    "internal_skus": [
+      "loop_fsb_0001",
+      "loop_fsin_0001",
+      "loop_fso_0001",
+      "loop_fso_0002",
+      "loop_voisk_0005",
+      "loop_voisk_0013",
+      "loop_voisk_0015",
+      "loop_voisk_0016"
+    ],
+    "missing_audits": [],
+    "missing_passports": [],
+    "run_id": "apply_13_approved_cards_20260726T1635",
+    "updated_audits": 8,
+    "updated_passports": 8
+  },
   "marketplace_apply_status_counts": {
-    "applied_verified": 238,
+    "applied_verified": 263,
     "wb_applied_ozon_removed_policy": 1
   },
   "not_applied_skus": [
     "chev_pz_ng_text0074"
   ],
-  "total_passports": 239
+  "total_passports": 264
 }

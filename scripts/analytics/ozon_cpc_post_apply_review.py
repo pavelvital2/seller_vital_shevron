@@ -131,6 +131,59 @@ def parser_group_metrics(scope: set[str], parser_by_sku: dict[str, list[dict[str
     }
 
 
+def bid_drift_metrics(
+    bid_rows: list[dict[str, str]],
+    current_products: list[dict[str, Any]],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    current_by_sku: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in current_products:
+        sku = str(row.get("sku") or "").strip()
+        if sku:
+            current_by_sku[sku].append(row)
+
+    details: list[dict[str, Any]] = []
+    for bid in bid_rows:
+        sku = str(bid.get("sku") or "").strip()
+        expected_raw = int(decimal_value(bid.get("target_bid")) * Decimal("1000000"))
+        current_rows = current_by_sku.get(sku, [])
+        current_bids = sorted(
+            {
+                int(decimal_value(row.get("bid")))
+                for row in current_rows
+                if row.get("bid") not in (None, "")
+            }
+        )
+        if not current_rows:
+            status = "missing"
+        elif len(current_bids) != 1:
+            status = "ambiguous"
+        elif current_bids[0] != expected_raw:
+            status = "drift"
+        else:
+            status = "match"
+        details.append(
+            {
+                "sku": sku,
+                "expected_bid": round(expected_raw / 1_000_000, 2),
+                "current_bids": ",".join(f"{value / 1_000_000:.2f}" for value in current_bids),
+                "current_rows": len(current_rows),
+                "status": status,
+            }
+        )
+
+    counts = Counter(row["status"] for row in details)
+    summary = {
+        "status": "ok" if counts.get("match", 0) == len(details) else "warning",
+        "expected_products": len(details),
+        "matched_products": counts.get("match", 0),
+        "missing_products": counts.get("missing", 0),
+        "drifted_products": counts.get("drift", 0),
+        "ambiguous_products": counts.get("ambiguous", 0),
+        "status_counts": dict(counts),
+    }
+    return summary, details
+
+
 def format_number(value: Any, digits: int = 0) -> str:
     if value is None:
         return "-"
@@ -175,6 +228,8 @@ def format_period(dates: list[str]) -> str:
 def summarize_result(summary: dict[str, Any]) -> tuple[str, str]:
     growth = summary["growth"]
     changes = growth["changes_percent"]
+    matched_changes = growth["matched_changes_percent"]
+    control_changes = summary["performance_control"]["matched_changes_percent"]
     parser_growth = summary["parser"]["growth"]
     order_change = changes.get("orders")
     spend_change = changes.get("spend")
@@ -183,6 +238,9 @@ def summarize_result(summary: dict[str, Any]) -> tuple[str, str]:
     decisions = summary.get("guardrails", {}).get("growth_decision_counts", {})
     keep_count = decisions.get("оставить текущую ставку", 0)
     day_watch_count = decisions.get("контроль 24 часа", 0)
+    dry_run_count = sum(
+        count for decision, count in decisions.items() if "кандидат на dry-run" in decision
+    )
 
     visibility = "Сопоставимая средняя позиция не рассчитана."
     if position_change is not None:
@@ -206,11 +264,15 @@ def summarize_result(summary: dict[str, Any]) -> tuple[str, str]:
             "только товары с расходом без заказов или ДРР выше контрольного порога."
         )
     elif spend_change is not None and spend_change > 5 and (order_change or 0) <= 5:
-        conclusion = "Дополнительный расход пока не дал сопоставимого роста заказов."
+        conclusion = (
+            "Дополнительный расход не дал роста заказов. Спад заказов наблюдался и "
+            "в контрольной группе, но расход усиленной группы вырос заметно сильнее: "
+            f"{matched_changes['spend']:+.1f}% против {control_changes['spend']:+.1f}%."
+        )
         recommendation = (
             f"Не повышать ставки повторно. Сохранить текущие ставки у {keep_count} "
-            f"эффективных SKU; {day_watch_count} товара проверить через 24 часа и "
-            "выносить в dry-run снижения только при расходе от 50 руб. без заказа."
+            f"эффективных SKU; {dry_run_count} товара вынести в отдельный dry-run "
+            f"снижения, ещё {day_watch_count} товара проверить через 24 часа."
         )
     elif drr <= Decimal("8"):
         conclusion = "Когорта остаётся экономически приемлемой, но рост продаж слабый."
@@ -234,6 +296,7 @@ def render_html(
 ) -> str:
     growth = summary["growth"]
     reduction = summary["reductions"]
+    performance_control = summary["performance_control"]
     parser_growth = summary["parser"]["growth"]
     parser_control = summary["parser"]["control"]
     conclusion, recommendation = summarize_result(summary)
@@ -273,6 +336,20 @@ def render_html(
             "</tr>"
         )
     decision_counts = summary["guardrails"]["growth_decision_counts"]
+    dry_run_count = sum(
+        count
+        for decision, count in decision_counts.items()
+        if "кандидат на dry-run" in decision
+    )
+    bid_drift = summary.get("bid_drift") or {}
+    final_control = summary.get("control_stage") == "final_7d"
+    followup_text = (
+        "Это итоговый семидневный контроль. Следующее изменение ставок выполнять "
+        "только через отдельный dry-run и согласование."
+        if final_control
+        else "Через семь полных дней после apply повторить устойчивый контроль, "
+        "чтобы отделить краткосрочную волатильность выдачи."
+    )
     return f"""<!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Ozon CPC: контроль после изменения ставок</title>
@@ -298,18 +375,30 @@ table{{width:100%;border-collapse:collapse}}th,td{{padding:8px;border-bottom:1px
 <div class="kpi">ДРР после<b>{format_number(growth['post']['drr_percent'], 2)}%</b><span class="muted">цель портфеля не выше 8%</span></div>
 </div>
 <div class="grid">
+<div class="kpi">Ставки без drift<b class="{'good' if bid_drift.get('status') == 'ok' else 'bad'}">{bid_drift.get('matched_products', 0)} / {bid_drift.get('expected_products', 0)}</b><span class="muted">свежий состав кампаний</span></div>
+<div class="kpi">Drift ставок<b>{bid_drift.get('drifted_products', 0)}</b><span class="muted">не совпали с apply</span></div>
+<div class="kpi">Нет в кампании<b>{bid_drift.get('missing_products', 0)}</b><span class="muted">ожидались по apply</span></div>
+<div class="kpi">Неоднозначные SKU<b>{bid_drift.get('ambiguous_products', 0)}</b><span class="muted">несколько текущих ставок</span></div>
+</div>
+<div class="grid">
 <div class="kpi">Оставить ставку<b class="good">{decision_counts.get('оставить текущую ставку', 0)}</b><span class="muted">есть заказы, ДРР до 8%</span></div>
+<div class="kpi">Кандидаты в dry-run<b class="bad">{dry_run_count}</b><span class="muted">решение только после согласования</span></div>
 <div class="kpi">Контроль 24 часа<b class="warn">{decision_counts.get('контроль 24 часа', 0)}</b><span class="muted">расход 30-50 руб. без заказа</span></div>
 <div class="kpi">Позиция и конверсия<b>{decision_counts.get('контроль позиции и конверсии', 0)}</b><span class="muted">позиция ухудшилась, заказов нет</span></div>
-<div class="kpi">Недостаточно данных<b>{decision_counts.get('наблюдать', 0)}</b><span class="muted">без немедленного изменения</span></div>
 </div>
 <section class="section"><h2>Эффективность {growth['products']} повышенных ставок</h2><p class="muted">До: {pre_period}. После: {post_period}. День apply исключён, оба окна состоят из полных календарных дней. Одновременно изменялись цены, поэтому причинность CPC отдельно не доказана.</p><div class="scroll"><table><thead><tr><th>Метрика</th><th>До</th><th>После</th><th>Изменение</th></tr></thead><tbody>{metric_table(growth['pre'], growth['post'])}</tbody></table></div></section>
-<section class="section"><h2>Контроль по тем же дням недели</h2><p class="muted">{matched_pre_period} против {post_period}: понедельник-среда предыдущей и текущей недели.</p><div class="scroll"><table><thead><tr><th>Метрика</th><th>Предыдущая неделя</th><th>После</th><th>Изменение</th></tr></thead><tbody>{metric_table(growth['matched_pre'], growth['post'])}</tbody></table></div></section>
+<section class="section"><h2>Контроль по тем же дням недели</h2><p class="muted">{matched_pre_period} против {post_period}: одинаковый календарный состав дней недели, день apply исключён.</p><div class="scroll"><table><thead><tr><th>Метрика</th><th>Предыдущая неделя</th><th>После</th><th>Изменение</th></tr></thead><tbody>{metric_table(growth['matched_pre'], growth['post'])}</tbody></table></div></section>
+<section class="section"><h2>Сравнение с товарами без изменения ставок</h2>
+<p class="muted">Та же календарная неделя. Контрольная группа исключает все 70 SKU, по которым ставки менялись 19 июля.</p>
+<div class="scroll"><table><thead><tr><th>Группа</th><th>Товаров</th><th>Расход</th><th>Заказы</th><th>Средний CPC</th><th>ДРР</th></tr></thead><tbody>
+<tr><th>63 повышенных ставки</th><td>63</td><td>{format_number(growth['matched_pre']['spend'],2)} -> {format_number(growth['post']['spend'],2)} ({growth['matched_changes_percent']['spend']:+.1f}%)</td><td>{growth['matched_pre']['orders']} -> {growth['post']['orders']} ({growth['matched_changes_percent']['orders']:+.1f}%)</td><td>{format_number(growth['matched_pre']['avg_cpc'],2)} -> {format_number(growth['post']['avg_cpc'],2)}</td><td>{format_number(growth['matched_pre']['drr_percent'],2)}% -> {format_number(growth['post']['drr_percent'],2)}%</td></tr>
+<tr><th>Ставки не менялись</th><td>{performance_control['products']}</td><td>{format_number(performance_control['matched_pre']['spend'],2)} -> {format_number(performance_control['post']['spend'],2)} ({performance_control['matched_changes_percent']['spend']:+.1f}%)</td><td>{performance_control['matched_pre']['orders']} -> {performance_control['post']['orders']} ({performance_control['matched_changes_percent']['orders']:+.1f}%)</td><td>{format_number(performance_control['matched_pre']['avg_cpc'],2)} -> {format_number(performance_control['post']['avg_cpc'],2)}</td><td>{format_number(performance_control['matched_pre']['drr_percent'],2)}% -> {format_number(performance_control['post']['drr_percent'],2)}%</td></tr>
+</tbody></table></div></section>
 <section class="section"><h2>Позиции {escape(summary['parser']['previous_date'])} -> {escape(summary['parser']['current_date'])}</h2>
 <ul><li>Группа повышенных ставок: улучшились лучшие позиции у <b>{parser_growth['product_status_counts'].get('best_improved',0)}</b> товаров, ухудшились у <b>{parser_growth['product_status_counts'].get('best_declined',0)}</b>, впервые появились <b>{parser_growth['product_status_counts'].get('new_visible',0)}</b>, полностью потеряны у <b>{parser_growth['product_status_counts'].get('lost_all',0)}</b>.</li>
 <li>По парам товар + запрос: <b>{parser_growth['pair_status_counts'].get('improved', 0)}</b> улучшений и <b>{parser_growth['pair_status_counts'].get('new', 0)}</b> новых против <b>{parser_growth['pair_status_counts'].get('declined', 0)}</b> ухудшений и <b>{parser_growth['pair_status_counts'].get('lost', 0)}</b> потерь.</li>
 <li>Контрольная группа без повышения: видимых товаров стало <b>{parser_control['previous_visible_products']} -> {parser_control['current_visible_products']}</b>, средняя сопоставимая позиция ухудшилась <b>{format_number(parser_control['average_previous_position'],1)} -> {format_number(parser_control['average_current_position'],1)}</b>.</li></ul></section>
-<section class="section"><h2>Что делать</h2><ol><li><b>{escape(recommendation)}</b></li><li>Любое снижение или исключение оформить отдельным dry-run; этот отчёт ничего в Ozon не меняет.</li><li>Через семь полных дней после apply повторить устойчивый контроль, чтобы отделить краткосрочную волатильность выдачи.</li></ol></section>
+<section class="section"><h2>Что делать</h2><ol><li><b>{escape(recommendation)}</b></li><li>Любое снижение или исключение оформить отдельным dry-run; этот отчёт ничего в Ozon не меняет.</li><li>{escape(followup_text)}</li></ol></section>
 <section class="section"><h2>{growth['products']} повышенных ставок: результат по SKU</h2><div class="scroll"><table><thead><tr><th>SKU / товар</th><th>Ставка</th><th>Расход после</th><th>Заказы</th><th>ДРР</th><th>Лучшая позиция</th><th>Решение</th></tr></thead><tbody>{''.join(product_rows)}</tbody></table></div></section>
 <section class="section"><h2>{reduction['products']} сниженных ставок: проверка экономии</h2><div class="scroll"><table><thead><tr><th>SKU / товар</th><th>Ставка</th><th>Расход после</th><th>Заказы</th><th>ДРР</th><th>Лучшая позиция</th><th>Решение</th></tr></thead><tbody>{''.join(reduction_rows)}</tbody></table></div></section>
 <section class="section"><h2>Источники и ограничения</h2><ul><li>Ozon Performance API: статистика по полным дням до {escape(summary['performance_date_to'])}, источник <code>{escape(summary['performance_run_id'])}</code>.</li><li>Apply: <code>{escape(summary['source_apply_run_id'])}</code>, {growth['products']} повышения и {reduction['products']} снижений ставок.</li><li>Parser Data API: <code>/warehouse/ozon/aggregates/store-period-comparison</code>, seller_slug <code>vital-shevron</code>, даты {escape(summary['parser']['previous_date'])} -> {escape(summary['parser']['current_date'])}, warehouse {escape(summary['parser']['warehouse_built_at_utc'])}, {summary['parser']['returned_rows']} строк, complete={str(summary['parser']['complete']).lower()}.</li><li>Парсер охватывает {summary['parser']['query_count']} запросов и глубину до 500 позиций, а не всю поисковую выдачу Ozon. Одновременно менялись цены и CPC, поэтому результат является совместным эффектом.</li></ul></section>
@@ -327,6 +416,8 @@ def main() -> int:
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--performance-run-id", required=True)
     parser.add_argument("--source-apply-run-id", required=True)
+    parser.add_argument("--current-campaign-products-json", type=Path)
+    parser.add_argument("--final-control", action="store_true")
     parser.add_argument("--output-date", help="Run directory date, YYYY-MM-DD")
     args = parser.parse_args()
 
@@ -342,6 +433,17 @@ def main() -> int:
     reduction_rows = [row for row in bid_rows if row.get("action") == "reduce_high_drr"]
     growth_skus = {row["sku"] for row in growth_rows}
     reduction_skus = {row["sku"] for row in reduction_rows}
+    changed_skus = growth_skus | reduction_skus
+    performance_control_skus = {
+        str(row.get("sku") or "")
+        for row in daily_rows
+        if row.get("sku") and row.get("sku") not in changed_skus
+    }
+    current_products: list[dict[str, Any]] = []
+    if args.current_campaign_products_json:
+        loaded = json.loads(args.current_campaign_products_json.read_text(encoding="utf-8"))
+        current_products = loaded if isinstance(loaded, list) else []
+    bid_drift, bid_drift_rows = bid_drift_metrics(bid_rows, current_products)
 
     parser_by_sku: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in parser_payload.get("rows") or []:
@@ -357,6 +459,11 @@ def main() -> int:
     reduction_pre = cohort_metrics(reduction_skus, pre_dates)
     reduction_matched_pre = cohort_metrics(reduction_skus, matched_pre_dates)
     reduction_post = cohort_metrics(reduction_skus, post_dates)
+    performance_control_matched_pre = cohort_metrics(
+        performance_control_skus,
+        matched_pre_dates,
+    )
+    performance_control_post = cohort_metrics(performance_control_skus, post_dates)
 
     post_by_sku: dict[str, list[dict[str, str]]] = defaultdict(list)
     for row in daily_rows:
@@ -419,6 +526,7 @@ def main() -> int:
         "generated_at": generated_at,
         "mode": "read_only",
         "overall_status": "warning",
+        "control_stage": "final_7d" if args.final_control else "interim",
         "apply_performed": False,
         "source_apply_run_id": args.source_apply_run_id,
         "performance_run_id": args.performance_run_id,
@@ -452,6 +560,18 @@ def main() -> int:
                 for key in reduction_pre
             },
         },
+        "performance_control": {
+            "products": len(performance_control_skus),
+            "matched_pre": serialize_metrics(performance_control_matched_pre),
+            "post": serialize_metrics(performance_control_post),
+            "matched_changes_percent": {
+                key: percentage_change(
+                    performance_control_matched_pre[key],
+                    performance_control_post[key],
+                )
+                for key in performance_control_matched_pre
+            },
+        },
         "parser": {
             "previous_date": parser_payload.get("previous_date"),
             "current_date": parser_payload.get("current_date"),
@@ -470,6 +590,7 @@ def main() -> int:
             "growth_decision_counts": dict(Counter(row["decision"] for row in products)),
             "reduction_decision_counts": dict(Counter(row["decision"] for row in reductions)),
         },
+        "bid_drift": bid_drift,
         "limitations": [
             "The apply day and the current partial day are excluded from the primary comparison.",
             "Prices and CPC bids changed in one sequence, so the isolated causal effect of bids cannot be confirmed.",
@@ -490,7 +611,16 @@ def main() -> int:
         writer = csv.DictWriter(handle, fieldnames=list(reductions[0]))
         writer.writeheader()
         writer.writerows(reductions)
+    with (processed_dir / "bid_drift.csv").open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(bid_drift_rows[0]))
+        writer.writeheader()
+        writer.writerows(bid_drift_rows)
     shutil.copy2(args.parser_json, raw_dir / "parser_store_period_comparison.json")
+    if args.current_campaign_products_json:
+        shutil.copy2(
+            args.current_campaign_products_json,
+            raw_dir / "current_campaign_products.json",
+        )
     (run_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     (run_dir / "report.html").write_text(
         render_html(summary, products, reductions),
@@ -511,6 +641,8 @@ def main() -> int:
 - ДРР: `{growth_pre['drr_percent']:.2f}% -> {growth_post['drr_percent']:.2f}%`;
 - видимые товары: `{growth_parser['previous_visible_products']} -> {growth_parser['current_visible_products']}`;
 - средняя позиция сопоставимых пар: `{growth_parser['average_previous_position']} -> {growth_parser['average_current_position']}`.
+- текущие ставки совпадают с apply: `{bid_drift['matched_products']}/{bid_drift['expected_products']}`, drift `{bid_drift['drifted_products']}`, отсутствуют `{bid_drift['missing_products']}`.
+- контрольная группа без изменения ставок: расход `{performance_control_matched_pre['spend']:.2f} -> {performance_control_post['spend']:.2f}` руб. (`{summary['performance_control']['matched_changes_percent']['spend']:+.1f}%`), заказы `{int(performance_control_matched_pre['orders'])} -> {int(performance_control_post['orders'])}` (`{summary['performance_control']['matched_changes_percent']['orders']:+.1f}%`).
 
 Рекомендация: {recommendation}
 
@@ -523,6 +655,7 @@ def main() -> int:
         "summary": str(run_dir / "summary.json"),
         "products": str(processed_dir / "growth_products.csv"),
         "reductions": str(processed_dir / "reduced_products.csv"),
+        "bid_drift": str(processed_dir / "bid_drift.csv"),
         "parser_snapshot": str(raw_dir / "parser_store_period_comparison.json"),
     }
     summary["artifacts"].update(

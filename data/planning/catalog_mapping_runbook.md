@@ -276,6 +276,61 @@ notes
   единицу/штуку по зафиксированному правилу владельца; при изменении
   себестоимости нужно обновить расчетный слой отдельно.
 
+### Восстановление после смены seller SKU
+
+Подтвержденный recovery 2026-07-26:
+
+- симптом: после унификации seller SKU старые `ozon_offer_id` и
+  `wb_vendor_code` оставались в confirmed mapping и owner-review;
+- следствие: один реальный товар мог распасться на отдельные Ozon/WB строки,
+  `internal_sku` оставался пустым, а `parse_pack_qty("")` ошибочно давал
+  `pack_qty=1` для комплектов;
+- marketplace-данные Ozon были корректны; ошибка находилась только в
+  локальном каталожном контуре;
+- `build-unified-catalog` теперь восстанавливает native ID по подтвержденному
+  `internal_sku`, объединяет Ozon/WB, когда текущие seller SKU обеих площадок
+  равны owner-approved internal SKU, и берет `pack_qty` из нормализованного
+  текущего seller SKU даже при пустом `internal_sku`;
+- несовпадение `pack_qty` с `kitN` записывается как
+  `pack_qty_identity_mismatch` и должно блокировать использование каталога в
+  расчетах цен, продаж, остатков и поставок.
+
+После каждой смены seller SKU локальная синхронизация обязана атомарно
+обновить:
+
+```text
+data/catalog/mapping/ozon_wb_internal_sku_confirmed.csv
+data/catalog/unified/internal_sku_assignment_owner_review.csv
+data/catalog/unified/products.*
+data/catalog/content/content_master.*
+data/catalog/processed/master_catalog.*
+```
+
+Затем выполнить свежие `fetch-catalog`, `build-unified-catalog` и
+`build-content-master`. Критерии готовности:
+
+- `issue_count=0`;
+- `pack_qty_identity_mismatches=0`;
+- каждый Ozon/WB native ID присутствует в unified catalog ровно один раз;
+- для нормализованных пар seller SKU создана одна product-level строка;
+- `pack_qty` совпадает с `kitN`;
+- минимум Ozon повторно проверен по фактическому `pack_qty`.
+
+Проверенный repair:
+
+```text
+data/runs/2026-07-26/catalog_seller_sku_mapping_repair_20260726T1725
+data/runs/2026-07-26/catalog_pack_qty_mapping_repair_20260726T1726
+data/runs/2026-07-26/content_master_after_pack_qty_repair_20260726T1727
+data/runs/2026-07-26/catalog_pack_qty_repair_verify_20260726T1732
+```
+
+Итог проверки: `706` product-level строк, `427` пар Ozon+WB, отсутствующих
+или дублирующихся native ID `0`, расхождений `pack_qty` `0`, все `597`
+минимальных цен Ozon соответствуют сетке, а `95` нормализованных комплектов
+совпадают с Ozon-атрибутами количества. Marketplace write при repair не
+выполнялся.
+
 Smoke-проверка 2026-06-21 на текущих локальных данных:
 
 ```text

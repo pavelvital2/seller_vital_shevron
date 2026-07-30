@@ -59,6 +59,22 @@ description: "Use for Ozon/Wildberries marketplace action monitoring after promo
   count and discount distribution, exclusion count grouped by reason, and
   post-apply participant/non-participant counts with separate target discount
   distributions. A payload row count alone is not an owner-decision report.
+- Confirmed on 2026-07-29 for WB automatic actions: compare the actual seller
+  price after the required integer discount with the active per-product
+  minimum. When several autoactions pass, select the highest actual price;
+  keep the owner-selected manual discount for products outside actions.
+  Before apply, freeze the reviewed report by checksum, verify the full
+  minimum-price scope and require zero fresh-plan drift. After the discount
+  upload, verify both the full price scope and exact `nmID + actionID`
+  participation in fresh action exports. Confirmed Vital Shevron run
+  `wb_best_price_action_apply_20260729T133631`: `11/11` joined their selected
+  autoactions, price scope `478/478`, no quarantine.
+- The Telegram entry point for this flow is `Wildberries -> Акции от
+  минимальной цены`. It asks for the outside-action seller discount, defaults
+  to `50%` through an explicit button, queues the fresh plan in Job Worker and
+  exposes apply only when no target price is below minimum and every row is
+  safe for one upload. Keep `WB акции 70-55-55` and `Ручная акция` as separate
+  threshold-based alternatives.
 - For WB parser checks immediately after combined price/action/bid changes,
   record the exact SERP collection time relative to every apply. A first
   parser run collected about two hours after bid apply is an early joint
@@ -72,6 +88,46 @@ description: "Use for Ozon/Wildberries marketplace action monitoring after promo
   price/advertising signal. Do not make a second mass bid change before three
   full post days; repeat the stable control after seven full days. Confirmed by
   Vital Shevron run `ozon_cpc_post_apply_review_20260720T2130`.
+- Confirmed on 2026-07-29 for Ozon `Звёздные товары`: finance operation
+  `StarsMembership` matches delivered rows one-to-one by
+  `posting_number + sku`, and the current LK tariff is `1.5%` of the full
+  realized turnover while all moderated goods available for purchase
+  participate. Do not treat LK `Оборот пользователей в программе` as
+  incremental revenue. Calculate the 30-day full-cost break-even uplift, show
+  a generous sensitivity excluding advertising/storage allocation, and use a
+  14-full-day controlled disable test for a causal decision. Disabling is a
+  marketplace write and still requires owner approval.
+- Confirmed on 2026-07-30 for WB dormant-stock analysis: do not classify a
+  card from 30-day sales alone. Join current sellable stock, card creation
+  date, completed Statistics API sales after removing returned `srid` pairs,
+  open/cancelled orders, current autoaction offers, minimum price, active CPC
+  membership/metrics and latest parser visibility. Keep open orders separate
+  from completed buyouts. Before recommending a lower minimum, estimate the
+  action price with the approved 30-day cost model; if the action price is
+  below cost plus logistics, label it as loss-making instead of calling it a
+  normal promotion. Vital Shevron reference:
+  `scripts/analysis/wb_dormant_inventory.py` and
+  `data/runs/2026-07-30/wb_dormant_inventory_20260730T113307/`.
+- For a Vital Shevron owner-approved WB zero-margin liquidation objective,
+  calculate a temporary per-pack floor as `production cost + average
+  marketplace/logistics cost + explicit CPC reserve`, then round up. Select
+  the highest active action price that remains at or above that floor;
+  otherwise use a manual seller discount whose actual integer-discount price
+  stays above the floor. For CPC campaigns, the official WB bid
+  recommendation endpoint supports CPM only, so do not invent CPC auction
+  recommendations. Use the median current bid of products with attributed
+  orders in the same active CPC campaign, preserve a bid that already
+  produced an order or 10+ clicks until the new price is tested, and enforce
+  a post-apply per-card hard stop. Confirmed by dry-run
+  `wb_dormant_liquidation_plan_20260730T1320`.
+- Confirmed on 2026-07-30 for WB CPC campaign membership: a successful
+  `PATCH /adv/v0/auction/nms` add can become visible in campaign reads before
+  the bid-write backend accepts the nomenclature. Poll until the card has a
+  positive system bid, recheck every existing approved bid, then send the
+  exact bid package and verify it. If bid update returns
+  `nomenclature not found in advert`, first prove whether any existing bids
+  changed and whether the card is now registered; only then run a checksummed
+  recovery for the same approved package.
 
 ## Baseline Pattern
 

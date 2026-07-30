@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from seller_agent.config import AppCredentials, WbCredentials
@@ -9,6 +11,7 @@ from seller_agent.tasks.wb_actions_discount_apply import (
     _payload_from_rows,
     _requires_staged_discount,
     _split_regular_and_staged_rows,
+    _target_completion,
     _upload_error_summary,
     run_wb_actions_discount_apply,
     run_wb_actions_discount_verify,
@@ -202,6 +205,42 @@ def test_split_regular_and_staged_rows_does_not_quarantine_limited_step() -> Non
     assert staged_rows == []
 
 
+def test_target_completion_marks_safe_intermediate_step_for_followup() -> None:
+    result = _target_completion(
+        [
+            {
+                "Артикул WB": "101",
+                "Текущая скидка": "0",
+                "Финальная скидка": "50",
+                "Скидка к загрузке": "33",
+            },
+            {
+                "Артикул WB": "102",
+                "Текущая скидка": "70",
+                "Финальная скидка": "50",
+                "Скидка к загрузке": "50",
+            },
+        ],
+        verify_status="ok",
+    )
+
+    assert result == {
+        "status": "safe_step_applied",
+        "rows_count": 2,
+        "direct_final_target_rows": 1,
+        "followup_required_rows": 1,
+        "followup_required": True,
+        "transitions": [
+            {
+                "current_discount": 0,
+                "uploaded_discount": 33,
+                "final_discount": 50,
+                "rows_count": 1,
+            }
+        ],
+    }
+
+
 def test_classify_verify_status_detects_price_quarantine() -> None:
     assert (
         _classify_verify_status(
@@ -296,6 +335,78 @@ def test_wb_actions_apply_uses_wb_scoped_api_preflight(tmp_path, monkeypatch) ->
     assert calls["preflight"]["marketplaces"] == ("wb",)
     assert calls["preflight"]["include_ozon_performance"] is False
     assert calls["fresh_plan"]["scheme_text"] == "70-55-55"
+
+
+def test_wb_actions_apply_reports_warning_until_safe_step_reaches_final_target(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    plan_dir = tmp_path / "runs" / "2026-07-28" / "wb_actions_discount_plan_60-50-50_test"
+    plan_dir.mkdir(parents=True)
+    csv_path = plan_dir / "wb-discount-calculation-active-actions-60-50-50.csv"
+    csv_path.write_text(
+        "Артикул WB;Базовая цена;Текущая скидка;Финальная скидка;"
+        "Дельта, п.п.;Скидка к загрузке;Дельта загрузки, п.п.;"
+        "Осталось до целевой, п.п.\n"
+        "101;1100;0;50;50;33;33;17\n",
+        encoding="utf-8-sig",
+    )
+    (plan_dir / "summary.json").write_text(
+        (
+            '{"run_id":"wb_actions_discount_plan_60-50-50_test",'
+            '"summary":{"scheme":"60-50-50"},'
+            f'"artifacts":{{"csv":"{csv_path}"}}}}'
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_preflight(**kwargs):
+        return {"run_id": "status_preflight_wb_api_only", "overall_status": "ok", "artifacts": {}}
+
+    def fake_fresh_plan(**kwargs):
+        return {
+            "run_id": "wb_actions_discount_plan_60-50-50_fresh",
+            "summary": {"scheme": "60-50-50"},
+            "artifacts": {"csv": str(csv_path)},
+        }
+
+    def fake_upload_and_verify(*, payload, token, raw_dir, label, poll_attempts=12):
+        assert payload == {"data": [{"nmID": 101, "price": 1100, "discount": 33}]}
+        return {
+            "label": label,
+            "payload_rows_count": 1,
+            "response": {"httpStatus": 200, "data": {"data": {"id": 101}}},
+            "upload_id": 101,
+            "polls": [],
+            "details": {},
+            "upload_ok": True,
+            "status_data": {"successGoodsNumber": 1, "overAllGoodsNumber": 1},
+            "verify_status": "ok",
+            "success_rows": 1,
+            "overall_rows": 1,
+            "failed_rows": 0,
+            "error_summary": {"failed_rows_count": 0, "price_quarantine_rows_count": 0},
+        }
+
+    monkeypatch.setattr("seller_agent.tasks.wb_actions_discount_apply.run_status_preflight", fake_preflight)
+    monkeypatch.setattr("seller_agent.tasks.wb_actions_discount_apply.run_wb_actions_discount_plan", fake_fresh_plan)
+    monkeypatch.setattr("seller_agent.tasks.wb_actions_discount_apply._wb_upload_and_verify", fake_upload_and_verify)
+
+    result = run_wb_actions_discount_apply(
+        credentials=AppCredentials(ozon_seller=None, ozon_performance=None, wb=WbCredentials(token="token")),
+        data_dir=tmp_path,
+        plan_run_id="wb_actions_discount_plan_60-50-50_test",
+        run_id="wb_actions_discount_apply_60-50-50_safe_step_test",
+        confirmed_by_user=True,
+    )
+
+    assert result["verify"]["status"] == "ok"
+    assert result["overall_status"] == "warning"
+    assert result["target_completion"]["status"] == "safe_step_applied"
+    assert result["target_completion"]["followup_required_rows"] == 1
+    assert "rows requiring a fresh approved follow-up: `1`" in (
+        Path(result["artifacts"]["report"]).read_text(encoding="utf-8")
+    )
 
 
 def test_wb_actions_apply_stages_zero_to_fifty_five_discount(tmp_path, monkeypatch) -> None:

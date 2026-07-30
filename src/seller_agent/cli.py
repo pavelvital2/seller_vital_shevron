@@ -1768,6 +1768,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Use local snapshots only. Intended for local smoke checks; apply must use approved ready plan.",
     )
+    plan_card_content_update.add_argument(
+        "--marketplace",
+        action="append",
+        choices=("ozon", "wb"),
+        default=[],
+        help="Limit the plan to one marketplace. Repeat to include both; default is both.",
+    )
 
     promote_card_passport = subparsers.add_parser(
         "promote-approved-card-passport",
@@ -3061,6 +3068,7 @@ def main(argv: list[str] | None = None) -> int:
             internal_skus=args.internal_sku,
             run_id=args.run_id,
             skip_api=args.skip_api,
+            marketplaces=args.marketplace or None,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["overall_status"] in {"ok", "warning"} else 2

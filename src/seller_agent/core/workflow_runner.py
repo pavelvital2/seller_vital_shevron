@@ -37,6 +37,11 @@ from seller_agent.tasks.seller_sku_update import run_seller_sku_update_verify
 from seller_agent.tasks.status_preflight import run_status_preflight
 from seller_agent.tasks.wb_actions_discount_apply import run_wb_actions_discount_apply, run_wb_actions_discount_verify
 from seller_agent.tasks.wb_actions_discount_plan import run_wb_actions_discount_plan
+from seller_agent.tasks.wb_best_price_action import (
+    run_wb_best_price_action_apply,
+    run_wb_best_price_action_plan,
+    run_wb_best_price_action_verify,
+)
 from seller_agent.tasks.wb_card_create_apply import run_wb_card_create_verify
 from seller_agent.tasks.wb_parser_warehouse_analytics import run_wb_parser_warehouse_analytics
 from seller_agent.tasks.wb_production_work_plan import run_wb_production_work_plan
@@ -244,6 +249,7 @@ def default_workflow_handlers() -> dict[str, WorkflowHandler]:
         "ozon-elastic-plan": _ozon_elastic_plan_handler,
         "ozon-actions-optimizer-plan": _ozon_actions_optimizer_plan_handler,
         "wb-actions-discount-plan": _wb_actions_discount_plan_handler,
+        "wb-best-price-action-plan": _wb_best_price_action_plan_handler,
         "pricing-status": _pricing_status_handler,
         "status-preflight": _status_preflight_handler,
         "wb-parser-warehouse-analytics": _wb_parser_warehouse_analytics_handler,
@@ -266,6 +272,8 @@ def default_workflow_handlers() -> dict[str, WorkflowHandler]:
         "seller-sku-update-verify": _seller_sku_update_verify_handler,
         "wb-actions-discount-apply": _wb_actions_discount_apply_handler,
         "wb-actions-discount-verify": _wb_actions_discount_verify_handler,
+        "wb-best-price-action-apply": _wb_best_price_action_apply_handler,
+        "wb-best-price-action-verify": _wb_best_price_action_verify_handler,
         "wb-card-create-verify": _wb_card_create_verify_handler,
         "wb-inbox-apply": _wb_inbox_apply_handler,
         "wb-promotion-bids-apply": _wb_promotion_bids_apply_handler,
@@ -441,6 +449,23 @@ def _wb_actions_discount_plan_handler(
         scheme_text=_optional_str(inputs.get("scheme_text")) or "70-55-55",
         actions_dir=_optional_path(inputs.get("actions_dir")),
         prices_json=_optional_path(inputs.get("prices_json")),
+    )
+
+
+def _wb_best_price_action_plan_handler(
+    task: RegisteredTask,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    if credentials is None:
+        raise ValueError(f"Task `{task.name}` requires credentials.")
+    return run_wb_best_price_action_plan(
+        credentials=credentials,
+        data_dir=data_dir,
+        outside_discount=_int_input(inputs, "outside_discount", 50),
+        run_id=_optional_str(inputs.get("run_id")),
+        price_plan_path=_optional_path(inputs.get("price_plan_path")),
     )
 
 
@@ -864,6 +889,39 @@ def _wb_actions_discount_verify_handler(
     if credentials is None:
         raise ValueError(f"Task `{task.name}` requires credentials.")
     return run_wb_actions_discount_verify(
+        credentials=credentials,
+        data_dir=data_dir,
+        plan_run_id=_required_str(inputs, "plan_run_id", task.name),
+        run_id=_optional_str(inputs.get("run_id")),
+    )
+
+
+def _wb_best_price_action_apply_handler(
+    task: RegisteredTask,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    if credentials is None:
+        raise ValueError(f"Task `{task.name}` requires credentials.")
+    return run_wb_best_price_action_apply(
+        credentials=credentials,
+        data_dir=data_dir,
+        plan_run_id=_required_str(inputs, "plan_run_id", task.name),
+        run_id=_optional_str(inputs.get("run_id")),
+        confirmed_by_user=_bool_input(inputs, "confirmed_by_user", False),
+    )
+
+
+def _wb_best_price_action_verify_handler(
+    task: RegisteredTask,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    if credentials is None:
+        raise ValueError(f"Task `{task.name}` requires credentials.")
+    return run_wb_best_price_action_verify(
         credentials=credentials,
         data_dir=data_dir,
         plan_run_id=_required_str(inputs, "plan_run_id", task.name),

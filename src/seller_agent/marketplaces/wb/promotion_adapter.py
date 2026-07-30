@@ -71,6 +71,10 @@ class WbPromotionAdapter:
         data = self.get("/adv/v1/balance")
         return data if isinstance(data, dict) else {}
 
+    def start_campaign(self, *, advert_id: int) -> dict[str, Any]:
+        data = self.get("/adv/v0/start", {"id": int(advert_id)})
+        return data if isinstance(data, dict) else {}
+
     def fetch_bid_recommendations(self, *, advert_id: int, nm_id: int) -> dict[str, Any]:
         data = self.get(
             "/api/advert/v0/bids/recommendations",
@@ -80,4 +84,27 @@ class WbPromotionAdapter:
 
     def update_bids(self, bids: list[dict[str, Any]]) -> dict[str, Any]:
         data = self.patch("/api/advert/v1/bids", {"bids": bids})
+        return data if isinstance(data, dict) else {}
+
+    def update_campaign_products(
+        self,
+        *,
+        advert_id: int,
+        add: list[int] | None = None,
+        delete: list[int] | None = None,
+    ) -> dict[str, Any]:
+        data = self.patch(
+            "/adv/v0/auction/nms",
+            {
+                "nms": [
+                    {
+                        "advert_id": int(advert_id),
+                        "nms": {
+                            "add": [int(value) for value in add or []],
+                            "delete": [int(value) for value in delete or []],
+                        },
+                    }
+                ]
+            },
+        )
         return data if isinstance(data, dict) else {}
