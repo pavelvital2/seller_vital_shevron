@@ -82,8 +82,29 @@ def _ozon_min_price(row: dict[str, Any]) -> Decimal:
 
 def _ozon_elastic_active(row: dict[str, Any]) -> bool:
     actions = row.get("marketing_actions") if isinstance(row.get("marketing_actions"), dict) else {}
-    current = actions.get("current") if isinstance(actions.get("current"), list) else []
+    if isinstance(actions.get("actions"), list):
+        current = actions["actions"]
+    elif isinstance(actions.get("current"), list):
+        current = actions["current"]
+    else:
+        current = []
     return any("эласт" in str(item.get("title") or item.get("name") or "").lower() for item in current if isinstance(item, dict))
+
+
+def _wb_active_cpc_nm_ids(campaigns_payload: Any) -> set[int]:
+    adverts = campaigns_payload.get("adverts") if isinstance(campaigns_payload, dict) else []
+    result: set[int] = set()
+    for advert in adverts if isinstance(adverts, list) else []:
+        if not isinstance(advert, dict):
+            continue
+        for setting in advert.get("nm_settings") or []:
+            if not isinstance(setting, dict):
+                continue
+            bids = setting.get("bids_kopecks") if isinstance(setting.get("bids_kopecks"), dict) else {}
+            if _integer(bids.get("search")) > 0:
+                result.add(_integer(setting.get("nm_id")))
+    result.discard(0)
+    return result
 
 
 def _ozon_seller_orders(postings: list[dict[str, Any]], cohort_offer_ids: set[str]) -> dict[str, dict[str, Decimal | int]]:
@@ -307,11 +328,13 @@ def _render_markdown(summary: dict[str, Any]) -> str:
             "",
             "## Ozon",
             f"- когорта: **{ozon['cohort']} SKU**; остаток: **{ozon['stock_products']} товаров / {ozon['stock_physical_items']} изделий**;",
+            f"- Elastic: **{ozon['elastic_active']}/{ozon['cohort']}**; CPC: **{ozon['cpc_active']}/{ozon['cohort']}**;",
             f"- Seller API заказы: **{ozon['seller_order_units']}**; рекламная атрибуция: **{ozon['ad_orders']}**; расход CPC: **{ozon['ad_spend']:.2f} руб.**;",
             f"- hard-stop review: **{ozon['hard_stop_candidates']}**; расхождения minimum с документом: **{ozon['min_price_mismatches']}**.",
             "",
             "## Wildberries",
             f"- когорта: **{wb['cohort']} nmID**; остаток: **{wb['stock_goods']} товаров / {wb['stock_physical_items']} изделий**;",
+            f"- CPC: **{wb['cpc_active']}/{wb['cohort']}**;",
             f"- Statistics API заказы: **{wb['seller_order_units']}**; рекламная атрибуция: **{wb['ad_orders']}**; расход CPC: **{wb['ad_spend']:.2f} руб.**;",
             f"- hard-stop review: **{wb['hard_stop_candidates']}**; второй ценовой шаг: **{wb['second_price_stage_pending']}**.",
             "",
@@ -384,8 +407,8 @@ def run_liquidation_daily_control(
     wb_orders_raw = wb_statistics.fetch_orders(date_from=WB_APPLY_STARTED_AT.isoformat(), flag=0)
     wb_promotion = run_wb_promotion_report(credentials=credentials, data_dir=data_dir, run_id=f"wb_promotion_report_{run_id}", date_from=WB_APPLY_STARTED_AT.date().isoformat(), date_to=completed_to.isoformat(), payment_type="cpc")
     wb_stats_raw = json.loads(Path(wb_promotion["artifacts"]["fullstats_raw"]).read_text(encoding="utf-8"))
-    wb_campaign_rows = _read_csv(Path(wb_promotion["artifacts"]["products_csv"]))
-    current_wb_cpc = {_integer(row.get("nm_id")) for row in wb_campaign_rows if str(row.get("status") or "").lower() == "active"}
+    wb_campaigns_raw = json.loads(Path(wb_promotion["artifacts"]["campaigns_raw"]).read_text(encoding="utf-8"))
+    current_wb_cpc = _wb_active_cpc_nm_ids(wb_campaigns_raw)
     wb_ad_totals, wb_daily = _wb_ad_rows(wb_stats_raw)
 
     ozon_orders = _ozon_seller_orders(ozon_postings, set(ozon_offer_ids))
@@ -447,6 +470,8 @@ def run_liquidation_daily_control(
             "seller_order_units": sum(row["seller_order_units"] for row in ozon_rows),
             "ad_orders": sum(row["ad_orders"] for row in ozon_rows),
             "ad_spend": sum(row["ad_spend"] for row in ozon_rows),
+            "elastic_active": sum(bool(row["elastic_active"]) for row in ozon_rows),
+            "cpc_active": sum(bool(row["cpc_current"]) for row in ozon_rows),
             "hard_stop_candidates": sum(bool(row["hard_stop_reached"]) for row in ozon_rows),
             "min_price_mismatches": sum(bool(row["min_price_document_mismatch"]) for row in ozon_rows),
         },
@@ -457,6 +482,7 @@ def run_liquidation_daily_control(
             "seller_order_units": sum(row["seller_order_units"] for row in wb_rows),
             "ad_orders": sum(row["ad_orders"] for row in wb_rows),
             "ad_spend": sum(row["ad_spend"] for row in wb_rows),
+            "cpc_active": sum(bool(row["active_cpc"]) for row in wb_rows),
             "hard_stop_candidates": sum(bool(row["hard_stop_reached"]) for row in wb_rows),
             "second_price_stage_pending": sum(bool(row["requires_second_price_stage"]) for row in wb_rows),
         },

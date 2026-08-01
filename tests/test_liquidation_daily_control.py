@@ -2,7 +2,29 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from seller_agent.tasks.liquidation_daily_control import build_liquidation_rows
+from seller_agent.tasks.liquidation_daily_control import (
+    _ozon_elastic_active,
+    _wb_active_cpc_nm_ids,
+    build_liquidation_rows,
+)
+
+
+def test_liquidation_control_reads_current_ozon_actions_and_wb_campaign_membership() -> None:
+    assert _ozon_elastic_active(
+        {"marketing_actions": {"actions": [{"title": "Эластичный бустинг", "value": 382}]}}
+    ) is True
+    assert _wb_active_cpc_nm_ids(
+        {
+            "adverts": [
+                {
+                    "nm_settings": [
+                        {"nm_id": 100, "bids_kopecks": {"search": 210}},
+                        {"nm_id": 101, "bids_kopecks": {"search": 0}},
+                    ]
+                }
+            ]
+        }
+    ) == {100}
 
 
 def test_build_liquidation_rows_keeps_zero_rows_and_marks_only_seller_order_free_stops() -> None:

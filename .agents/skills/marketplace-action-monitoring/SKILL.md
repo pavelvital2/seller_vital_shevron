@@ -153,6 +153,14 @@ description: "Use for Ozon/Wildberries marketplace action monitoring after promo
   orders separate from ad attribution, exclude the incomplete current day and
   emit only a checksummed stop-review. Reaching a hard stop is not permission
   to remove a product from CPC automatically.
+- Confirmed on 2026-08-01 for liquidation membership checks: current Ozon
+  action membership is stored in `marketing_actions.actions`; accept
+  `marketing_actions.current` only as a backward-compatible fallback. For WB
+  CPC, derive campaign membership from every campaign `nm_settings` row with a
+  positive search bid, not from product statistics rows: products with zero
+  impressions may be absent from statistics while remaining active in CPC.
+  Regression-test both source shapes and expose exact cohort membership counts
+  in the owner report.
 
 ## Baseline Pattern
 
