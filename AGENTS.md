@@ -143,6 +143,9 @@
 - `data/planning/ozon_elastic_runbook.md` - Ozon Elastic Boosting.
 - `data/planning/liquidation_daily_control_runbook.md` - ежедневный Job Worker
   контроль точных Ozon/WB ликвидационных когорт и checksummed stop-review.
+- `data/planning/liquidation_analysis_checkpoint_2026-08-01.md` - сохраненный
+  read-only анализ распродажи Ozon/WB, рекомендации и точка безопасного
+  продолжения после решения владельца вернуться к задаче.
 - `data/planning/runtime_safety_guard_runbook.md` - единый runtime approval
   package, централизованный SafetyGuard, lifecycle и shared WB profile lease.
 - `data/planning/ozon_actions_optimizer_runbook.md` - read-only/dry-run
