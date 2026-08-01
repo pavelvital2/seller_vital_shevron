@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
+import uuid
 from typing import Any
 
 from seller_agent.core.job_models import ApprovalRecord, ApprovalStatus, JobRecord
@@ -94,7 +95,13 @@ class JobService:
             raise RuntimeError(f"Job disappeared after submit: {job.job_id}")
         return current
 
-    def run(self, job_id: str) -> JobServiceResult:
+    def run(
+        self,
+        job_id: str,
+        *,
+        claim_token: str = "",
+        worker_id: str = "",
+    ) -> JobServiceResult:
         job = self.store.get_job(job_id)
         if job is None:
             raise KeyError(f"Unknown job: {job_id}")
@@ -107,12 +114,74 @@ class JobService:
             )
 
         task = self.registry.get(job.task_id)
+        if job.status == "created":
+            job = self.store.update_job_status(
+                job_id,
+                "queued",
+                message="Job queued before claim acquisition.",
+            )
+        elif job.status == "waiting_confirmation":
+            if task.is_write and not _confirmed(job.params):
+                return JobServiceResult(
+                    job=job,
+                    ok=False,
+                    status="waiting_confirmation",
+                    message=job.error or "Job is waiting for explicit owner confirmation.",
+                )
+            job = self.store.update_job_status(
+                job_id,
+                "queued",
+                message="Confirmed job returned to the queue before claim acquisition.",
+            )
+
+        if bool(claim_token) != bool(worker_id):
+            return JobServiceResult(
+                job=job,
+                ok=False,
+                status="claim_invalid",
+                message="Both claim_token and worker_id are required to start a claimed job.",
+            )
+        if not claim_token:
+            direct_worker_id = f"job-service:{uuid.uuid4().hex}"
+            claim = self.store.claim_queued_job(
+                job_id=job_id,
+                worker_id=direct_worker_id,
+                ttl_seconds=_lease_ttl_seconds(task.timeout_seconds),
+            )
+            if claim is None:
+                current = self.store.get_job(job_id) or job
+                return JobServiceResult(
+                    job=current,
+                    ok=False,
+                    status="claim_unavailable",
+                    message=f"Queued job `{job_id}` is already claimed or no longer available.",
+                )
+            claim_token = claim.claim_token
+            worker_id = claim.worker_id
+        elif not self.store.job_claim_is_active(
+            job_id=job_id,
+            claim_token=claim_token,
+            worker_id=worker_id,
+        ):
+            current = self.store.get_job(job_id) or job
+            return JobServiceResult(
+                job=current,
+                ok=False,
+                status="claim_invalid",
+                message=f"Claim for queued job `{job_id}` is invalid, expired or owned by another worker.",
+            )
+
         if task.is_write and not _confirmed(job.params):
             waiting = self.store.update_job_status(
                 job_id,
                 "waiting_confirmation",
                 error="confirmed_by_user=true is required for apply jobs.",
                 message="Job is waiting for explicit owner confirmation.",
+            )
+            self.store.release_job_claim(
+                job_id=job_id,
+                claim_token=claim_token,
+                worker_id=worker_id,
             )
             return JobServiceResult(job=waiting, ok=False, status="waiting_confirmation", message=waiting.error)
         if not task.is_read_only and not task.is_write and task.mode not in {"dry_run", "verify"}:
@@ -170,6 +239,11 @@ class JobService:
                         data={"lock_keys": list(task.lock_keys)},
                     )
                     current = self.store.get_job(job_id) or job
+                    self.store.release_job_claim(
+                        job_id=job_id,
+                        claim_token=claim_token,
+                        worker_id=worker_id,
+                    )
                     return JobServiceResult(
                         job=current,
                         ok=False,
@@ -238,7 +312,26 @@ class JobService:
                         data={"approval_id": approval_id},
                     )
 
-            self.store.update_job_status(job_id, "running", message="Job runner started.")
+            running = self.store.start_claimed_job(
+                job_id=job_id,
+                claim_token=claim_token,
+                worker_id=worker_id,
+                execution_ttl_seconds=_execution_ttl_seconds(task.timeout_seconds),
+                message="Job runner started.",
+            )
+            if running is None:
+                self.store.release_job_claim(
+                    job_id=job_id,
+                    claim_token=claim_token,
+                    worker_id=worker_id,
+                )
+                current = self.store.get_job(job_id) or job
+                return JobServiceResult(
+                    job=current,
+                    ok=False,
+                    status="claim_invalid",
+                    message=f"Claim for queued job `{job_id}` expired or changed before workflow start.",
+                )
             if task.is_write:
                 self.store.append_event(job_id=job_id, event_type="job_write_window_started", message="Apply workflow started after approval, checksum and lease gates.", data={"approval_id": reserved_approval_id, "write_started": True})
             allowed_modes = _allowed_modes_for_task(task)
@@ -247,6 +340,22 @@ class JobService:
 
             if result.ok:
                 final_status = "success" if result.status == "ok" else "partial_success"
+                final = self.store.finish_claimed_job(
+                    job_id=job_id,
+                    claim_token=claim_token,
+                    worker_id=worker_id,
+                    status=final_status,
+                    result=result_data,
+                    message=f"Workflow finished with status `{result.status}`.",
+                )
+                if final is None:
+                    current = self.store.get_job(job_id) or running
+                    return JobServiceResult(
+                        job=current,
+                        ok=False,
+                        status="claim_lost",
+                        message="Late workflow completion ignored because the running claim no longer owns the job.",
+                    )
                 if reserved_approval_id:
                     self.store.update_approval_status(approval_id=reserved_approval_id, status="applied")
                     if _result_verification_confirmed(result_data):
@@ -269,23 +378,27 @@ class JobService:
                         self.store.update_approval_status(approval_id=recovery_approval_id, status="closed")
                 elif task.mode == "dry_run":
                     self._register_plan_approval(job=job, task=task, result_data=result_data)
-                final = self.store.update_job_status(
-                    job_id,
-                    final_status,
-                    result=result_data,
-                    message=f"Workflow finished with status `{result.status}`.",
-                )
                 return JobServiceResult(job=final, ok=True, status=result.status)
 
-            if reserved_approval_id:
-                self.store.update_approval_status(approval_id=reserved_approval_id, status="applying_unknown")
-            final = self.store.update_job_status(
-                job_id,
-                "failed",
+            final = self.store.finish_claimed_job(
+                job_id=job_id,
+                claim_token=claim_token,
+                worker_id=worker_id,
+                status="failed",
                 result=result_data,
                 error=result.error or result.blocked_reason or "workflow_failed",
                 message=f"Workflow failed with status `{result.status}`.",
             )
+            if final is None:
+                current = self.store.get_job(job_id) or running
+                return JobServiceResult(
+                    job=current,
+                    ok=False,
+                    status="claim_lost",
+                    message="Late workflow failure ignored because the running claim no longer owns the job.",
+                )
+            if reserved_approval_id:
+                self.store.update_approval_status(approval_id=reserved_approval_id, status="applying_unknown")
             return JobServiceResult(job=final, ok=False, status=result.status, message=final.error)
         finally:
             if leases_acquired:
@@ -536,6 +649,12 @@ def _confirmed(params: dict[str, Any]) -> bool:
 
 
 def _lease_ttl_seconds(timeout_seconds: int) -> int:
+    if timeout_seconds > 0:
+        return max(timeout_seconds + 300, 900)
+    return 7200
+
+
+def _execution_ttl_seconds(timeout_seconds: int) -> int:
     if timeout_seconds > 0:
         return max(timeout_seconds + 300, 900)
     return 7200

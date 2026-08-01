@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
+import secrets
 import sqlite3
 import uuid
 from typing import Any, Iterator
@@ -14,6 +15,7 @@ from seller_agent.core.job_models import (
     CardWorkEvent,
     CardWorkItem,
     CardWorkStatus,
+    JobClaim,
     JobEvent,
     JobRecord,
     JobStatus,
@@ -94,21 +96,33 @@ class JobStore:
         error: str = "",
         message: str = "",
     ) -> JobRecord:
+        if status == "running":
+            raise ValueError("Use start_claimed_job() for the queued-to-running transition.")
         now = _now()
-        started_at_update = ", started_at = COALESCE(NULLIF(started_at, ''), ?)" if status == "running" else ""
         finished_at_update = ", finished_at = ?" if status in TERMINAL_JOB_STATUSES else ""
         values: list[Any] = [status, _json_dumps(result or {}), error, now]
-        if status == "running":
-            values.append(now)
         if status in TERMINAL_JOB_STATUSES:
             values.append(now)
         values.append(job_id)
         with self._transaction() as connection:
+            if status in TERMINAL_JOB_STATUSES:
+                claimed_running = connection.execute(
+                    """
+                    SELECT 1
+                    FROM jobs AS j
+                    JOIN job_claims AS c ON c.job_id = j.job_id
+                    WHERE j.job_id = ? AND j.status = 'running'
+                    """,
+                    (job_id,),
+                ).fetchone()
+                if claimed_running is not None:
+                    raise ValueError(
+                        "Use finish_claimed_job() for terminal updates to a running claimed job."
+                    )
             cursor = connection.execute(
                 f"""
                 UPDATE jobs
                 SET status = ?, result_json = ?, error = ?, updated_at = ?
-                {started_at_update}
                 {finished_at_update}
                 WHERE job_id = ?
                 """,
@@ -116,6 +130,8 @@ class JobStore:
             )
             if cursor.rowcount != 1:
                 raise KeyError(f"Unknown job: {job_id}")
+            if status in TERMINAL_JOB_STATUSES:
+                connection.execute("DELETE FROM job_claims WHERE job_id = ?", (job_id,))
             self._insert_event(
                 connection,
                 job_id=job_id,
@@ -191,6 +207,347 @@ class JobStore:
                 "SELECT * FROM jobs WHERE status = 'queued' ORDER BY created_at ASC, rowid ASC LIMIT 1"
             ).fetchone()
         return _job_from_row(row) if row is not None else None
+
+    def claim_next_queued_job(self, *, worker_id: str, ttl_seconds: int) -> JobClaim | None:
+        """Atomically claim the oldest available queued job for one worker."""
+        return self._claim_queued_job(worker_id=worker_id, ttl_seconds=ttl_seconds)
+
+    def claim_queued_job(self, *, job_id: str, worker_id: str, ttl_seconds: int) -> JobClaim | None:
+        """Atomically claim one specific queued job when it is still available."""
+        return self._claim_queued_job(job_id=job_id, worker_id=worker_id, ttl_seconds=ttl_seconds)
+
+    def get_job_claim(self, job_id: str) -> JobClaim | None:
+        self.initialize()
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT j.*, c.claim_token, c.worker_id, c.claimed_at, c.expires_at
+                FROM job_claims AS c
+                JOIN jobs AS j ON j.job_id = c.job_id
+                WHERE c.job_id = ?
+                """,
+                (job_id,),
+            ).fetchone()
+        return _claim_from_row(row) if row is not None else None
+
+    def job_claim_is_active(self, *, job_id: str, claim_token: str, worker_id: str) -> bool:
+        now = _now()
+        self.initialize()
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT 1
+                FROM job_claims AS c
+                JOIN jobs AS j ON j.job_id = c.job_id
+                WHERE c.job_id = ?
+                  AND c.claim_token = ?
+                  AND c.worker_id = ?
+                  AND c.expires_at > ?
+                  AND j.status = 'queued'
+                """,
+                (job_id, claim_token, worker_id, now),
+            ).fetchone()
+        return row is not None
+
+    def start_claimed_job(
+        self,
+        *,
+        job_id: str,
+        claim_token: str,
+        worker_id: str,
+        execution_ttl_seconds: int,
+        message: str = "Job runner started.",
+    ) -> JobRecord | None:
+        """Move queued to running only for the exact live claim owner/token."""
+        if execution_ttl_seconds <= 0:
+            raise ValueError("execution_ttl_seconds must be positive")
+        now_dt = datetime.now(timezone.utc)
+        now = _format_dt(now_dt)
+        execution_expires_at = _format_dt(now_dt + timedelta(seconds=execution_ttl_seconds))
+        with self._transaction() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE jobs
+                SET status = 'running',
+                    result_json = '{}',
+                    error = '',
+                    updated_at = ?,
+                    started_at = COALESCE(NULLIF(started_at, ''), ?)
+                WHERE job_id = ?
+                  AND status = 'queued'
+                  AND EXISTS (
+                    SELECT 1
+                    FROM job_claims
+                    WHERE job_claims.job_id = jobs.job_id
+                      AND claim_token = ?
+                      AND worker_id = ?
+                      AND expires_at > ?
+                  )
+                """,
+                (now, now, job_id, claim_token, worker_id, now),
+            )
+            if cursor.rowcount != 1:
+                return None
+            claim_cursor = connection.execute(
+                """
+                UPDATE job_claims
+                SET expires_at = CASE
+                  WHEN expires_at > ? THEN expires_at
+                  ELSE ?
+                END
+                WHERE job_id = ?
+                  AND claim_token = ?
+                  AND worker_id = ?
+                  AND expires_at > ?
+                """,
+                (
+                    execution_expires_at,
+                    execution_expires_at,
+                    job_id,
+                    claim_token,
+                    worker_id,
+                    now,
+                ),
+            )
+            if claim_cursor.rowcount != 1:
+                raise RuntimeError("Claim disappeared during atomic job start.")
+            self._insert_event(
+                connection,
+                job_id=job_id,
+                event_type="job_running",
+                message=message,
+                data={"status": "running", "has_error": False},
+                created_at=now,
+            )
+            row = connection.execute("SELECT * FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
+        return _job_from_row(row) if row is not None else None
+
+    def finish_claimed_job(
+        self,
+        *,
+        job_id: str,
+        claim_token: str,
+        worker_id: str,
+        status: JobStatus,
+        result: dict[str, Any] | None = None,
+        error: str = "",
+        message: str = "",
+    ) -> JobRecord | None:
+        """Atomically finish a running job only for its exact surviving claim."""
+        if status not in TERMINAL_JOB_STATUSES:
+            raise ValueError("finish_claimed_job() requires a terminal status")
+        now = _now()
+        with self._transaction() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE jobs
+                SET status = ?,
+                    result_json = ?,
+                    error = ?,
+                    updated_at = ?,
+                    finished_at = ?
+                WHERE job_id = ?
+                  AND status = 'running'
+                  AND EXISTS (
+                    SELECT 1
+                    FROM job_claims
+                    WHERE job_claims.job_id = jobs.job_id
+                      AND claim_token = ?
+                      AND worker_id = ?
+                  )
+                """,
+                (
+                    status,
+                    _json_dumps(result or {}),
+                    error,
+                    now,
+                    now,
+                    job_id,
+                    claim_token,
+                    worker_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                return None
+            self._insert_event(
+                connection,
+                job_id=job_id,
+                event_type=f"job_{status}",
+                message=message or f"Job status changed to `{status}`.",
+                data={"status": status, "has_error": bool(error)},
+                created_at=now,
+            )
+            claim_cursor = connection.execute(
+                """
+                DELETE FROM job_claims
+                WHERE job_id = ? AND claim_token = ? AND worker_id = ?
+                """,
+                (job_id, claim_token, worker_id),
+            )
+            if claim_cursor.rowcount != 1:
+                raise RuntimeError("Claim disappeared during atomic job finish.")
+            row = connection.execute("SELECT * FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
+        return _job_from_row(row) if row is not None else None
+
+    def recover_stale_running_jobs(self, *, limit: int = 100) -> list[JobRecord]:
+        """Timeout jobs whose exact running claim expired, without replaying them."""
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        now = _now()
+        recovered: list[JobRecord] = []
+        with self._transaction() as connection:
+            stale_rows = connection.execute(
+                """
+                SELECT
+                  j.job_id,
+                  c.claim_token AS stale_claim_token,
+                  c.worker_id AS stale_worker_id
+                FROM jobs AS j
+                JOIN job_claims AS c ON c.job_id = j.job_id
+                WHERE j.status = 'running' AND c.expires_at <= ?
+                ORDER BY c.expires_at ASC, j.started_at ASC, j.rowid ASC
+                LIMIT ?
+                """,
+                (now, limit),
+            ).fetchall()
+            for stale in stale_rows:
+                job_id = str(stale["job_id"])
+                claim_token = str(stale["stale_claim_token"])
+                worker_id = str(stale["stale_worker_id"])
+                cursor = connection.execute(
+                    """
+                    UPDATE jobs
+                    SET status = 'timeout',
+                        error = 'worker_lost_timeout',
+                        updated_at = ?,
+                        finished_at = ?
+                    WHERE job_id = ?
+                      AND status = 'running'
+                      AND EXISTS (
+                        SELECT 1
+                        FROM job_claims
+                        WHERE job_claims.job_id = jobs.job_id
+                          AND claim_token = ?
+                          AND worker_id = ?
+                          AND expires_at <= ?
+                      )
+                    """,
+                    (now, now, job_id, claim_token, worker_id, now),
+                )
+                if cursor.rowcount != 1:
+                    continue
+                approval_cursor = connection.execute(
+                    """
+                    UPDATE approvals
+                    SET status = 'applying_unknown', updated_at = ?
+                    WHERE owner_job_id = ? AND status = 'applying'
+                    """,
+                    (now, job_id),
+                )
+                self._insert_event(
+                    connection,
+                    job_id=job_id,
+                    event_type="job_worker_lost",
+                    message="Running job claim expired; automatic apply replay is blocked.",
+                    data={
+                        "status": "timeout",
+                        "reason": "worker_lost",
+                        "recovery_required": True,
+                        "approvals_marked_unknown": int(approval_cursor.rowcount),
+                    },
+                    created_at=now,
+                )
+                connection.execute(
+                    """
+                    DELETE FROM job_claims
+                    WHERE job_id = ?
+                      AND claim_token = ?
+                      AND worker_id = ?
+                      AND expires_at <= ?
+                    """,
+                    (job_id, claim_token, worker_id, now),
+                )
+                row = connection.execute("SELECT * FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
+                if row is not None:
+                    recovered.append(_job_from_row(row))
+        return recovered
+
+    def release_job_claim(self, *, job_id: str, claim_token: str, worker_id: str) -> bool:
+        with self._transaction() as connection:
+            cursor = connection.execute(
+                """
+                DELETE FROM job_claims
+                WHERE job_id = ? AND claim_token = ? AND worker_id = ?
+                """,
+                (job_id, claim_token, worker_id),
+            )
+        return cursor.rowcount == 1
+
+    def _claim_queued_job(
+        self,
+        *,
+        worker_id: str,
+        ttl_seconds: int,
+        job_id: str | None = None,
+    ) -> JobClaim | None:
+        if not worker_id.strip():
+            raise ValueError("worker_id must not be empty")
+        if ttl_seconds <= 0:
+            raise ValueError("ttl_seconds must be positive")
+
+        claimed_at_dt = datetime.now(timezone.utc)
+        claimed_at = _format_dt(claimed_at_dt)
+        expires_at = _format_dt(claimed_at_dt + timedelta(seconds=ttl_seconds))
+        claim_token = secrets.token_urlsafe(32)
+        with self._transaction() as connection:
+            connection.execute(
+                """
+                DELETE FROM job_claims
+                WHERE expires_at <= ?
+                  AND EXISTS (
+                    SELECT 1
+                    FROM jobs
+                    WHERE jobs.job_id = job_claims.job_id
+                      AND jobs.status = 'queued'
+                  )
+                """,
+                (claimed_at,),
+            )
+            values: tuple[Any, ...] = ()
+            job_filter = ""
+            if job_id is not None:
+                job_filter = "AND j.job_id = ?"
+                values = (job_id,)
+            row = connection.execute(
+                f"""
+                SELECT j.*
+                FROM jobs AS j
+                WHERE j.status = 'queued'
+                  {job_filter}
+                  AND NOT EXISTS (
+                    SELECT 1 FROM job_claims AS c WHERE c.job_id = j.job_id
+                  )
+                ORDER BY j.created_at ASC, j.rowid ASC
+                LIMIT 1
+                """,
+                values,
+            ).fetchone()
+            if row is None:
+                return None
+            connection.execute(
+                """
+                INSERT INTO job_claims (job_id, claim_token, worker_id, claimed_at, expires_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (str(row["job_id"]), claim_token, worker_id, claimed_at, expires_at),
+            )
+        return JobClaim(
+            job=_job_from_row(row),
+            claim_token=claim_token,
+            worker_id=worker_id,
+            claimed_at=claimed_at,
+            expires_at=expires_at,
+        )
 
     def list_events(self, job_id: str) -> list[JobEvent]:
         self.initialize()
@@ -764,6 +1121,16 @@ CREATE TABLE IF NOT EXISTS job_events (
 
 CREATE INDEX IF NOT EXISTS idx_job_events_job_id ON job_events(job_id, event_id);
 
+CREATE TABLE IF NOT EXISTS job_claims (
+  job_id TEXT PRIMARY KEY REFERENCES jobs(job_id) ON DELETE CASCADE,
+  claim_token TEXT NOT NULL UNIQUE,
+  worker_id TEXT NOT NULL,
+  claimed_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_job_claims_expires_at ON job_claims(expires_at);
+
 CREATE TABLE IF NOT EXISTS task_requests (
   request_id TEXT PRIMARY KEY,
   job_id TEXT NOT NULL REFERENCES jobs(job_id) ON DELETE CASCADE,
@@ -887,6 +1254,16 @@ def _event_from_row(row: sqlite3.Row) -> JobEvent:
         message=str(row["message"]),
         data=_json_loads(str(row["data_json"])),
         created_at=str(row["created_at"]),
+    )
+
+
+def _claim_from_row(row: sqlite3.Row) -> JobClaim:
+    return JobClaim(
+        job=_job_from_row(row),
+        claim_token=str(row["claim_token"]),
+        worker_id=str(row["worker_id"]),
+        claimed_at=str(row["claimed_at"]),
+        expires_at=str(row["expires_at"]),
     )
 
 

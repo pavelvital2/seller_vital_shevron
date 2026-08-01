@@ -57,6 +57,15 @@ class JobRecord:
 
 
 @dataclass(frozen=True)
+class JobClaim:
+    job: JobRecord
+    claim_token: str
+    worker_id: str
+    claimed_at: str
+    expires_at: str
+
+
+@dataclass(frozen=True)
 class JobEvent:
     job_id: str
     event_type: str
