@@ -424,12 +424,26 @@ def test_duplicate_callback_does_not_finalize_foreign_delegated_update(
     assert store.list_jobs(limit=10) == []
 
 
-def test_enabled_cli_write_enqueues_job_without_direct_handler(
+def test_enabled_cli_write_enqueues_existing_approval_without_direct_handler(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    runtime_db = tmp_path / "runtime" / "runtime.db"
+    store = JobStore(runtime_db)
+    approval_id = "approval-cli-elastic"
+    package = _approval_package(
+        approval_id=approval_id,
+        source_ref="ozon_elastic_plan_cli",
+    )
+    store.create_approval(
+        approval_id=approval_id,
+        source_job_id="cli-plan-job",
+        status="approved",
+        checksum=str(package["approval_checksum"]),
+        data=package,
+    )
 
     exit_code = cli.main(
         [
@@ -439,14 +453,15 @@ def test_enabled_cli_write_enqueues_job_without_direct_handler(
             "--plan-run-id",
             "ozon_elastic_plan_cli",
             "--confirmed-by-user",
+            "--approval-id",
+            approval_id,
         ]
     )
 
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == 0
     assert payload["status"] == "queued"
-    runtime_db = tmp_path / "runtime" / "runtime.db"
-    jobs = JobStore(runtime_db).list_jobs(limit=10)
+    jobs = store.list_jobs(limit=10)
     assert len(jobs) == 1
     assert jobs[0].task_id == "ozon-elastic-apply"
     assert jobs[0].actor == "cli"
@@ -461,12 +476,34 @@ def test_every_task_registry_write_alias_enqueues_or_fails_closed(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     runtime_db = tmp_path / "runtime.db"
+    task = default_task_registry().get(task_id)
+    approval_id = f"approval-cli-{task_id}"
+    can_build_approval = bool(task.enabled and task.source_plan_task and task.verify_task)
+    if can_build_approval:
+        package = build_approval_package(
+            approval_id=approval_id,
+            task_id=task.name,
+            source_plan_task=task.source_plan_task,
+            verify_task=task.verify_task,
+            source_kind="params",
+            source_ref="{}",
+            apply_params={},
+            marketplaces=task.marketplaces,
+        )
+        JobStore(runtime_db).create_approval(
+            approval_id=approval_id,
+            source_job_id="cli-plan-job",
+            status="approved",
+            checksum=str(package["approval_checksum"]),
+            data=package,
+        )
     args = argparse.Namespace(
         command=alias,
         data_dir=str(tmp_path / "data"),
         runtime_db=str(runtime_db),
         no_runtime_db=False,
         confirmed_by_user=False,
+        approval_id=approval_id,
     )
 
     exit_code = cli._enqueue_cli_write(args)
@@ -474,7 +511,8 @@ def test_every_task_registry_write_alias_enqueues_or_fails_closed(
     jobs = JobStore(runtime_db).list_jobs(limit=10)
 
     assert default_task_registry().get(alias).name == task_id
-    if enabled:
+    assert task.enabled is enabled
+    if can_build_approval:
         assert exit_code == 0
         assert payload["status"] == "queued"
         assert len(jobs) == 1
@@ -483,7 +521,7 @@ def test_every_task_registry_write_alias_enqueues_or_fails_closed(
     else:
         assert exit_code == 2
         assert payload["status"] == "blocked"
-        assert payload["blocked_reason"] == "task_disabled"
+        assert payload["blocked_reason"] in {"task_disabled", "runtime_enqueue_failed"}
         assert jobs == []
 
 

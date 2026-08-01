@@ -12,7 +12,10 @@ from seller_agent.core.job_store import DEFAULT_RUNTIME_DB, JobStore
 from seller_agent.core.workflow_runner import WorkflowRunner
 from seller_agent.core.run_manifest import close_run_manifest
 from seller_agent.tasks.registry import RegisteredTask, TaskRegistry, default_task_registry
-from seller_agent.safety.approval_package import build_approval_package
+from seller_agent.safety.approval_package import (
+    build_approval_package,
+    normalize_business_params,
+)
 from seller_agent.safety.guard import SafetyGuard
 
 
@@ -54,8 +57,27 @@ class JobService:
         task = self.registry.get(task_id)
         if not task.enabled:
             raise ValueError(f"Task `{task.name}` is disabled for JobService.")
+        if task.is_write:
+            raise RuntimeError(
+                "Write jobs require an existing approved approval package and "
+                "submit_approval_apply(approval_id); confirmed_by_user cannot create or approve one."
+            )
+        return self._submit_task(
+            task=task,
+            params=params,
+            actor=actor,
+            source=source,
+        )
+
+    def _submit_task(
+        self,
+        *,
+        task: RegisteredTask,
+        params: dict[str, Any] | None,
+        actor: str,
+        source: str,
+    ) -> JobRecord:
         job_params = dict(params or {})
-        runtime_approval = _runtime_approval_for_submit(task, job_params) if task.is_write else None
         job = self.store.create_job(
             task_id=task.name,
             params=job_params,
@@ -63,27 +85,6 @@ class JobService:
             status="queued",
             source=source,
         )
-        if runtime_approval is not None:
-            approval = self.store.ensure_approval(
-                approval_id=runtime_approval["approval_id"],
-                source_job_id=job.job_id,
-                status="approved",
-                checksum=runtime_approval["approval_checksum"],
-                data=runtime_approval,
-            )
-            if approval.status == "pending_review" and approval.checksum == runtime_approval["approval_checksum"]:
-                self.store.decide_approval(approval_id=approval.approval_id, status="approved")
-                approval = self.store.get_approval(approval.approval_id) or approval
-            self.store.append_event(
-                job_id=job.job_id,
-                event_type="job_runtime_approval_attached",
-                message="Runtime approval attached to confirmed write job.",
-                data={
-                    "approval_id": approval.approval_id,
-                    "approval_status": approval.status,
-                    "source_kind": runtime_approval["source_kind"],
-                },
-            )
         self.store.append_event(
             job_id=job.job_id,
             event_type="job_queued",
@@ -201,23 +202,24 @@ class JobService:
             approval = self.store.get_approval(approval_id) if approval_id else None
             decision = self.safety_guard.validate_apply(task=task, job=job, approval=approval)
             if not decision.allowed:
+                safe_issues = _sanitized_safety_issues(decision.issues)
                 blocked_status = "safety_blocked"
                 event_type = "job_safety_guard_blocked"
-                if "approval_record_checksum_mismatch" in decision.issues:
+                if "approval_record_checksum_mismatch" in safe_issues:
                     blocked_status = "approval_checksum_mismatch"
                     event_type = "job_approval_checksum_mismatch"
-                elif any(issue.startswith("approval_status_invalid:") for issue in decision.issues):
+                elif "approval_status_invalid" in safe_issues:
                     blocked_status = "approval_not_available"
                     event_type = "job_approval_blocked"
-                elif "approval_record_missing" in decision.issues:
+                elif "approval_record_missing" in safe_issues:
                     blocked_status = "approval_missing"
                 failed = self.store.update_job_status(
                     job_id,
                     "failed",
-                    error="SafetyGuard blocked apply: " + ", ".join(decision.issues),
+                    error=_sanitized_safety_error(safe_issues),
                     message="Job blocked by centralized SafetyGuard before resource acquisition.",
                 )
-                self.store.append_event(job_id=job_id, event_type=event_type, message="Centralized SafetyGuard blocked apply.", data={"issues": list(decision.issues)})
+                self.store.append_event(job_id=job_id, event_type=event_type, message="Centralized SafetyGuard blocked apply.", data={"issues": list(safe_issues)})
                 return JobServiceResult(job=failed, ok=False, status=blocked_status, message=failed.error)
 
         leases_acquired = False
@@ -430,9 +432,13 @@ class JobService:
         return JobServiceResult(job=cancelled, ok=True, status="cancelled", message=reason)
 
     def approve(self, approval_id: str) -> ApprovalRecord:
+        approval = self.store.get_approval(approval_id)
+        if approval is None:
+            raise KeyError(f"Unknown approval: {approval_id}")
+        self._validated_approval_task(approval)
         if not self.store.decide_approval(approval_id=approval_id, status="approved"):
             current = self.store.get_approval(approval_id)
-            if current is None:
+            if current is None:  # pragma: no cover - guarded above and transactionally stable.
                 raise KeyError(f"Unknown approval: {approval_id}")
             if current.status != "approved":
                 raise RuntimeError(f"Approval `{approval_id}` cannot be approved from `{current.status}`.")
@@ -447,13 +453,22 @@ class JobService:
                 raise RuntimeError(f"Approval `{approval_id}` cannot be rejected from `{current.status}`.")
         return self.store.get_approval(approval_id)  # type: ignore[return-value]
 
-    def submit_approval_apply(self, approval_id: str, *, actor: str = "owner") -> JobRecord:
+    def submit_approval_apply(
+        self,
+        approval_id: str,
+        *,
+        actor: str = "owner",
+        expected_task_id: str | None = None,
+    ) -> JobRecord:
         approval = self.store.get_approval(approval_id)
         if approval is None:
             raise KeyError(f"Unknown approval: {approval_id}")
         if approval.status != "approved":
             raise RuntimeError(f"Approval `{approval_id}` is `{approval.status}`, expected `approved`.")
-        params = dict(approval.data.get("apply_params") or {})
+        task = self._validated_approval_task(approval)
+        if expected_task_id is not None and task.name != expected_task_id:
+            raise RuntimeError("SafetyGuard blocked approval package: approval_task_mismatch.")
+        params = normalize_business_params(approval.data["apply_params"])
         params.update(
             {
                 "confirmed_by_user": True,
@@ -461,7 +476,25 @@ class JobService:
                 "approval_checksum": approval.checksum,
             }
         )
-        return self.submit(task_id=str(approval.data.get("task_id") or ""), params=params, actor=actor, source="runtime_approval")
+        return self._submit_task(
+            task=task,
+            params=params,
+            actor=actor,
+            source="runtime_approval",
+        )
+
+    def _validated_approval_task(self, approval: ApprovalRecord) -> RegisteredTask:
+        task_id = str(approval.data.get("task_id") or "")
+        try:
+            task = self.registry.get(task_id)
+        except KeyError as exc:
+            raise RuntimeError("SafetyGuard blocked approval package: approval_task_unknown.") from exc
+        if not task.enabled or not task.is_write or task.mode != "apply":
+            raise RuntimeError("SafetyGuard blocked approval package: approval_task_not_available.")
+        decision = self.safety_guard.validate_approval_package(task=task, approval=approval)
+        if not decision.allowed:
+            raise RuntimeError(_sanitized_safety_error(decision.issues))
+        return task
 
     def submit_approval_verify(self, approval_id: str, *, actor: str = "owner") -> JobRecord:
         approval = self.store.get_approval(approval_id)
@@ -678,63 +711,6 @@ def _runtime_approval_checksum(params: dict[str, Any]) -> str:
     return str(params.get("approval_checksum") or params.get("runtime_approval_checksum") or "").strip()
 
 
-def _runtime_approval_for_submit(task: RegisteredTask, params: dict[str, Any]) -> dict[str, Any] | None:
-    if not _confirmed(params) or _runtime_approval_id(params):
-        return None
-    approval_source = _runtime_approval_source(params)
-    approval_payload = _approval_payload(params)
-    approval_id = f"runtime:{task.name}:{_canonical_hash({'task_id': task.name, 'source': approval_source})[:24]}"
-    package = build_approval_package(
-        approval_id=approval_id,
-        task_id=task.name,
-        source_plan_task=task.source_plan_task,
-        verify_task=task.verify_task,
-        source_kind=approval_source["kind"],
-        source_ref=approval_source["ref"],
-        apply_params=approval_payload,
-        marketplaces=task.marketplaces,
-    )
-    approval_checksum = package["approval_checksum"]
-    params["approval_id"] = approval_id
-    params["approval_checksum"] = approval_checksum
-    return package
-
-
-def _runtime_approval_source(params: dict[str, Any]) -> dict[str, str]:
-    for key in (
-        "approved_path",
-        "plan_run_id",
-        "source_run_id",
-        "pending_id",
-        "approved_id",
-        "base_plan_run_id",
-        "internal_skus",
-    ):
-        value = params.get(key)
-        if _has_runtime_source_value(value):
-            return {"kind": key, "ref": _canonical_json(value)}
-    return {"kind": "params", "ref": _canonical_hash(_approval_payload(params))}
-
-
-def _has_runtime_source_value(value: Any) -> bool:
-    if value is None or value == "":
-        return False
-    if isinstance(value, (list, tuple, set, dict)) and not value:
-        return False
-    return True
-
-
-def _approval_payload(params: dict[str, Any]) -> dict[str, Any]:
-    ignored = {
-        "approval_id",
-        "runtime_approval_id",
-        "approval_checksum",
-        "runtime_approval_checksum",
-        "confirmed_by_user",
-    }
-    return {key: value for key, value in sorted(params.items()) if key not in ignored}
-
-
 def _runtime_recovery_verify_params(approval: ApprovalRecord) -> dict[str, Any]:
     raw = approval.data.get("verify_params")
     if isinstance(raw, dict) and raw:
@@ -770,6 +746,60 @@ def _canonical_hash(value: Any) -> str:
 
 def _canonical_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+
+
+_SAFETY_GUARD_ISSUE_CODES = frozenset(
+    {
+        "approval_checksum_missing",
+        "approval_id_missing",
+        "approval_marketplaces_mismatch",
+        "approval_package_apply_params_invalid",
+        "approval_package_checksum_invalid",
+        "approval_package_created_at_future",
+        "approval_package_created_at_invalid",
+        "approval_package_id_mismatch",
+        "approval_package_marketplaces_invalid",
+        "approval_package_missing_approval_checksum",
+        "approval_package_missing_approval_id",
+        "approval_package_missing_created_at",
+        "approval_package_missing_source_kind",
+        "approval_package_missing_source_plan_task",
+        "approval_package_missing_source_ref",
+        "approval_package_missing_task_id",
+        "approval_package_missing_verify_task",
+        "approval_package_schema_invalid",
+        "approval_package_stale",
+        "approval_package_transport_params_invalid",
+        "approval_params_mismatch",
+        "approval_record_checksum_mismatch",
+        "approval_record_missing",
+        "approval_source_plan_task_mismatch",
+        "approval_status_invalid",
+        "approval_task_mismatch",
+        "approval_verify_task_mismatch",
+        "mapping_evidence_missing",
+        "owner_confirmation_missing",
+        "resource_locks_missing",
+        "safety_policy_violation",
+        "source_plan_task_missing",
+        "task_is_not_apply",
+        "verify_task_missing",
+    }
+)
+
+
+def _sanitized_safety_issues(issues: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+    safe: list[str] = []
+    for raw_issue in issues:
+        issue = str(raw_issue).strip()
+        safe_issue = issue if issue in _SAFETY_GUARD_ISSUE_CODES else "safety_policy_violation"
+        if safe_issue not in safe:
+            safe.append(safe_issue)
+    return tuple(safe or ("safety_policy_violation",))
+
+
+def _sanitized_safety_error(issues: tuple[str, ...] | list[str]) -> str:
+    return "SafetyGuard blocked apply: " + ", ".join(_sanitized_safety_issues(issues))
 
 
 def _result_verification_confirmed(result: dict[str, Any]) -> bool:

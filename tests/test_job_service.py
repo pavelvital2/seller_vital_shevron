@@ -4,11 +4,44 @@ import csv
 import json
 from pathlib import Path
 
+import pytest
+
 from seller_agent.cli import main
 from seller_agent.core.job_runner import JobRunner
 from seller_agent.core.job_service import JobService
 from seller_agent.core.job_store import JobStore
 from seller_agent.core.workflow_runner import WorkflowRunner
+from seller_agent.safety.approval_package import build_approval_package
+from seller_agent.tasks.registry import default_task_registry
+
+
+def _create_runtime_approval(
+    store: JobStore,
+    *,
+    approval_id: str,
+    task_id: str,
+    apply_params: dict[str, object],
+    status: str = "pending_review",
+):  # type: ignore[no-untyped-def]
+    task = default_task_registry().get(task_id)
+    source_kind = next(iter(apply_params), "params")
+    package = build_approval_package(
+        approval_id=approval_id,
+        task_id=task.name,
+        source_plan_task=task.source_plan_task,
+        verify_task=task.verify_task,
+        source_kind=source_kind,
+        source_ref=json.dumps(apply_params.get(source_kind), ensure_ascii=False),
+        apply_params=apply_params,
+        marketplaces=task.marketplaces,
+    )
+    return store.create_approval(
+        approval_id=approval_id,
+        source_job_id="source_job",
+        status=status,  # type: ignore[arg-type]
+        checksum=package["approval_checksum"],
+        data=package,
+    )
 
 
 def test_job_service_submits_and_runs_read_only_workflow(tmp_path: Path) -> None:
@@ -49,27 +82,31 @@ def test_job_service_submits_and_runs_read_only_workflow(tmp_path: Path) -> None
     ]
 
 
-def test_job_service_waits_confirmation_for_apply_task(tmp_path: Path) -> None:
-    service = JobService(store=JobStore(tmp_path / "runtime.db"), data_dir=tmp_path / "data")
+def test_job_service_rejects_direct_apply_submit_without_approval_action(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "runtime.db")
+    service = JobService(store=store, data_dir=tmp_path / "data")
 
-    job = service.submit(task_id="ozon-elastic-apply", params={"plan_run_id": "x"})
-    result = service.run(job.job_id)
+    with pytest.raises(RuntimeError, match="submit_approval_apply"):
+        service.submit(task_id="ozon-elastic-apply", params={"plan_run_id": "x"})
 
-    assert result.ok is False
-    assert result.status == "waiting_confirmation"
-    assert result.job.status == "waiting_confirmation"
-    assert "confirmed_by_user" in result.job.error
+    assert store.list_jobs(limit=10) == []
 
 
 def test_job_service_runs_confirmed_apply_workflow(tmp_path: Path) -> None:
     def handler(task, data_dir, credentials, inputs):  # type: ignore[no-untyped-def]
         assert task.name == "approved-cards-batch-apply"
         assert inputs["confirmed_by_user"] is True
-        assert inputs["approval_id"].startswith("runtime:approved-cards-batch-apply:")
+        assert inputs["approval_id"] == "approval-batch-apply"
         assert inputs["approval_checksum"].startswith("sha256:")
         return {"run_id": "apply_job_test", "overall_status": "ok", "artifacts": {"report": str(data_dir / "runs/report.md")}}
 
     store = JobStore(tmp_path / "runtime.db")
+    approval = _create_runtime_approval(
+        store,
+        approval_id="approval-batch-apply",
+        task_id="approved-cards-batch-apply",
+        apply_params={"internal_skus": ["sku-1"]},
+    )
     service = JobService(
         store=store,
         workflow_runner=WorkflowRunner(
@@ -80,10 +117,8 @@ def test_job_service_runs_confirmed_apply_workflow(tmp_path: Path) -> None:
         ),
         data_dir=tmp_path / "data",
     )
-    job = service.submit(
-        task_id="apply-approved-cards",
-        params={"confirmed_by_user": True, "internal_skus": ["sku-1"]},
-    )
+    service.approve(approval.approval_id)
+    job = service.submit_approval_apply(approval.approval_id)
 
     result = service.run(job.job_id)
 
@@ -97,34 +132,23 @@ def test_job_service_runs_confirmed_apply_workflow(tmp_path: Path) -> None:
     assert approval.checksum == job.params["approval_checksum"]
 
 
-def test_job_service_auto_attaches_runtime_approval_to_confirmed_apply_submit(tmp_path: Path) -> None:
+def test_job_service_confirmed_submit_never_auto_attaches_runtime_approval(tmp_path: Path) -> None:
     store = JobStore(tmp_path / "runtime.db")
     service = JobService(store=store, data_dir=tmp_path / "data")
 
-    job = service.submit(
-        task_id="ozon-elastic-apply",
-        params={"confirmed_by_user": True, "plan_run_id": "elastic_plan_1"},
-        actor="telegram_owner",
-        source="telegram_callback",
-    )
-    approval = store.get_approval(job.params["approval_id"])
+    with pytest.raises(RuntimeError, match="confirmed_by_user cannot create or approve"):
+        service.submit(
+            task_id="ozon-elastic-apply",
+            params={"confirmed_by_user": True, "plan_run_id": "elastic_plan_1"},
+            actor="telegram_owner",
+            source="telegram_callback",
+        )
 
-    assert job.params["approval_id"].startswith("runtime:ozon-elastic-apply:")
-    assert job.params["approval_checksum"].startswith("sha256:")
-    assert approval is not None
-    assert approval.status == "approved"
-    assert approval.source_job_id == job.job_id
-    assert approval.checksum == job.params["approval_checksum"]
-    assert approval.data["source_kind"] == "plan_run_id"
-    assert approval.data["apply_params"] == {"plan_run_id": "elastic_plan_1"}
-    assert [event.event_type for event in store.list_events(job.job_id)] == [
-        "job_created",
-        "job_runtime_approval_attached",
-        "job_queued",
-    ]
+    assert store.list_jobs(limit=10) == []
+    assert store.list_approvals(limit=10) == []
 
 
-def test_legacy_apply_callback_reuses_plan_generated_pending_approval(tmp_path: Path) -> None:
+def test_confirmed_submit_does_not_promote_plan_generated_pending_approval(tmp_path: Path) -> None:
     def plan_handler(task, data_dir, credentials, inputs):  # type: ignore[no-untyped-def]
         return {"run_id": "ozon_elastic_plan_1", "overall_status": "ok", "artifacts": {}}
 
@@ -144,21 +168,21 @@ def test_legacy_apply_callback_reuses_plan_generated_pending_approval(tmp_path: 
     plan_result = service.run(plan_job.job_id)
     pending = store.list_approvals(statuses=("pending_review",), limit=10)
 
-    job = service.submit(
-        task_id="ozon-elastic-apply",
-        params={"plan_run_id": plan_run_id, "confirmed_by_user": True},
-        actor="telegram_owner",
-        source="telegram_callback",
-    )
-    approval = store.get_approval(job.params["approval_id"])
+    with pytest.raises(RuntimeError, match="submit_approval_apply"):
+        service.submit(
+            task_id="ozon-elastic-apply",
+            params={"plan_run_id": plan_run_id, "confirmed_by_user": True},
+            actor="telegram_owner",
+            source="telegram_callback",
+        )
+    approval = store.get_approval(pending[0].approval_id)
 
     assert plan_result.ok is True
     assert len(pending) == 1
-    assert job.params["approval_id"] == pending[0].approval_id
-    assert job.params["approval_checksum"] == pending[0].checksum
     assert approval is not None
-    assert approval.status == "approved"
+    assert approval.status == "pending_review"
     assert approval.checksum == pending[0].checksum
+    assert store.list_jobs(task_id="ozon-elastic-apply", limit=10) == []
 
 
 def test_job_service_reserves_runtime_approval_for_confirmed_apply(tmp_path: Path) -> None:
@@ -166,11 +190,11 @@ def test_job_service_reserves_runtime_approval_for_confirmed_apply(tmp_path: Pat
         return {"run_id": "apply_job_test", "overall_status": "ok", "artifacts": {}}
 
     store = JobStore(tmp_path / "runtime.db")
-    store.create_approval(
+    approval = _create_runtime_approval(
+        store,
         approval_id="approval_1",
-        source_job_id="source_job",
-        status="approved",
-        checksum="sha256:approval",
+        task_id="approved-cards-batch-apply",
+        apply_params={"internal_skus": ["sku-1"]},
     )
     service = JobService(
         store=store,
@@ -182,15 +206,8 @@ def test_job_service_reserves_runtime_approval_for_confirmed_apply(tmp_path: Pat
         ),
         data_dir=tmp_path / "data",
     )
-    job = service.submit(
-        task_id="apply-approved-cards",
-        params={
-            "confirmed_by_user": True,
-            "internal_skus": ["sku-1"],
-            "approval_id": "approval_1",
-            "approval_checksum": "sha256:approval",
-        },
-    )
+    service.approve(approval.approval_id)
+    job = service.submit_approval_apply(approval.approval_id)
 
     result = service.run(job.job_id)
     approval = store.get_approval("approval_1")
@@ -207,11 +224,12 @@ def test_job_service_blocks_apply_on_runtime_approval_checksum_mismatch(tmp_path
         raise AssertionError("workflow must not start with checksum mismatch")
 
     store = JobStore(tmp_path / "runtime.db")
-    store.create_approval(
+    approval = _create_runtime_approval(
+        store,
         approval_id="approval_1",
-        source_job_id="source_job",
+        task_id="approved-cards-batch-apply",
+        apply_params={"internal_skus": ["sku-1"]},
         status="approved",
-        checksum="sha256:approval",
     )
     service = JobService(
         store=store,
@@ -223,8 +241,9 @@ def test_job_service_blocks_apply_on_runtime_approval_checksum_mismatch(tmp_path
         ),
         data_dir=tmp_path / "data",
     )
-    job = service.submit(
+    job = store.create_job(
         task_id="apply-approved-cards",
+        status="queued",
         params={
             "confirmed_by_user": True,
             "internal_skus": ["sku-1"],
@@ -250,6 +269,12 @@ def test_job_service_blocks_confirmed_apply_when_resource_lease_is_busy(tmp_path
 
     store = JobStore(tmp_path / "runtime.db")
     assert store.acquire_resource_lease(resource_key="marketplace:ozon", owner_id="other_job", ttl_seconds=60) is not None
+    approval = _create_runtime_approval(
+        store,
+        approval_id="approval-resource-busy",
+        task_id="ozon-elastic-apply",
+        apply_params={"plan_run_id": "plan_1"},
+    )
     service = JobService(
         store=store,
         workflow_runner=WorkflowRunner(
@@ -260,7 +285,8 @@ def test_job_service_blocks_confirmed_apply_when_resource_lease_is_busy(tmp_path
         ),
         data_dir=tmp_path / "data",
     )
-    job = service.submit(task_id="ozon-elastic-apply", params={"confirmed_by_user": True, "plan_run_id": "plan_1"})
+    service.approve(approval.approval_id)
+    job = service.submit_approval_apply(approval.approval_id)
 
     result = service.run(job.job_id)
 
@@ -269,7 +295,6 @@ def test_job_service_blocks_confirmed_apply_when_resource_lease_is_busy(tmp_path
     assert result.job.status == "queued"
     assert [event.event_type for event in store.list_events(job.job_id)] == [
         "job_created",
-        "job_runtime_approval_attached",
         "job_queued",
         "job_resource_blocked",
     ]
@@ -292,11 +317,17 @@ def test_job_service_blocks_read_only_task_when_resource_lease_is_busy(tmp_path:
     assert result.job.status == "queued"
 
 
-def test_job_service_blocks_repeated_auto_runtime_approval_apply(tmp_path: Path) -> None:
+def test_job_service_blocks_repeated_approved_runtime_apply(tmp_path: Path) -> None:
     def handler(task, data_dir, credentials, inputs):  # type: ignore[no-untyped-def]
         return {"run_id": "apply_job_test", "overall_status": "ok", "artifacts": {}}
 
     store = JobStore(tmp_path / "runtime.db")
+    approval = _create_runtime_approval(
+        store,
+        approval_id="approval-repeat",
+        task_id="ozon-elastic-apply",
+        apply_params={"plan_run_id": "plan_1"},
+    )
     service = JobService(
         store=store,
         workflow_runner=WorkflowRunner(
@@ -307,15 +338,13 @@ def test_job_service_blocks_repeated_auto_runtime_approval_apply(tmp_path: Path)
         ),
         data_dir=tmp_path / "data",
     )
-    first = service.submit(task_id="ozon-elastic-apply", params={"confirmed_by_user": True, "plan_run_id": "plan_1"})
+    service.approve(approval.approval_id)
+    first = service.submit_approval_apply(approval.approval_id)
     first_result = service.run(first.job_id)
-    second = service.submit(task_id="ozon-elastic-apply", params={"confirmed_by_user": True, "plan_run_id": "plan_1"})
-    second_result = service.run(second.job_id)
 
     assert first_result.ok is True
-    assert second.params["approval_id"] == first.params["approval_id"]
-    assert second_result.ok is False
-    assert second_result.status == "approval_not_available"
+    with pytest.raises(RuntimeError, match="expected `approved`"):
+        service.submit_approval_apply(approval.approval_id)
     approval = store.get_approval(first.params["approval_id"])
     assert approval is not None
     assert approval.status == "applied"
@@ -334,6 +363,12 @@ def test_job_service_recovery_runs_safe_verify_job_for_unknown_apply(tmp_path: P
         return {"run_id": "verify_job_test", "overall_status": "ok", "artifacts": {}}
 
     store = JobStore(tmp_path / "runtime.db")
+    approval = _create_runtime_approval(
+        store,
+        approval_id="approval-recovery",
+        task_id="approved-cards-batch-apply",
+        apply_params={"internal_skus": ["sku-1"]},
+    )
     service = JobService(
         store=store,
         workflow_runner=WorkflowRunner(
@@ -347,10 +382,8 @@ def test_job_service_recovery_runs_safe_verify_job_for_unknown_apply(tmp_path: P
         ),
         data_dir=tmp_path / "data",
     )
-    job = service.submit(
-        task_id="apply-approved-cards",
-        params={"confirmed_by_user": True, "internal_skus": ["sku-1"]},
-    )
+    service.approve(approval.approval_id)
+    job = service.submit_approval_apply(approval.approval_id)
 
     apply_result = service.run(job.job_id)
     recovery = service.recover_runtime_approvals(run_verify=True)
@@ -476,8 +509,13 @@ def test_job_service_can_cancel_queued_job(tmp_path: Path) -> None:
 
 
 def test_job_service_can_cancel_job_waiting_for_confirmation(tmp_path: Path) -> None:
-    service = JobService(store=JobStore(tmp_path / "runtime.db"), data_dir=tmp_path / "data")
-    job = service.submit(task_id="ozon-elastic-apply", params={"plan_run_id": "plan-1"})
+    store = JobStore(tmp_path / "runtime.db")
+    service = JobService(store=store, data_dir=tmp_path / "data")
+    job = store.create_job(
+        task_id="ozon-elastic-apply",
+        params={"plan_run_id": "plan-1"},
+        status="queued",
+    )
     waiting = service.run(job.job_id)
 
     result = service.cancel(job.job_id, reason="owner_declined")

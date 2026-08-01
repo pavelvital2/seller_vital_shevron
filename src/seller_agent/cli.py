@@ -2101,6 +2101,18 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Required explicit confirmation for marketplace write operations.",
     )
+    registry = default_task_registry()
+    for command_name, command_parser in subparsers.choices.items():
+        try:
+            task = registry.get(command_name)
+        except KeyError:
+            continue
+        if task.is_write:
+            command_parser.add_argument(
+                "--approval-id",
+                default="",
+                help="Existing approved seller.approval_package.v1 record to apply.",
+            )
     return parser
 
 
@@ -2122,20 +2134,6 @@ def _json_object_arg(raw: str, label: str) -> dict[str, object]:
         raise ValueError(f"{label} must be a JSON object") from exc
     if not isinstance(value, dict):
         raise ValueError(f"{label} must be a JSON object")
-    return value
-
-
-def _json_safe_cli_value(value: object) -> object:
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, Decimal):
-        return str(value)
-    if isinstance(value, set):
-        return sorted(_json_safe_cli_value(item) for item in value)
-    if isinstance(value, (list, tuple)):
-        return [_json_safe_cli_value(item) for item in value]
-    if isinstance(value, dict):
-        return {str(key): _json_safe_cli_value(item) for key, item in value.items()}
     return value
 
 
@@ -2176,20 +2174,27 @@ def _enqueue_cli_write(args: argparse.Namespace) -> int | None:
         os.environ.get("VITAL_SHEVRON_RUNTIME_DB") or DEFAULT_RUNTIME_DB
     )
     data_dir = Path(getattr(args, "data_dir", "data"))
-    excluded = {"command", "data_dir", "runtime_db", "no_runtime_db"}
-    params = {
-        key: _json_safe_cli_value(value)
-        for key, value in vars(args).items()
-        if key not in excluded and value is not None
-    }
+    approval_id = str(getattr(args, "approval_id", "") or "").strip()
+    if not approval_id:
+        result = {
+            "ok": False,
+            "status": "blocked",
+            "blocked_reason": "approval_id_required",
+            "task": task.name,
+            "message": (
+                "Write command requires an existing approved "
+                "seller.approval_package.v1 approval_id."
+            ),
+        }
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 2
     store = JobStore(runtime_db)
     service = JobService(store=store, data_dir=data_dir, runtime_db=runtime_db)
     try:
-        job = service.submit(
-            task_id=task.name,
-            params=params,
+        job = service.submit_approval_apply(
+            approval_id,
             actor="cli",
-            source="cli",
+            expected_task_id=task.name,
         )
     except (KeyError, RuntimeError, ValueError) as exc:
         result = {
@@ -2267,12 +2272,36 @@ def main(argv: list[str] | None = None) -> int:
                 params = _json_object_arg(args.params_json, "jobs submit --params-json")
             except ValueError as exc:
                 parser.error(str(exc))
-            job = service.submit(
-                task_id=args.task,
-                params=params,
-                actor=args.actor,
-                source=args.source,
-            )
+            try:
+                task = default_task_registry().get(args.task)
+                if task.is_write:
+                    approval_id = str(params.get("approval_id") or "").strip()
+                    if not approval_id:
+                        raise RuntimeError(
+                            "Write jobs submit requires an existing approved approval_id."
+                        )
+                    job = service.submit_approval_apply(
+                        approval_id,
+                        actor=args.actor,
+                        expected_task_id=task.name,
+                    )
+                else:
+                    job = service.submit(
+                        task_id=task.name,
+                        params=params,
+                        actor=args.actor,
+                        source=args.source,
+                    )
+            except (KeyError, RuntimeError, ValueError) as exc:
+                result = {
+                    "ok": False,
+                    "status": "blocked",
+                    "blocked_reason": "runtime_enqueue_failed",
+                    "message": " ".join(str(exc).split())[:500],
+                    "artifacts": {"runtime_db": str(runtime_db)},
+                }
+                print(json.dumps(result, ensure_ascii=False, indent=2))
+                return 2
             result = {"job": asdict(job), "artifacts": {"runtime_db": str(runtime_db)}}
         elif args.action == "run":
             if not args.job_id:
