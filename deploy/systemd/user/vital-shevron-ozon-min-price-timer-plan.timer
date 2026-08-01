@@ -1,0 +1,10 @@
+[Unit]
+Description=Check Ozon minimum-price timer daily
+
+[Timer]
+OnCalendar=*-*-* 08:30:00 Europe/Moscow
+Persistent=true
+Unit=vital-shevron-ozon-min-price-timer-plan.service
+
+[Install]
+WantedBy=timers.target

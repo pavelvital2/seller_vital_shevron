@@ -60,7 +60,28 @@ def run_ozon_pricing_margin(
         start=start,
         end=end,
     )
+    period_comparison: dict[str, Any] = {}
+    for days in (15, 30):
+        comparison_start = end - timedelta(days=days - 1)
+        metrics_for_days = period_metrics if days == period_days else collect_ozon_period_metrics(
+            adapter=ozon,
+            catalog_rows=catalog_rows,
+            start=comparison_start,
+            end=end,
+        )
+        period_comparison[str(days)] = _period_snapshot(
+            metrics_for_days,
+            date_from=comparison_start,
+            date_to=end,
+        )
     price_items = [normalize_ozon_price_item(row) for row in ozon.fetch_product_info_prices()]
+    stock_by_key: dict[str, int] = {}
+    stock_confirmed = False
+    try:
+        stock_by_key = _ozon_stock_by_key(ozon.fetch_stock_on_warehouses())
+        stock_confirmed = True
+    except Exception as exc:  # noqa: BLE001 - stock gate is reported explicitly.
+        warnings_from_stock = f"Ozon stock gate не подтвержден: {exc.__class__.__name__}"
 
     summary_metrics = period_metrics.get("summary") or {}
     buyout_units = int(summary_metrics.get("buyout_units") or 0)
@@ -79,6 +100,8 @@ def run_ozon_pricing_margin(
     )
 
     warnings = list(period_metrics.get("warnings") or [])
+    if not stock_confirmed:
+        warnings.append(warnings_from_stock)
     if buyout_units <= 0 or physical_pieces <= 0 or gross <= 0:
         warnings.append("Недостаточно завершённых продаж Ozon для надёжного расчёта цен.")
     reconciliation = next(
@@ -139,7 +162,13 @@ def run_ozon_pricing_margin(
         else []
     )
     ladder_by_pack = {int(row["pack_qty"]): row for row in price_ladder}
-    products = _product_rows(catalog_rows, price_items, ladder_by_pack)
+    products = _product_rows(
+        catalog_rows,
+        price_items,
+        ladder_by_pack,
+        stock_by_key=stock_by_key,
+        stock_confirmed=stock_confirmed,
+    )
     products_without_prices = sum(1 for row in products if not row["price_data_found"])
     if products_without_prices:
         warnings.append(
@@ -166,6 +195,11 @@ def run_ozon_pricing_margin(
         "model_variable_rate_pct": _percent(model_variable_rate),
         "retained_share_pct": _percent(retained_share),
         "calculation_ready": calculation_ready,
+        "stock_gate_confirmed": stock_confirmed,
+        "products_with_stock": sum(1 for row in products if row["stock_gate"] == "pass"),
+        "products_without_stock": sum(1 for row in products if row["stock_gate"] == "blocked_no_stock"),
+        "products_in_actions": sum(1 for row in products if row["in_action"] is True),
+        "action_membership_unconfirmed": sum(1 for row in products if row["in_action"] is None),
     }
     overall_status = "warning" if warnings else "ok"
 
@@ -199,6 +233,7 @@ def run_ozon_pricing_margin(
             "expenses": expense_rows,
             "price_ladder": price_ladder,
             "products": products,
+            "period_comparison": period_comparison,
             "warnings": warnings,
             "sources": period_metrics.get("sources") or [],
         },
@@ -209,7 +244,7 @@ def run_ozon_pricing_margin(
         "started_at": started_at.isoformat(timespec="seconds"),
         "overall_status": overall_status,
         "marketplace": "ozon",
-        "mode": "read_only",
+        "mode": "dry_run",
         "inputs": {
             "unit_cost": _money(cost),
             "target_margin": _money(margin),
@@ -218,6 +253,8 @@ def run_ozon_pricing_margin(
         "metrics": metrics,
         "expenses": expense_rows,
         "price_ladder": price_ladder,
+        "period_comparison": period_comparison,
+        "products": products,
         "warnings": warnings,
         "artifacts": {
             "report": str(report_path),
@@ -231,7 +268,7 @@ def run_ozon_pricing_margin(
         run_dir=run_dir,
         summary=summary,
         task="ozon-pricing-margin",
-        mode="read_only",
+        mode="dry_run",
         risk="low",
         marketplaces=["ozon"],
         inputs={
@@ -241,8 +278,8 @@ def run_ozon_pricing_margin(
             "date_from": start.isoformat(),
             "date_to": end.isoformat(),
         },
-        lifecycle_status="closed",
-        closed=True,
+        lifecycle_status="pending_review",
+        closed=False,
     )
     summary["artifacts"].update(manifest_artifacts)
     write_json(run_dir / "summary.json", summary)
@@ -296,7 +333,11 @@ def _product_rows(
     catalog_rows: list[dict[str, str]],
     price_items: list[dict[str, Any]],
     ladder_by_pack: dict[int, dict[str, Any]],
+    *,
+    stock_by_key: dict[str, int] | None = None,
+    stock_confirmed: bool = False,
 ) -> list[dict[str, Any]]:
+    stock_by_key = stock_by_key or {}
     price_by_key: dict[str, dict[str, Any]] = {}
     for item in price_items:
         for field in ("offer_id", "product_id", "sku"):
@@ -321,13 +362,24 @@ def _product_rows(
         )
         pack_qty = _pack_qty(row)
         target = ladder_by_pack.get(pack_qty) or {}
+        stock_qty = max(
+            [
+                stock_by_key.get(str(value or "").strip(), 0)
+                for value in (row.get("ozon_offer_id"), row.get("ozon_product_id"), row.get("ozon_sku"))
+            ]
+            or [0]
+        )
+        marketing_price = _number_or_none(item.get("marketing_seller_price"))
+        current_price = _number_or_none(item.get("price"))
+        action_confirmed = item.get("marketing_seller_price") not in (None, "")
+        in_action = bool(marketing_price is not None and current_price is not None and marketing_price < current_price) if action_confirmed else None
         rows.append(
             {
                 "internal_sku": row.get("internal_sku") or "",
                 "product_name": row.get("product_name") or "",
                 "pack_qty": pack_qty,
                 "ozon_offer_id": row.get("ozon_offer_id") or "",
-                "current_price": _number_or_none(item.get("price")),
+                "current_price": current_price,
                 "current_old_price": _number_or_none(item.get("old_price")),
                 "current_min_price": _number_or_none(item.get("min_price")),
                 "current_marketing_seller_price": _number_or_none(item.get("marketing_seller_price")),
@@ -335,9 +387,48 @@ def _product_rows(
                 "target_discounted_price": target.get("discounted_price"),
                 "target_base_price": target.get("base_price"),
                 "price_data_found": bool(item),
+                "stock_qty": stock_qty if stock_confirmed else None,
+                "stock_gate": "pass" if stock_confirmed and stock_qty > 0 else "blocked_no_stock" if stock_confirmed else "not_confirmed",
+                "in_action": in_action,
+                "action_check_status": "confirmed_from_marketing_seller_price" if action_confirmed else "not_confirmed",
             }
         )
     return rows
+
+
+def _period_snapshot(metrics: dict[str, Any], *, date_from: date, date_to: date) -> dict[str, Any]:
+    summary = metrics.get("summary") if isinstance(metrics.get("summary"), dict) else {}
+    buyout_units = int(summary.get("buyout_units") or 0)
+    physical = int(summary.get("physical_pieces") or 0)
+    expenses = _decimal(summary.get("expenses"))
+    return {
+        "date_from": date_from.isoformat(),
+        "date_to": date_to.isoformat(),
+        "buyout_units": buyout_units,
+        "physical_pieces": physical,
+        "total_expenses": _money(expenses),
+        "expense_per_sold_product": _money(expenses / buyout_units) if buyout_units else None,
+        "expense_per_physical_item": _money(expenses / physical) if physical else None,
+        "warnings": list(metrics.get("warnings") or []),
+    }
+
+
+def _ozon_stock_by_key(rows: list[dict[str, Any]]) -> dict[str, int]:
+    result: dict[str, int] = {}
+    for row in rows:
+        quantity = int(
+            _decimal(
+                row.get("free_to_sell_amount")
+                or row.get("available_stock_count")
+                or row.get("present")
+                or row.get("quantity")
+            )
+        )
+        for key in ("sku", "offer_id", "product_id", "item_code"):
+            value = str(row.get(key) or "").strip()
+            if value:
+                result[value] = result.get(value, 0) + quantity
+    return result
 
 
 def _write_markdown(
@@ -356,7 +447,7 @@ def _write_markdown(
         f"- Период расходов: `{metrics['date_from']} - {metrics['date_to']}` ({metrics['period_days']} дней)",
         f"- Себестоимость одного физического изделия: **{_rub(unit_cost)}**",
         f"- Целевая маржа одного физического изделия: **{_rub(target_margin)}**",
-        "- Режим: `read-only`; цены Ozon не изменялись.",
+        "- Режим: `dry-run`; цены Ozon не изменялись.",
         "",
         "## Расходы Ozon",
         "",

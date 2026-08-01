@@ -25,6 +25,7 @@ ApprovalStatus = Literal[
     "applied",
     "verified",
     "closed",
+    "rejected",
 ]
 
 CardWorkStatus = Literal[
@@ -110,3 +111,14 @@ class CardWorkItem:
     checksum: str = ""
     closed_at: str = ""
     data: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class CardWorkEvent:
+    internal_sku: str
+    status_before: str
+    status_after: CardWorkStatus
+    created_at: str
+    reason: str = ""
+    data: dict[str, Any] = field(default_factory=dict)
+    event_id: int | None = None

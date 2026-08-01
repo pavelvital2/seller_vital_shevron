@@ -48,6 +48,7 @@ ACTIVE_OZON_SUPPLY_STATES = [
 ]
 ACTIVE_WB_SUPPLY_STATUS_IDS = {1, 2, 3, 4, 6}
 TARGET_PRODUCT_GROUPS = {"chev", "nash", "loop"}
+OZON_STARS_DEACTIVATED_AT_UTC = datetime.fromisoformat("2026-07-29T13:56:22.594+00:00")
 
 
 def _safe_read_json(path: Path) -> Any | None:
@@ -372,6 +373,26 @@ def _filter_rows_for_day(rows: list[dict[str, Any]], day: str) -> list[dict[str,
     return rows_without_dates
 
 
+def _filter_communication_rows_for_day(rows: list[dict[str, Any]], day: str) -> list[dict[str, Any]]:
+    target = date.fromisoformat(day)
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        raw = _row_date_value(row)
+        if not raw:
+            continue
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            if raw[:10] == day:
+                result.append(row)
+            continue
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=ZoneInfo("Europe/Moscow"))
+        if parsed.astimezone(ZoneInfo("Europe/Moscow")).date() == target:
+            result.append(row)
+    return result
+
+
 def _extract_ozon_analytics(response: dict[str, Any], metrics: list[str]) -> dict[str, Any]:
     result = response.get("result") if isinstance(response, dict) else {}
     result = result if isinstance(result, dict) else {}
@@ -401,6 +422,8 @@ def _extract_ozon_analytics(response: dict[str, Any], metrics: list[str]) -> dic
     return {
         "revenue": _money(values.get("revenue", 0.0)),
         "ordered_units": int(values.get("ordered_units", 0.0)),
+        "cancellations": int(values.get("cancellations", 0.0)) if "cancellations" in values else None,
+        "metrics_available": sorted(values),
         "rows": len(result.get("data") or []) if isinstance(result.get("data"), list) else 0,
     }
 
@@ -520,6 +543,25 @@ def _summarize_ozon_fbo_postings(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _summarize_ozon_cancellations(
+    *,
+    analytics_day: dict[str, Any],
+    fbo_fallback: dict[str, Any],
+) -> dict[str, Any]:
+    if "cancellations" in set(analytics_day.get("metrics_available") or []):
+        return {
+            "status": "ok",
+            "source": "/v1/analytics/data metric=cancellations dimension=day",
+            "cancelled_units": int(analytics_day.get("cancellations") or 0),
+            "method": "exact_daily_analytics_metric",
+        }
+    return {
+        **fbo_fallback,
+        "status": "warning",
+        "method": "fbo_postings_fallback_not_exact_by_cancellation_time",
+    }
+
+
 def _summarize_ozon_finance_buyouts(
     *,
     operations: list[dict[str, Any]],
@@ -575,6 +617,19 @@ def _ozon_services_amount(row: dict[str, Any]) -> float:
     return sum(_first_number(service, ("price",)) for service in services if isinstance(service, dict))
 
 
+def _parse_ozon_timestamp(value: Any) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=ZoneInfo("UTC"))
+    return parsed.astimezone(ZoneInfo("UTC"))
+
+
 def _summarize_ozon_finance_expenses(
     *,
     operations: list[dict[str, Any]],
@@ -600,6 +655,14 @@ def _summarize_ozon_finance_expenses(
         "stars_membership": 0.0,
         "other": 0.0,
     }
+    stars_breakdown = {
+        "deactivated_at_utc": OZON_STARS_DEACTIVATED_AT_UTC.isoformat(),
+        "total": {"rows": 0, "amount": 0.0},
+        "orders_before_deactivation": {"rows": 0, "amount": 0.0},
+        "orders_during_first_24h": {"rows": 0, "amount": 0.0},
+        "orders_after_first_24h": {"rows": 0, "amount": 0.0},
+        "missing_order_date": {"rows": 0, "amount": 0.0},
+    }
     operation_counts: Counter[str] = Counter()
     for row in rows:
         operation_type = str(row.get("operation_type") or "")
@@ -623,6 +686,20 @@ def _summarize_ozon_finance_expenses(
             expenses["crossdocking"] += amount_expense
         elif operation_type == "StarsMembership":
             expenses["stars_membership"] += amount_expense
+            stars_breakdown["total"]["rows"] += 1
+            stars_breakdown["total"]["amount"] += amount_expense
+            posting = row.get("posting") if isinstance(row.get("posting"), dict) else {}
+            order_date = _parse_ozon_timestamp(posting.get("order_date"))
+            if order_date is None:
+                bucket = "missing_order_date"
+            elif order_date < OZON_STARS_DEACTIVATED_AT_UTC:
+                bucket = "orders_before_deactivation"
+            elif order_date < OZON_STARS_DEACTIVATED_AT_UTC + timedelta(days=1):
+                bucket = "orders_during_first_24h"
+            else:
+                bucket = "orders_after_first_24h"
+            stars_breakdown[bucket]["rows"] += 1
+            stars_breakdown[bucket]["amount"] += amount_expense
         elif amount < 0 or services_amount < 0:
             expenses["other"] += max(amount_expense, service_expense)
 
@@ -635,14 +712,36 @@ def _summarize_ozon_finance_expenses(
     return {
         "status": "ok",
         "source": "/v3/finance/transaction/list",
-        "source_note": "Ozon расходы рассчитаны по всем финансовым операциям за дату операции; реклама CPC входит отдельной операцией.",
+        "source_note": (
+            "Ozon расходы рассчитаны по всем финансовым операциям за дату операции; "
+            "реклама CPC входит отдельной операцией. StarsMembership дополнительно "
+            "разделен по дате создания заказа относительно отключения 2026-07-29."
+        ),
         "operations_checked": len(operations),
         "operations_in_day": len(rows),
         "operation_counts": dict(sorted(operation_counts.items())),
         "gross_amount": _money(gross_amount),
         "net_amount": _money(net_amount),
         "total_expenses": _money(total_expenses),
+        "expense_completeness": {
+            "status": "ok" if abs(reconciliation_delta) < 0.01 else "warning",
+            "reconciliation_delta": _money(reconciliation_delta),
+            "classified_before_reconciliation": _money(known_expenses),
+            "total_from_gross_minus_net": _money(total_expenses),
+            "all_finance_operations_for_day_loaded": True,
+        },
         "expenses": {key: _money(value) for key, value in expenses.items()},
+        "stars_membership_breakdown": {
+            key: (
+                {
+                    "rows": int(value["rows"]),
+                    "amount": _money(value["amount"]),
+                }
+                if isinstance(value, dict)
+                else value
+            )
+            for key, value in stars_breakdown.items()
+        },
     }
 
 
@@ -735,6 +834,8 @@ def _summarize_wb_finance_expenses(
     gross_amount = sum(_first_number(row, ("retailAmountSum",)) for row in reports)
     for_pay = sum(_first_number(row, ("forPaySum",)) for row in reports)
     bank_payment = sum(_first_number(row, ("bankPaymentSum",)) for row in reports)
+    advertising_source_loaded = ad_spend is not None
+    acquiring_source_loaded = acquiring_reports is not None
     advertising = float(ad_spend or 0)
     acquiring_reports = acquiring_reports or []
     acquiring = sum(
@@ -813,6 +914,13 @@ def _summarize_wb_finance_expenses(
         "total_credits_and_adjustments": _money(total_credits),
         "cash_after_adjustments_and_ads": _money(bank_payment - acquiring - advertising),
         "bank_payment_reconciliation_delta": _money(reconciliation_delta),
+        "expense_completeness": {
+            "status": "ok" if abs(reconciliation_delta) < 0.01 else "warning",
+            "reconciliation_delta": _money(reconciliation_delta),
+            "finance_report_loaded": bool(reports),
+            "acquiring_source_loaded": acquiring_source_loaded,
+            "advertising_source_loaded": advertising_source_loaded,
+        },
         "expenses": {key: _money(value) for key, value in expenses.items()},
         "credits_and_adjustments": {key: _money(value) for key, value in credits.items()},
     }
@@ -882,7 +990,7 @@ def _count_wb_period_items(
     return {
         "status": "ok",
         "source": f"feedbacks-api.wildberries.ru/{item_type}",
-        "count": len(_filter_rows_for_day(rows, day)),
+        "count": len(_filter_communication_rows_for_day(rows, day)),
         "rows_checked": len(rows),
     }
 
@@ -1063,6 +1171,15 @@ def _extract_ozon_rows(response: Any, *keys: str) -> list[dict[str, Any]]:
     return []
 
 
+def _extract_nested_value(response: Any, *keys: str) -> Any:
+    current = response
+    for key in keys:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
 def _extract_ozon_attention_count(value: Any) -> int | None:
     if isinstance(value, dict):
         for key in (
@@ -1087,11 +1204,17 @@ def _extract_ozon_attention_count(value: Any) -> int | None:
     return _extract_count(value)
 
 
-def _count_ozon_rows_for_day(rows: list[dict[str, Any]], day: str) -> dict[str, Any]:
+def _count_ozon_rows_for_day(
+    rows: list[dict[str, Any]],
+    day: str,
+    *,
+    complete: bool = True,
+) -> dict[str, Any]:
     return {
-        "status": "ok",
-        "count": len(_filter_rows_for_day(rows, day)),
+        "status": "ok" if complete else "warning",
+        "count": len(_filter_communication_rows_for_day(rows, day)),
         "rows_checked": len(rows),
+        "complete": complete,
     }
 
 
@@ -1107,6 +1230,8 @@ def _collect_ozon_communications(
     questions: list[dict[str, Any]] = []
     review_count: Any = None
     question_count: Any = None
+    review_complete = True
+    question_complete = True
 
     for name, call, rows_key in (
         ("review_count", adapter.fetch_review_count, ""),
@@ -1123,25 +1248,51 @@ def _collect_ozon_communications(
                 question_count = data
             elif name == "review_list":
                 reviews = _extract_ozon_rows(data, rows_key, "items", "data")
+                review_complete = len(reviews) < limit
+                last_id = str(_extract_nested_value(data, "result", "last_id") or "")
+                seen_last_ids: set[str] = set()
+                while len(reviews) >= limit and last_id and last_id not in seen_last_ids and len(reviews) < 2000:
+                    seen_last_ids.add(last_id)
+                    page_data = adapter.fetch_review_list(status="ALL", limit=limit, last_id=last_id)
+                    page = _extract_ozon_rows(page_data, rows_key, "items", "data")
+                    reviews.extend(page)
+                    next_last_id = str(_extract_nested_value(page_data, "result", "last_id") or "")
+                    if len(page) < limit:
+                        review_complete = True
+                        break
+                    last_id = next_last_id
             elif name == "question_list":
                 questions = _extract_ozon_rows(data, rows_key, "items", "data")
+                offset = len(questions)
+                question_complete = len(questions) < limit
+                while len(questions) >= limit and offset < 2000:
+                    page_data = adapter.fetch_question_list(status="ALL", limit=limit, offset=offset)
+                    page = _extract_ozon_rows(page_data, rows_key, "items", "data")
+                    questions.extend(page)
+                    offset += len(page)
+                    if len(page) < limit:
+                        question_complete = True
+                        break
+                    if not page:
+                        break
         except Exception as exc:  # noqa: BLE001
             official["methods"][name] = {"status": "error", "error": _safe_error(exc)}
 
     official_ok = any(item.get("status") == "ok" for item in official["methods"].values())
     if official_ok:
-        official["status"] = "ok"
+        communications_status = "ok" if review_complete and question_complete else "warning"
+        official["status"] = communications_status
         return {
-            "status": "ok",
+            "status": communications_status,
             "source": "Ozon Seller API",
             "official": official,
             "yesterday_feedbacks": {
-                **_count_ozon_rows_for_day(reviews, day),
+                **_count_ozon_rows_for_day(reviews, day, complete=review_complete),
                 "source": "/v1/review/list",
                 "rows_checked": len(reviews),
             },
             "yesterday_questions": {
-                **_count_ozon_rows_for_day(questions, day),
+                **_count_ozon_rows_for_day(questions, day, complete=question_complete),
                 "source": "/v1/question/list",
                 "rows_checked": len(questions),
             },
@@ -1240,7 +1391,7 @@ def _collect_business_snapshot(
 
     if credentials.ozon_seller:
         ozon = OzonSellerAdapter(credentials.ozon_seller)
-        metrics = ["revenue", "ordered_units"]
+        metrics = ["revenue", "ordered_units", "cancellations"]
         ozon_orders: dict[str, Any] = {
             "status": "ok",
             "source": "/v1/analytics/data",
@@ -1321,6 +1472,11 @@ def _collect_business_snapshot(
             except Exception as exc:  # noqa: BLE001
                 business["ozon"]["fbo_postings"] = _source_error("/v2/posting/fbo/list", exc)
 
+            business["ozon"]["cancellations"] = _summarize_ozon_cancellations(
+                analytics_day=ozon_orders.get("yesterday") if isinstance(ozon_orders.get("yesterday"), dict) else {},
+                fbo_fallback=business["ozon"]["fbo_postings"],
+            )
+
             business["ozon"]["communications"] = _collect_ozon_communications(
                 adapter=ozon,
                 run_dir=run_dir,
@@ -1341,6 +1497,7 @@ def _collect_business_snapshot(
                 "error": "missing credentials",
             }
             business["ozon"]["fbo_postings"] = {"status": "skipped", "source": "/v2/posting/fbo/list", "error": "missing credentials"}
+            business["ozon"]["cancellations"] = {"status": "skipped", "source": "/v1/analytics/data", "error": "missing credentials"}
             business["ozon"]["communications"] = {
                 "status": "skipped",
                 "source": "Ozon Seller API",
@@ -2161,7 +2318,7 @@ EXPENSE_LABELS = {
     "advertising": "Реклама",
     "storage": "Хранение/размещение",
     "crossdocking": "Кросс-докинг",
-    "stars_membership": "Звездные товары/промо",
+    "stars_membership": "Звёздные товары: финансовые удержания",
     "marketplace_deductions_before_logistics": "Комиссия/удержание до логистики",
     "acceptance": "Приемка",
     "deductions": "Удержания",
@@ -2184,11 +2341,55 @@ def _expense_breakdown_lines(label: str, section: dict[str, Any], keys: list[str
     if section.get("status") != "ok":
         return [f"- {label}: не подтверждено ({_source_issue(section)})"]
     lines = [f"- {label}: всего расходов `{_format_money_precise(section.get('total_expenses'))}`"]
+    completeness = section.get("expense_completeness") if isinstance(section.get("expense_completeness"), dict) else {}
+    if completeness.get("status") == "warning":
+        lines.append(
+            f"  - полнота требует сверки, нераспределенная разница: "
+            f"`{_format_money_precise(completeness.get('reconciliation_delta'))}`"
+        )
     for key in keys:
         value = _expense_value(section, key)
         if value in (None, "", 0, 0.0):
             continue
-        lines.append(f"  - {EXPENSE_LABELS.get(key, key)}: `{_format_money_precise(value)}`")
+        if key != "stars_membership":
+            lines.append(f"  - {EXPENSE_LABELS.get(key, key)}: `{_format_money_precise(value)}`")
+            continue
+        breakdown = (
+            section.get("stars_membership_breakdown")
+            if isinstance(section.get("stars_membership_breakdown"), dict)
+            else {}
+        )
+        before = breakdown.get("orders_before_deactivation") or {}
+        first_24h = breakdown.get("orders_during_first_24h") or {}
+        after_24h = breakdown.get("orders_after_first_24h") or {}
+        missing = breakdown.get("missing_order_date") or {}
+        if breakdown and not int(after_24h.get("rows") or 0):
+            stars_label = "Звёздные товары: поздние и переходные удержания после отключения"
+        else:
+            stars_label = EXPENSE_LABELS.get(key, key)
+        lines.append(f"  - {stars_label}: `{_format_money_precise(value)}`")
+        if breakdown:
+            lines.append(
+                "    - за заказы до отключения: "
+                f"`{_format_money_precise(before.get('amount'))}` / `{_format_int(before.get('rows'))}` операций"
+            )
+            lines.append(
+                "    - за заказы в первые 24 часа после отключения: "
+                f"`{_format_money_precise(first_24h.get('amount'))}` / `{_format_int(first_24h.get('rows'))}` операций"
+            )
+            lines.append(
+                "    - за заказы после полных 24 часов: "
+                f"`{_format_money_precise(after_24h.get('amount'))}` / `{_format_int(after_24h.get('rows'))}` операций"
+            )
+            if int(missing.get("rows") or 0):
+                lines.append(
+                    "    - без подтверждённой даты заказа: "
+                    f"`{_format_money_precise(missing.get('amount'))}` / `{_format_int(missing.get('rows'))}` операций"
+                )
+            if not int(after_24h.get("rows") or 0):
+                lines.append(
+                    "    - после полных 24 часов удержаний нет; строка не подтверждает повторное подключение программы"
+                )
     return lines
 
 
@@ -2280,6 +2481,7 @@ def _write_seller_v3_report(path: Path, result: dict[str, Any]) -> None:
     ozon_buyouts = ozon.get("finance_buyouts", {})
     ozon_expenses = ozon.get("finance_expenses", {})
     ozon_fbo = ozon.get("fbo_postings", {})
+    ozon_cancellations = ozon.get("cancellations", ozon_fbo)
     wb_orders = wb.get("orders", {})
     wb_sales = wb.get("sales", {})
     wb_expenses = wb.get("finance_expenses", {})
@@ -2305,7 +2507,7 @@ def _write_seller_v3_report(path: Path, result: dict[str, Any]) -> None:
         ("Ozon заказы", ozon_orders),
         ("Ozon выкупы", ozon_buyouts),
         ("Ozon расходы", ozon_expenses),
-        ("Ozon FBO отмены", ozon_fbo),
+        ("Ozon отмены", ozon_cancellations),
         ("Ozon отзывы/вопросы", ozon_communications),
         ("Ozon остатки", ozon_stocks),
         ("WB заказы", wb_orders),
@@ -2360,7 +2562,7 @@ def _write_seller_v3_report(path: Path, result: dict[str, Any]) -> None:
         f"| Заказы, ₽ | {_metric_money(ozon_orders_day.get('revenue'))} | {_metric_money(wb_orders_day.get('amount'))} |",
         f"| Выкупы, шт. | {_metric_int(ozon_buyouts.get('buyout_units')) if ozon_buyouts.get('status') == 'ok' else 'не подтверждено'} | {_metric_int(wb_sales_day.get('sales_rows')) if wb_sales.get('status') == 'ok' else 'не подтверждено'} |",
         f"| Выкупы, ₽ | {_metric_money(ozon_buyouts.get('buyout_amount')) if ozon_buyouts.get('status') == 'ok' else 'не подтверждено'} | {_metric_money(wb_sales_day.get('sales_amount')) if wb_sales.get('status') == 'ok' else 'не подтверждено'} |",
-        f"| Отмены, шт. | {_metric_int(ozon_fbo.get('cancelled_units')) if ozon_fbo.get('status') in {'ok', 'warning'} else 'не подтверждено'} | {_metric_int(wb_orders_day.get('cancelled_orders'))} |",
+        f"| Отмены, шт. | {_metric_int(ozon_cancellations.get('cancelled_units')) if ozon_cancellations.get('status') in {'ok', 'warning'} else 'не подтверждено'} | {_metric_int(wb_orders_day.get('cancelled_orders'))} |",
         "",
         "## Деньги И Расходы За Период",
         "",

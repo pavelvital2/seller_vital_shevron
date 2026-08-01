@@ -1,10 +1,9 @@
 [Unit]
-Description=Vital Shevron daily Ozon and WB liquidation control reminder
+Description=Queue Vital Shevron daily Ozon and WB liquidation control
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=oneshot
 WorkingDirectory=/home/pavel/projects/seller_vital_shevron
-Environment=VITAL_SHEVRON_TELEGRAM_BOT_TOKEN_FILE=/home/pavel/.secrets/vital_shevron_telegram_bot_token
 ExecStart=/usr/bin/env bash /home/pavel/projects/seller_vital_shevron/scripts/monitoring/send_liquidation_daily_reminder.sh

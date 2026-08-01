@@ -45,6 +45,7 @@ SUPPORTED_COMMANDS = {
     "/ozon-stock-supplies",
     "/ozon-work-plan",
     "/ozon-pricing-margin",
+    "/wb-pricing-margin",
     "/ozon",
     "/period-report",
     "/period-report-ozon",
@@ -76,6 +77,7 @@ TELEGRAM_TITLES = {
     "/ozon-stock-supplies": "Остатки и поставки Ozon",
     "/ozon-work-plan": "В работу Ozon",
     "/ozon-pricing-margin": "Цены и маржа Ozon",
+    "/wb-pricing-margin": "Цены и маржа WB",
     "/period-report": "Отчёт за период",
     "/period-report-ozon": "Ozon: отчёт за период",
     "/period-report-wb": "Wildberries: отчёт за период",
@@ -143,6 +145,16 @@ def handle_telegram_command(
     ):
         return _ozon_pricing_margin_runtime_required(message, state=active_conversation)
     if (
+        active_conversation.get("stage") == "wb_pricing_cost_input"
+        and not _is_explicit_command_or_button(message)
+    ):
+        return _wb_pricing_cost_input(message, state=active_conversation)
+    if (
+        active_conversation.get("stage") == "wb_pricing_margin_input"
+        and not _is_explicit_command_or_button(message)
+    ):
+        return _wb_pricing_margin_runtime_required(message, state=active_conversation)
+    if (
         active_conversation.get("stage") == "wb_manual_scheme_input"
         and not _is_explicit_command_or_button(message)
     ):
@@ -185,6 +197,8 @@ def handle_telegram_command(
         return _ozon_work_plan_start()
     if command in {"/ozon-pricing-margin", "/ozon_pricing_margin"}:
         return _ozon_pricing_margin_start()
+    if command in {"/wb-pricing-margin", "/wb_pricing_margin"}:
+        return _wb_pricing_margin_start()
     if command in {"/wb-actions", "/wb_actions", "/wb-actions-70-55-55"}:
         return _wb_actions_plan(data_dir=data_dir, credentials=credentials)
     if command in {"/wb-actions-manual", "/wb_actions_manual"}:
@@ -259,7 +273,7 @@ def handle_telegram_command(
     if command == "/runs":
         return _runs(data_dir=data_dir)
     if command == "/approvals":
-        return _approvals(data_dir=data_dir)
+        return _approvals(data_dir=data_dir, runtime_db=runtime_db)
     return TelegramCommandResult(
         command=command,
         ok=False,
@@ -295,6 +309,10 @@ def handle_telegram_callback(
         return _ozon_pricing_margin_period_callback(data)
     if data == "opm_cancel":
         return _ozon_pricing_margin_cancel()
+    if data.startswith("wpm_period:"):
+        return _wb_pricing_margin_period_callback(data)
+    if data == "wpm_cancel":
+        return _wb_pricing_margin_cancel()
     if data.startswith("ozwp_mode:"):
         return _ozon_work_plan_mode_callback(data)
     if data.startswith("ozwp_run:"):
@@ -405,6 +423,7 @@ WB_MENU_KEYBOARD: dict[str, Any] = {
         [{"text": "WB аналитика"}],
         [{"text": "Остатки и поставки"}],
         [{"text": "В работу"}],
+        [{"text": "Цены и маржа WB"}],
         [{"text": "Отчёт за период WB"}],
         [{"text": "WB входящие"}],
         [{"text": "Назад"}],
@@ -464,6 +483,7 @@ def _wb_menu() -> TelegramCommandResult:
             "- WB аналитика - видимость, позиции и динамика из Parser Data API.\n"
             "- Остатки и поставки - свежие остатки по складам, все активные поставки и аномалии WB.\n"
             "- В работу - производственный план WB по доступному объёму или периоду покрытия.\n"
+            "- Цены и маржа - dry-run расчёт расходов и ценовой сетки WB.\n"
             "- WB входящие - отзывы, вопросы и уведомления."
         ),
         reply_markup=WB_MENU_KEYBOARD,
@@ -671,7 +691,7 @@ def _ozon_pricing_margin_start() -> TelegramCommandResult:
             "Ozon: цены и маржа\n\n"
             "Выберите период, по которому бот рассчитает фактические расходы Ozon FBO. "
             "Используются только завершённые дни до вчерашнего включительно.\n\n"
-            "Первый вариант работает в режиме read-only: цены в Ozon не изменяются."
+            "Расчёт работает в режиме dry-run: цены в Ozon не изменяются."
         ),
         reply_markup={
             "inline_keyboard": [
@@ -787,6 +807,129 @@ def _ozon_pricing_margin_invalid(message: str) -> TelegramCommandResult:
         blocked_reason="invalid_ozon_pricing_margin_parameters",
         text=f"Ozon: цены и маржа\n\n{message}\n\nИзменений в Ozon не было.",
         reply_markup=OZON_MENU_KEYBOARD,
+    )
+
+
+def _wb_pricing_margin_start() -> TelegramCommandResult:
+    return TelegramCommandResult(
+        command="/wb-pricing-margin",
+        ok=True,
+        mode="input",
+        text=(
+            "WB: цены и маржа\n\n"
+            "Выберите период фактических расходов WB. Используются только завершённые дни "
+            "до вчерашнего включительно. Расчёт работает в режиме dry-run: цены WB не изменяются."
+        ),
+        reply_markup={
+            "inline_keyboard": [
+                [
+                    {"text": "15 дней", "callback_data": "wpm_period:15"},
+                    {"text": "30 дней", "callback_data": "wpm_period:30"},
+                ],
+                [{"text": "Отменить", "callback_data": "wpm_cancel"}],
+            ]
+        },
+    )
+
+
+def _wb_pricing_margin_period_callback(data: str) -> TelegramCommandResult:
+    raw_days = data.removeprefix("wpm_period:").strip()
+    period_days = int(raw_days) if raw_days.isdigit() else 0
+    if period_days not in {15, 30}:
+        return _wb_pricing_margin_invalid("Период повреждён. Запустите «Цены и маржа WB» заново.")
+    return TelegramCommandResult(
+        command="/wb-pricing-margin",
+        ok=True,
+        mode="input",
+        text=(
+            f"WB: цены и маржа\n\nПериод расходов: `{period_days} дней`.\n\n"
+            "Введите себестоимость одного физического изделия в рублях.\n\n"
+            "Пример: `85`. Для комплекта бот умножит сумму на `pack_qty`."
+        ),
+        reply_markup={"inline_keyboard": [[{"text": "Отменить", "callback_data": "wpm_cancel"}]]},
+        conversation_state={"stage": "wb_pricing_cost_input", "period_days": period_days},
+    )
+
+
+def _wb_pricing_cost_input(message: str, *, state: dict[str, Any]) -> TelegramCommandResult:
+    period_days = _int_value(state.get("period_days"))
+    cost = _owner_decimal(message)
+    if period_days not in {15, 30}:
+        return _wb_pricing_margin_invalid("Период расчёта потерян. Запустите расчёт заново.")
+    if cost is None or cost <= 0 or cost > Decimal("100000"):
+        return TelegramCommandResult(
+            command="/wb-pricing-margin",
+            ok=False,
+            mode="input",
+            blocked_reason="invalid_wb_unit_cost",
+            text=(
+                "WB: цены и маржа\n\nВведите положительную себестоимость одного физического "
+                "изделия в рублях, например `85` или `85,50`."
+            ),
+            reply_markup={"inline_keyboard": [[{"text": "Отменить", "callback_data": "wpm_cancel"}]]},
+            conversation_state=state,
+        )
+    cost_text = _decimal_text(cost)
+    return TelegramCommandResult(
+        command="/wb-pricing-margin",
+        ok=True,
+        mode="input",
+        text=(
+            f"WB: цены и маржа\n\nСебестоимость изделия: `{cost_text} руб.`\n\n"
+            "Введите желаемую маржу с одного физического изделия в рублях.\n\n"
+            "После ввода Job Worker соберёт расходы WB и сформирует dry-run расчёт."
+        ),
+        reply_markup={"inline_keyboard": [[{"text": "Отменить", "callback_data": "wpm_cancel"}]]},
+        conversation_state={
+            "stage": "wb_pricing_margin_input",
+            "period_days": period_days,
+            "unit_cost": cost_text,
+        },
+    )
+
+
+def _wb_pricing_margin_runtime_required(message: str, *, state: dict[str, Any]) -> TelegramCommandResult:
+    margin = _owner_decimal(message)
+    if margin is None or margin < 0 or margin > Decimal("100000"):
+        return TelegramCommandResult(
+            command="/wb-pricing-margin",
+            ok=False,
+            mode="input",
+            blocked_reason="invalid_wb_target_margin",
+            text=(
+                "WB: цены и маржа\n\nВведите неотрицательную маржу на одно физическое "
+                "изделие в рублях, например `60`."
+            ),
+            reply_markup={"inline_keyboard": [[{"text": "Отменить", "callback_data": "wpm_cancel"}]]},
+            conversation_state=state,
+        )
+    return TelegramCommandResult(
+        command="/wb-pricing-margin",
+        ok=False,
+        mode="input",
+        blocked_reason="runtime_jobs_required",
+        text="Расчёт должен быть поставлен в Job Worker.",
+        conversation_state=state,
+    )
+
+
+def _wb_pricing_margin_cancel() -> TelegramCommandResult:
+    return TelegramCommandResult(
+        command="/wb-pricing-margin",
+        ok=True,
+        text="WB: расчёт цен и маржи отменён. Изменений в кабинете не было.",
+        reply_markup=WB_MENU_KEYBOARD,
+    )
+
+
+def _wb_pricing_margin_invalid(message: str) -> TelegramCommandResult:
+    return TelegramCommandResult(
+        command="/wb-pricing-margin",
+        ok=False,
+        mode="input",
+        blocked_reason="invalid_wb_pricing_margin_parameters",
+        text=f"WB: цены и маржа\n\n{message}\n\nИзменений в WB не было.",
+        reply_markup=WB_MENU_KEYBOARD,
     )
 
 
@@ -3578,8 +3721,10 @@ def _truncate(value: str, limit: int) -> str:
     return value[: max(0, limit - 1)].rstrip() + "…"
 
 
-def _approvals(*, data_dir: Path) -> TelegramCommandResult:
-    status = run_approvals_status(data_dir=data_dir, limit=10)
+def _approvals(*, data_dir: Path, runtime_db: Path = DEFAULT_RUNTIME_DB) -> TelegramCommandResult:
+    if runtime_db == DEFAULT_RUNTIME_DB and data_dir != Path("data"):
+        runtime_db = data_dir.parent / "runtime" / "runtime.db"
+    status = run_approvals_status(data_dir=data_dir, runtime_db=runtime_db, limit=10)
     rows = status.get("rows") if isinstance(status.get("rows"), list) else []
     status_counts = status.get("status_counts") if isinstance(status.get("status_counts"), dict) else {}
     lines = [
@@ -3599,17 +3744,30 @@ def _approvals(*, data_dir: Path) -> TelegramCommandResult:
     lines.extend(["", "Последние строки:"])
     if not rows:
         lines.append("- нет строк")
+    keyboard: list[list[dict[str, str]]] = []
     for row in rows[:5]:
         lines.append(
             f"- `{row.get('kind')}` `{row.get('id')}`: `{row.get('lifecycle_status')}`"
         )
+        if row.get("kind") != "runtime":
+            continue
+        token = _approval_callback_token(str(row.get("id") or ""))
+        lifecycle = str(row.get("lifecycle_status") or "")
+        if lifecycle == "pending_review":
+            keyboard.append([
+                {"text": "Согласовать", "callback_data": f"apa:{token}"},
+                {"text": "Отклонить", "callback_data": f"apr:{token}"},
+            ])
+        elif lifecycle == "approved":
+            keyboard.append([{"text": "Применить", "callback_data": f"app:{token}"}])
+        elif lifecycle in {"applied", "applying_unknown"}:
+            keyboard.append([{"text": "Проверить", "callback_data": f"apv:{token}"}])
     if len(rows) > 5:
         lines.append(f"- ... еще `{len(rows) - 5}`")
     lines.extend(
         [
             "",
-            "Следующий шаг:",
-            "Закрывать или применять согласования можно только отдельным CLI/approved-flow, не из этого MVP.",
+            "Runtime-согласования управляются кнопками ниже; apply и verify выполняет только Job Worker.",
         ]
     )
     return TelegramCommandResult(
@@ -3617,7 +3775,14 @@ def _approvals(*, data_dir: Path) -> TelegramCommandResult:
         ok=True,
         text="\n".join(lines),
         artifacts=status.get("artifacts") if isinstance(status.get("artifacts"), dict) else {},
+        reply_markup={"inline_keyboard": keyboard} if keyboard else {},
     )
+
+
+def _approval_callback_token(approval_id: str) -> str:
+    import hashlib
+
+    return hashlib.sha256(approval_id.encode("utf-8")).hexdigest()[:16]
 
 
 def _runs(*, data_dir: Path) -> TelegramCommandResult:
@@ -4208,6 +4373,10 @@ def _normalize_button_command(command: str) -> str:
         "цены и маржа ozon": "/ozon-pricing-margin",
         "ozon цены и маржа": "/ozon-pricing-margin",
         "озон цены и маржа": "/ozon-pricing-margin",
+        "цены и маржа wb": "/wb-pricing-margin",
+        "цены и маржа вб": "/wb-pricing-margin",
+        "wb цены и маржа": "/wb-pricing-margin",
+        "вб цены и маржа": "/wb-pricing-margin",
         "отчет за период ozon": "/period-report-ozon",
         "ozon отчет за период": "/period-report-ozon",
         "wb акции": "/wb-actions",

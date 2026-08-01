@@ -65,6 +65,10 @@ description: "Use for Ozon Messenger and notification workflows: buyer chats, un
   daily limit, not inspect only the first page. Treat `total_unread_count`
   as a weak signal: report it, but rely on row `unread_count` plus
   `/v3/chat/history` unread messages for actions.
+- Confirmed 2026-07-31: `total_unread_count` may remain `1` while a full scan
+  of all 363 available chats and histories contains no unread row/message and
+  produces zero actions. In that case record the aggregate as stale, do not
+  issue an unscoped mark-read, and close only zero-action local verify tails.
 - If an approved `/ozon-inbox` package contains only `mark_chat_read` actions
   and no `send_chat_message` actions, do not run the LK/CDP send helper.
   Treat send as `skipped` and decide success from `/v2/chat/read` results plus

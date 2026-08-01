@@ -94,7 +94,8 @@ def test_bot_marketplace_buttons_show_submenus() -> None:
     assert ozon.reply_markup["keyboard"][3][0]["text"] == "В работу Ozon"
     assert wb.reply_markup["keyboard"][3][0]["text"] == "Остатки и поставки"
     assert wb.reply_markup["keyboard"][4][0]["text"] == "В работу"
-    assert wb.reply_markup["keyboard"][5][0]["text"] == "Отчёт за период WB"
+    assert wb.reply_markup["keyboard"][5][0]["text"] == "Цены и маржа WB"
+    assert wb.reply_markup["keyboard"][6][0]["text"] == "Отчёт за период WB"
 
 
 def test_bot_wb_work_plan_collects_value_and_confirms_parameters() -> None:
@@ -2195,6 +2196,36 @@ def test_ozon_pricing_margin_rejects_invalid_owner_numbers(tmp_path: Path) -> No
         conversation_state=cost.conversation_state,
     )
     assert navigation is None
+
+
+def test_wb_pricing_margin_dialog_and_runtime_queue(tmp_path: Path) -> None:
+    menu = dispatch_message("Вайлдберриз")
+    assert any(
+        button.get("text") == "Цены и маржа WB"
+        for row in menu.reply_markup["keyboard"]
+        for button in row
+    )
+
+    start = dispatch_message("Цены и маржа WB")
+    assert start.ok is True
+    period = dispatch_callback("wpm_period:15", data_dir=tmp_path)
+    assert period.conversation_state == {"stage": "wb_pricing_cost_input", "period_days": 15}
+    cost = dispatch_message("85", conversation_state=period.conversation_state)
+    assert cost.conversation_state["stage"] == "wb_pricing_margin_input"
+
+    runtime_db = tmp_path / "runtime.db"
+    queued = dispatch_runtime_job_message(
+        "50",
+        update_id=2004,
+        chat_id=123,
+        data_dir=tmp_path / "data",
+        runtime_db=runtime_db,
+        conversation_state=cost.conversation_state,
+    )
+    assert queued is not None and queued.ok is True
+    job = JobStore(runtime_db).list_jobs()[0]
+    assert job.task_id == "wb-pricing-margin"
+    assert job.params == {"unit_cost": "85", "target_margin": "50", "period_days": 15}
 
 
 def test_bot_jobs_show_and_cancel_runtime_jobs(tmp_path: Path) -> None:

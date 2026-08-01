@@ -1,0 +1,10 @@
+[Unit]
+Description=Queue WB incident audit on 2026-08-03
+
+[Timer]
+OnCalendar=2026-08-03 09:30:00 Europe/Moscow
+Persistent=true
+Unit=vital-shevron-wb-incident-audit.service
+
+[Install]
+WantedBy=timers.target

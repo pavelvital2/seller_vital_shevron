@@ -35,6 +35,8 @@ data/approved/*
 data/reports/*
 data/pricing/*
 data/locks/
+data/state/*
+!data/state/README.md
 runtime/
 !data/runs/README.md
 !data/pending/README.md

@@ -1,6 +1,6 @@
 # Ozon Cabinet Map
 
-Дата актуализации: 2026-06-18.
+Дата актуализации: 2026-07-31.
 
 ## Назначение
 
@@ -104,6 +104,7 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 | FBS заказы | `FBS` | `https://seller.ozon.ru/app/postings/fbs` | Не основной режим Vital; уточнить задачу |
 | Баланс и выплаты | `Финансы -> Баланс` | `https://seller.ozon.ru/app/finances/balance` | Finance API, если подключен |
 | Юнит-экономика / начисления | `Финансы -> Начисления` | `https://seller.ozon.ru/app/finances/accruals?tab=UNIT_ECONOMY` | Finance/API отчеты, если доступны |
+| Страхование товаров | `Финансы -> Страхование` | `https://seller.ozon.ru/app/finances/insurance` | LK billing-insurance status; подключение/отключение является финансовой write-операцией |
 | Продажи, графики, динамика | `Аналитика` | `https://seller.ozon.ru/app/analytics/graphs` | Seller API analytics, если доступен |
 | Поисковые запросы Ozon | `Аналитика -> Что продавать -> Поисковые запросы` | `https://seller.ozon.ru/app/analytics/what-to-sell/all-queries` | Search queries API может требовать Premium Pro |
 | Позиция в категории | `Аналитика -> Что продавать -> Конкурентная позиция` | `https://seller.ozon.ru/app/analytics/what-to-sell/competitive-position` | Обычно LK |
@@ -394,6 +395,43 @@ https://seller.ozon.ru/app/finances/accruals?tab=UNIT_ECONOMY
 - не использовать приблизительные тарифы, если можно взять прошлые финансовые
   документы или актуальный отчет;
 - источник тарифа/комиссии явно указывать в отчете.
+
+### Страхование товаров
+
+```text
+https://seller.ozon.ru/app/finances/insurance
+```
+
+Проверено 2026-07-31 в ЛК Vital Shevron:
+
+- `PendingActivation` отображается как `Ждёт подключения`;
+- поле `statusChangeDate` задает дату начала покрытия;
+- при `PendingActivation` интерфейс показывает только `Отключить`, потому что
+  заявка на подключение уже принята;
+- страхование начинает действовать со следующего дня;
+- тариф из уведомления Ozon: `0,0035%` стоимости товаров на складах и в пути
+  за каждый застрахованный день;
+- отключение требует точной юридически значимой фразы отказа и отдельного
+  owner approval.
+
+Read-only источники ЛК:
+
+```text
+GET /api/site/billing-insurance-reports/api/stock-insurance/status
+GET /api/site/billing-insurance-reports/api/stock-insurance/availability
+GET /api/site/billing-insurance-reports/api/stock-insurance/accruals
+```
+
+Write-маршруты после точного approval:
+
+```text
+POST /api/site/billing-insurance-reports/api/stock-insurance/subscription/activate
+POST /api/site/billing-insurance-reports/api/stock-insurance/subscription/deactivate
+```
+
+Обязательная проверка подключения: статус `Active` / `Подключена`, строка
+`Застраховано` за дату начала, ненулевая страховая стоимость и премия. Если
+статус уже `PendingActivation`, повторный activate не отправлять.
 
 ## Аналитика
 

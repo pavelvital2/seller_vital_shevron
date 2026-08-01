@@ -6,8 +6,12 @@ from pathlib import Path
 
 from seller_agent.config import AppCredentials, OzonSellerCredentials, WbCredentials
 from seller_agent.tasks.daily_morning_report import (
+    _count_ozon_rows_for_day,
+    _expense_breakdown_lines,
     _pending_packages,
     _recommendations_summary,
+    _summarize_ozon_finance_expenses,
+    _summarize_ozon_cancellations,
     _summarize_wb_analytics_stocks,
     _summarize_wb_finance_expenses,
     _summarize_wb_orders,
@@ -684,6 +688,54 @@ def test_daily_morning_report_seller_v3_uses_new_template(tmp_path: Path, monkey
     assert "| Есть текущие поставки | да | да |" in report_text
 
 
+def test_ozon_stars_expenses_are_classified_by_order_date_after_deactivation() -> None:
+    def row(amount: float, order_date: str | None) -> dict:
+        return {
+            "operation_date": "2026-07-30T12:00:00Z",
+            "operation_type": "StarsMembership",
+            "amount": amount,
+            "posting": {"order_date": order_date} if order_date is not None else {},
+        }
+
+    result = _summarize_ozon_finance_expenses(
+        operations=[
+            row(-10, "2026-07-29T13:00:00Z"),
+            row(-2, "2026-07-29T14:00:00Z"),
+            row(-3, "2026-07-30T14:00:00Z"),
+            row(-4, None),
+        ],
+        day="2026-07-30",
+    )
+
+    breakdown = result["stars_membership_breakdown"]
+    assert result["expenses"]["stars_membership"] == 19.0
+    assert breakdown["orders_before_deactivation"] == {"rows": 1, "amount": 10.0}
+    assert breakdown["orders_during_first_24h"] == {"rows": 1, "amount": 2.0}
+    assert breakdown["orders_after_first_24h"] == {"rows": 1, "amount": 3.0}
+    assert breakdown["missing_order_date"] == {"rows": 1, "amount": 4.0}
+
+
+def test_ozon_stars_expense_report_marks_old_order_accruals_as_late() -> None:
+    result = _summarize_ozon_finance_expenses(
+        operations=[
+            {
+                "operation_date": "2026-07-30T12:00:00Z",
+                "operation_type": "StarsMembership",
+                "amount": -9.75,
+                "posting": {"order_date": "2026-07-28T12:00:00Z"},
+            }
+        ],
+        day="2026-07-30",
+    )
+
+    lines = _expense_breakdown_lines("Ozon", result, ["stars_membership"])
+    text = "\n".join(lines)
+    assert "поздние и переходные удержания после отключения" in text
+    assert "за заказы до отключения" in text
+    assert "после полных 24 часов удержаний нет" in text
+    assert "повторное подключение программы" in text
+
+
 def test_wb_finance_expenses_separates_credit_from_current_expenses() -> None:
     result = _summarize_wb_finance_expenses(
         reports=[
@@ -716,3 +768,50 @@ def test_wb_finance_expenses_separates_credit_from_current_expenses() -> None:
     assert result["bank_payment_reconciliation_delta"] == 0.0
     assert result["expenses"]["deductions"] == 0.0
     assert result["credits_and_adjustments"]["deductions_credit"] == 21640.68
+
+
+def test_control_date_2026_07_22_uses_exact_ozon_cancellation_metric() -> None:
+    result = _summarize_ozon_cancellations(
+        analytics_day={"cancellations": 7, "metrics_available": ["cancellations", "ordered_units", "revenue"]},
+        fbo_fallback={"status": "warning", "cancelled_units": 3, "source": "/v2/posting/fbo/list"},
+    )
+
+    assert result == {
+        "status": "ok",
+        "source": "/v1/analytics/data metric=cancellations dimension=day",
+        "cancelled_units": 7,
+        "method": "exact_daily_analytics_metric",
+    }
+
+
+def test_control_date_2026_07_22_communications_use_moscow_day_and_skip_undated() -> None:
+    rows = [
+        {"published_at": "2026-07-21T20:59:59Z"},
+        {"published_at": "2026-07-21T21:00:00Z"},
+        {"published_at": "2026-07-22T20:59:59Z"},
+        {"published_at": "2026-07-22T21:00:00Z"},
+        {"id": "undated"},
+    ]
+
+    result = _count_ozon_rows_for_day(rows, "2026-07-22")
+
+    assert result["count"] == 2
+    assert result["complete"] is True
+
+
+def test_control_date_2026_07_22_expense_completeness_exposes_unclassified_delta() -> None:
+    result = _summarize_ozon_finance_expenses(
+        operations=[
+            {
+                "operation_date": "2026-07-22T12:00:00Z",
+                "operation_type": "UnknownExpense",
+                "accruals_for_sale": 500,
+                "amount": 300,
+            }
+        ],
+        day="2026-07-22",
+    )
+
+    assert result["total_expenses"] == 200
+    assert result["expense_completeness"]["status"] == "warning"
+    assert result["expense_completeness"]["reconciliation_delta"] == 200

@@ -2,11 +2,12 @@
 
 Дата фиксации обсуждения: 2026-07-18.
 
-Статус: `v1_ozon_read_only_implemented`, marketplace write не реализован.
+Статус: `v1_ozon_wb_dry_run_implemented`, marketplace write не реализован.
 
-## Реализованный первый вариант Ozon
+## Реализованный первый вариант Ozon/WB
 
-На 2026-07-18 реализован read-only сценарий `Ozon -> Цены и маржа`:
+На 2026-08-01 реализованы dry-run сценарии `Ozon -> Цены и маржа` и
+`Wildberries -> Цены и маржа`:
 
 1. владелец выбирает финансовый период `15` или `30` завершенных дней;
 2. вводит себестоимость и целевую маржу одного физического изделия;
@@ -18,20 +19,25 @@
 6. прикладывается Excel с расходами, сеткой по `pack_qty` и сопоставлением с
    текущими Ozon-ценами.
 
-Задача использует только полные дни до вчерашнего включительно. Если нет
+Обе задачи используют только полные дни до вчерашнего включительно и сохраняют
+срезы 15/30 дней. Если нет
 завершенных продаж, текущей комиссии FBO или доля удержаний делает расчет
 невозможным, ценовая сетка блокируется. Первый вариант не сохраняет новую
 себестоимость как политику, не создает dry-run изменений и не вызывает price
-write endpoints Ozon.
+write endpoints Ozon/WB. Товарные строки содержат stock gate и контроль
+текущего участия в акциях; эти поля предназначены для review и ничего не
+применяют автоматически.
 
 Технические точки:
 
 - `src/seller_agent/tasks/ozon_pricing_margin.py`;
+- `src/seller_agent/tasks/wb_pricing_margin.py`;
 - `src/seller_agent/tasks/registry.py`;
 - `src/seller_agent/core/workflow_runner.py`;
 - `src/seller_agent/bot/runtime_jobs.py`;
 - `src/seller_agent/bot/commands.py`;
 - `tests/test_ozon_pricing_margin.py`.
+- `tests/test_wb_pricing_margin.py`.
 
 ## Сохраненная owner-approved сетка Ozon
 

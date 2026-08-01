@@ -7,4 +7,5 @@ Wants=network-online.target
 Type=oneshot
 WorkingDirectory=/home/pavel/projects/seller_vital_shevron
 Environment="WB_EXPECTED_SELLER=ИП Витальская И. П."
-ExecStart=/usr/bin/env node /home/pavel/projects/seller_vital_shevron/scripts/sessions/wb_session_keepalive.js
+Environment=PYTHONPATH=/home/pavel/projects/seller_vital_shevron/src:/home/pavel/projects/seller_vital_shevron
+ExecStart=/home/Codex/agent-tools/python/bin/python /home/pavel/projects/seller_vital_shevron/scripts/systemd/with_resource_lease.py --resource-key lk:wb:browser-profile --wait-seconds 120 --ttl-seconds 1800 -- /usr/bin/env node /home/pavel/projects/seller_vital_shevron/scripts/sessions/wb_session_keepalive.js

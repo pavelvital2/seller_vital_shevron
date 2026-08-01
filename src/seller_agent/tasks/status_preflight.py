@@ -250,7 +250,7 @@ def _summarize_master_catalog(data_dir: Path) -> dict[str, Any]:
     }
 
 
-def _check_lk_sessions(*, include_lk: bool) -> dict[str, Any]:
+def _check_lk_sessions(*, include_lk: bool, marketplaces: tuple[str, ...] = ("ozon", "wb")) -> dict[str, Any]:
     if not include_lk:
         return {}
 
@@ -260,34 +260,36 @@ def _check_lk_sessions(*, include_lk: bool) -> dict[str, Any]:
     env.setdefault("WB_EXPECTED_SELLER", "")
 
     checks: dict[str, Any] = {}
-    checks["ozon_keeper_pid"] = process_or_systemd_status(
-        pid_file=session_dir / "ozon" / "ozon_keeper.pid",
-        unit="vital-shevron-ozon-keeper.service",
-        kind="keeper",
-    )
-    checks["ozon_watchdog_pid"] = process_or_systemd_status(
-        pid_file=session_dir / "ozon" / "ozon_session_watchdog.pid",
-        unit="vital-shevron-ozon-session-refresh.timer",
-        kind="watchdog",
-    )
-    checks["ozon_cdp"] = _check_ozon_cdp()
-    checks["ozon_keepalive"] = _run_json_command(
-        ["node", "scripts/sessions/ozon_session_keepalive_cdp.js"],
-        timeout=120,
-        env=env,
-    )
-    checks["ozon_refresh_state"] = refresh_freshness("ozon")
-    checks["wb_watchdog_pid"] = process_or_systemd_status(
-        pid_file=session_dir / "wb" / "wb_session_watchdog.pid",
-        unit="vital-shevron-wb-session-refresh.timer",
-        kind="watchdog",
-    )
-    checks["wb_keepalive"] = _run_json_command(
-        ["node", "scripts/sessions/wb_session_keepalive.js"],
-        timeout=150,
-        env=env,
-    )
-    checks["wb_refresh_state"] = refresh_freshness("wb")
+    if "ozon" in marketplaces:
+        checks["ozon_keeper_pid"] = process_or_systemd_status(
+            pid_file=session_dir / "ozon" / "ozon_keeper.pid",
+            unit="vital-shevron-ozon-keeper.service",
+            kind="keeper",
+        )
+        checks["ozon_watchdog_pid"] = process_or_systemd_status(
+            pid_file=session_dir / "ozon" / "ozon_session_watchdog.pid",
+            unit="vital-shevron-ozon-session-refresh.timer",
+            kind="watchdog",
+        )
+        checks["ozon_cdp"] = _check_ozon_cdp()
+        checks["ozon_keepalive"] = _run_json_command(
+            ["node", "scripts/sessions/ozon_session_keepalive_cdp.js"],
+            timeout=120,
+            env=env,
+        )
+        checks["ozon_refresh_state"] = refresh_freshness("ozon")
+    if "wb" in marketplaces:
+        checks["wb_watchdog_pid"] = process_or_systemd_status(
+            pid_file=session_dir / "wb" / "wb_session_watchdog.pid",
+            unit="vital-shevron-wb-session-refresh.timer",
+            kind="watchdog",
+        )
+        checks["wb_keepalive"] = _run_json_command(
+            ["node", "scripts/sessions/wb_session_keepalive.js"],
+            timeout=150,
+            env=env,
+        )
+        checks["wb_refresh_state"] = refresh_freshness("wb")
     return checks
 
 
@@ -421,7 +423,7 @@ def run_status_preflight(
         checks["wb_api"] = _check_wb_api(credentials)
     if include_catalog:
         checks["master_catalog"] = _summarize_master_catalog(data_dir)
-    checks.update(_check_lk_sessions(include_lk=include_lk))
+    checks.update(_check_lk_sessions(include_lk=include_lk, marketplaces=selected_marketplaces))
 
     artifacts = {
         "run_dir": str(run_dir),

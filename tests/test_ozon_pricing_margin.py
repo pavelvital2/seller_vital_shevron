@@ -10,7 +10,7 @@ from seller_agent.tasks.ozon_pricing_margin import run_ozon_pricing_margin
 
 class FakeOzonAdapter:
     def fetch_finance_transactions(self, *, date_from: str, date_to: str):  # type: ignore[no-untyped-def]
-        assert date_from.startswith("2026-06-15")
+        assert date_from.startswith(("2026-06-15", "2026-05-31"))
         assert date_to.startswith("2026-06-29")
         return [
             {
@@ -53,6 +53,12 @@ class FakeOzonAdapter:
                 "price": {"price": "700", "old_price": "1400", "min_price": "600"},
                 "commissions": {"sales_percent_fbo": 44},
             },
+        ]
+
+    def fetch_stock_on_warehouses(self):  # type: ignore[no-untyped-def]
+        return [
+            {"sku": "sku-1", "free_to_sell_amount": 3},
+            {"sku": "sku-2", "free_to_sell_amount": 4},
         ]
 
 

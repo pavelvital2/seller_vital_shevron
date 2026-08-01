@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+import hashlib
 from typing import Any
 
 from seller_agent.bot.commands import (
@@ -66,6 +67,13 @@ def dispatch_runtime_job_callback(
     data_dir: Path = Path("data"),
     runtime_db: Path = DEFAULT_RUNTIME_DB,
 ) -> TelegramCommandResult | None:
+    if callback_data.startswith(("apa:", "apr:", "app:", "apv:")):
+        return _handle_runtime_approval_callback(
+            callback_data,
+            chat_id=chat_id,
+            data_dir=data_dir,
+            runtime_db=runtime_db,
+        )
     runtime_request = _runtime_request_for_callback(callback_data)
     if isinstance(runtime_request, TelegramCommandResult):
         return runtime_request
@@ -80,6 +88,42 @@ def dispatch_runtime_job_callback(
         runtime_db=runtime_db,
         payload={"kind": "callback", "callback_data": callback_data},
     )
+
+
+def _handle_runtime_approval_callback(
+    callback_data: str,
+    *,
+    chat_id: int,
+    data_dir: Path,
+    runtime_db: Path,
+) -> TelegramCommandResult:
+    action, token = callback_data.split(":", 1)
+    store = JobStore(runtime_db)
+    matches = [
+        approval
+        for approval in store.list_approvals(limit=500)
+        if hashlib.sha256(approval.approval_id.encode("utf-8")).hexdigest()[:16] == token
+    ]
+    if len(matches) != 1:
+        return _invalid_callback("Согласование", "Runtime approval не найден или идентификатор неоднозначен.")
+    approval = matches[0]
+    service = JobService(store=store, data_dir=data_dir, runtime_db=runtime_db)
+    try:
+        if action == "apa":
+            current = service.approve(approval.approval_id)
+            message = f"Согласование `{current.approval_id}` подтверждено. Для записи нажмите «Применить» в /approvals."
+        elif action == "apr":
+            current = service.reject(approval.approval_id)
+            message = f"Согласование `{current.approval_id}` отклонено. Изменений в магазинах не выполнено."
+        elif action == "app":
+            job = service.submit_approval_apply(approval.approval_id, actor=f"telegram:{chat_id}")
+            message = f"Apply поставлен в Job Worker. Job ID: `{job.job_id}`."
+        else:
+            job = service.submit_approval_verify(approval.approval_id, actor=f"telegram:{chat_id}")
+            message = f"Verify поставлен в Job Worker. Job ID: `{job.job_id}`."
+    except (KeyError, RuntimeError, ValueError) as exc:
+        return _invalid_callback("Согласование", _safe_enqueue_error(exc))
+    return TelegramCommandResult(command="/approvals", ok=True, text="Согласования\n\n" + message)
 
 
 def _enqueue_runtime_request(
@@ -208,6 +252,44 @@ def _runtime_request_for_message(
             title="Ozon: цены и маржа",
         )
 
+    if state.get("stage") == "wb_pricing_margin_input" and not _is_explicit_command_or_button(message):
+        margin = _decimal_input(message)
+        unit_cost = _decimal_input(state.get("unit_cost"))
+        try:
+            period_days = int(state.get("period_days") or 0)
+        except (TypeError, ValueError):
+            period_days = 0
+        if margin is None or margin < 0 or margin > Decimal("100000"):
+            return TelegramCommandResult(
+                command="/wb-pricing-margin",
+                ok=False,
+                mode="input",
+                blocked_reason="invalid_wb_target_margin",
+                text=(
+                    "WB: цены и маржа\n\nВведите неотрицательную маржу на одно "
+                    "физическое изделие в рублях, например `60`."
+                ),
+                conversation_state=state,
+            )
+        if unit_cost is None or unit_cost <= 0 or period_days not in {15, 30}:
+            return TelegramCommandResult(
+                command="/wb-pricing-margin",
+                ok=False,
+                mode="input",
+                blocked_reason="invalid_wb_pricing_state",
+                text="Параметры расчёта потеряны. Запустите «Цены и маржа WB» заново.",
+            )
+        return RuntimeJobRequest(
+            command="/wb-pricing-margin",
+            task_id="wb-pricing-margin",
+            params={
+                "unit_cost": _decimal_text(unit_cost),
+                "target_margin": _decimal_text(margin),
+                "period_days": period_days,
+            },
+            title="WB: цены и маржа",
+        )
+
     command, _ = _parse_command(message)
     command = _normalize_button_command(command)
     aliases = {
@@ -228,6 +310,8 @@ def _runtime_request_for_message(
         "/wb_analytics": RuntimeJobRequest("/wb-analytics", "wb-parser-warehouse-analytics", {"supplier_id": "4516781", "limit": 500, "report_limit": 50}, "WB аналитика"),
         "/wb-stock-supplies": RuntimeJobRequest("/wb-stock-supplies", "wb-stock-supply-monitor", {}, "Остатки и поставки WB"),
         "/wb_stock_supplies": RuntimeJobRequest("/wb-stock-supplies", "wb-stock-supply-monitor", {}, "Остатки и поставки WB"),
+        "/wb-pricing-margin": None,
+        "/wb_pricing_margin": None,
         "/ozon-inbox": RuntimeJobRequest("/ozon-inbox", "ozon-inbox", {}, "Ozon входящие"),
         "/ozon_inbox": RuntimeJobRequest("/ozon-inbox", "ozon-inbox", {}, "Ozon входящие"),
         "/wb-inbox": RuntimeJobRequest("/wb-inbox", "wb-inbox", {}, "WB входящие"),

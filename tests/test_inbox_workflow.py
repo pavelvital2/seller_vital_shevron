@@ -13,6 +13,11 @@ from seller_agent.tasks.inbox_workflow import (
     _build_wb_report,
     _classify_messenger_action,
     _collect_ozon_messenger_actions,
+    _inbox_action_id,
+    _load_inbox_receipts,
+    _record_inbox_receipts,
+    _remaining_inbox_actions,
+    run_wb_inbox_apply,
 )
 
 
@@ -273,6 +278,76 @@ def test_ozon_messenger_apply_uses_verified_cdp_fallback_after_403(
     assert result["mark_read"][0]["fallback_verified"] is True
     assert result["mark_read"][0]["api_error"] == "HTTP 403: Premium Plus required"
     assert result["mark_read"][0]["error"] == ""
+
+
+def test_inbox_action_receipts_filter_only_confirmed_actions(tmp_path: Path) -> None:
+    answered = {
+        "platform": "wb",
+        "source_type": "review",
+        "source_id": "review-1",
+        "action_type": "public_review_reply",
+        "draft_text": "Спасибо за отзыв!",
+    }
+    pending = {**answered, "source_id": "review-2"}
+    _record_inbox_receipts(
+        data_dir=tmp_path,
+        source_run_id="wb_inbox_test",
+        actions=[answered],
+    )
+
+    receipts = _load_inbox_receipts(tmp_path)
+    assert _inbox_action_id(answered) in receipts
+    assert [row["source_id"] for row in _remaining_inbox_actions([answered, pending], receipts=receipts)] == [
+        "review-2"
+    ]
+
+
+def test_wb_inbox_apply_closes_already_verified_zero_tail(monkeypatch, tmp_path: Path) -> None:
+    source_run_id = "wb_inbox_test"
+    reviews_pending_id = "reviews_test_pending"
+    top_dir = tmp_path / "pending" / f"{source_run_id}_pending"
+    reviews_dir = tmp_path / "pending" / reviews_pending_id
+    top_dir.mkdir(parents=True)
+    reviews_dir.mkdir(parents=True)
+    action = {
+        "platform": "wb",
+        "source_type": "review",
+        "source_id": "review-1",
+        "action_type": "public_review_reply",
+        "draft_text": "Спасибо за отзыв!",
+    }
+    (top_dir / "inbox_pending.json").write_text(
+        json.dumps({"marketplace": "wb", "reviews_pending_id": reviews_pending_id}),
+        encoding="utf-8",
+    )
+    (reviews_dir / "manifest.json").write_text(
+        json.dumps({"run_id": "reviews_test", "status": "pending_owner_review"}),
+        encoding="utf-8",
+    )
+    (reviews_dir / "draft_answers.json").write_text(
+        json.dumps({"run_id": "reviews_test", "actions": [action]}),
+        encoding="utf-8",
+    )
+    _record_inbox_receipts(data_dir=tmp_path, source_run_id=source_run_id, actions=[action])
+    cleanup_calls: list[dict] = []
+
+    def fake_cleanup(**kwargs):  # type: ignore[no-untyped-def]
+        cleanup_calls.append(kwargs)
+        return {"status": "ok", "closed_count": 2, "failed_count": 0}
+
+    monkeypatch.setattr(inbox_workflow, "_cleanup_inbox_apply_tail", fake_cleanup)
+    result = run_wb_inbox_apply(
+        credentials=AppCredentials(None, None, None),
+        data_dir=tmp_path,
+        source_run_id=source_run_id,
+        confirmed_by_user=True,
+    )
+
+    assert result["overall_status"] == "ok"
+    assert result["recovery"]["remaining_count"] == 0
+    assert result["recovery"]["verified_this_attempt_count"] == 0
+    assert len(cleanup_calls) == 1
+    assert Path(result["artifacts"]["apply_marker"]).exists()
 
 
 def test_ozon_messenger_collection_paginates_chat_list(

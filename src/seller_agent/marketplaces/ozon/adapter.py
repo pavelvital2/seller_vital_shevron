@@ -262,6 +262,17 @@ class OzonSellerAdapter:
                 items.extend(row for row in page_items if isinstance(row, dict))
         return items
 
+    def fetch_action_timer_statuses(self, product_ids: list[str], *, batch_size: int = 1000) -> list[dict[str, Any]]:
+        statuses: list[dict[str, Any]] = []
+        normalized = [str(item).strip() for item in product_ids if str(item).strip()]
+        size = min(max(int(batch_size), 1), 1000)
+        for start in range(0, len(normalized), size):
+            data = self.post("/v1/product/action/timer/status", {"product_ids": normalized[start : start + size]})
+            page = data.get("statuses") if isinstance(data, dict) else []
+            if isinstance(page, list):
+                statuses.extend(row for row in page if isinstance(row, dict))
+        return statuses
+
     def fetch_product_stocks(
         self,
         product_ids: list[str],
@@ -530,14 +541,18 @@ class OzonSellerAdapter:
         status: str = "ALL",
         limit: int = 100,
         sort_dir: str = "DESC",
+        last_id: str = "",
     ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "limit": min(max(int(limit), 1), 100),
+            "sort_dir": sort_dir,
+            "status": status,
+        }
+        if last_id:
+            payload["last_id"] = last_id
         return self.post(
             "/v1/review/list",
-            {
-                "limit": min(max(int(limit), 1), 100),
-                "sort_dir": sort_dir,
-                "status": status,
-            },
+            payload,
         )
 
     def fetch_question_count(self) -> dict[str, Any]:

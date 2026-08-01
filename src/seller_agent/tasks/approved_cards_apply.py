@@ -542,15 +542,47 @@ def _maybe_upsert_card_work_items(
     store = JobStore(runtime_db)
     updated = 0
     for sku in skus:
-        store.upsert_card_work_item(
-            internal_sku=sku,
-            status=status,  # type: ignore[arg-type]
-            plan_run_id=plan_run_id,
-            apply_run_id=apply_run_id,
-            post_verify_run_id=post_verify_run_id,
-            checksum=(checksums or {}).get(sku, ""),
-            data=data or {},
-        )
+        current = store.get_card_work_item(sku)
+        if current is None:
+            store.upsert_card_work_item(internal_sku=sku, status="draft")
+            current = store.get_card_work_item(sku)
+        assert current is not None
+        transition_statuses = [status]
+        if current.status == "draft" and status in {"owner_approved", "applying", "applied", "closed"}:
+            transition_statuses = ["owner_review", "owner_approved"]
+            if status == "applying":
+                transition_statuses.append("applying")
+            elif status == "applied":
+                transition_statuses.extend(["applying", "applied"])
+            elif status == "closed":
+                transition_statuses.extend(["applying", "applied", "verified", "closed"])
+        elif current.status == "owner_review" and status in {"applying", "applied", "closed"}:
+            transition_statuses = ["owner_approved"]
+            if status == "applying":
+                transition_statuses.append("applying")
+            elif status == "applied":
+                transition_statuses.extend(["applying", "applied"])
+            else:
+                transition_statuses.extend(["applying", "applied", "verified", "closed"])
+        elif current.status == "owner_approved" and status in {"applied", "closed"}:
+            transition_statuses = ["applying", "applied"]
+            if status == "closed":
+                transition_statuses.extend(["verified", "closed"])
+        elif current.status == "applying" and status == "closed":
+            transition_statuses = ["applied", "verified", "closed"]
+        elif current.status == "applied" and status == "closed":
+            transition_statuses = ["verified", "closed"]
+        for transition_status in transition_statuses:
+            store.transition_card_work_item(
+                internal_sku=sku,
+                status=transition_status,  # type: ignore[arg-type]
+                reason="approved_cards_pipeline",
+                plan_run_id=plan_run_id,
+                apply_run_id=apply_run_id,
+                post_verify_run_id=post_verify_run_id,
+                checksum=(checksums or {}).get(sku, ""),
+                data=data or {},
+            )
         updated += 1
     return {"status": "ok", "updated": updated, "runtime_db": str(runtime_db)}
 

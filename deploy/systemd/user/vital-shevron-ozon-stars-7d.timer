@@ -1,0 +1,10 @@
+[Unit]
+Description=Queue Ozon Stars 7-day control
+
+[Timer]
+OnCalendar=2026-08-06 09:00:00 Europe/Moscow
+Persistent=true
+Unit=vital-shevron-ozon-stars-control@7.service
+
+[Install]
+WantedBy=timers.target

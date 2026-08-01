@@ -1,6 +1,6 @@
 # План перехода Vital Shevron к управлению Ozon/WB через Telegram-бота
 
-Дата: 2026-06-13.
+Дата: 2026-06-13. Актуализировано: 2026-07-31.
 
 ## Краткий вывод
 
@@ -615,6 +615,82 @@ attachment policy, `WorkflowRunner` MVP, live `/status` и rename-only
 расширение на следующие read-only задачи.
 Команды `/prices`, `/ads`, `/search`, `/positions` подключать после появления
 соответствующих read-only task-runner команд и стандартных отчетов.
+
+## Этап 6A. Telegram Mini App для Ozon и WB
+
+Статус: `planned_near_term`. Решение владельца зафиксировано 2026-07-31.
+
+Цель: параллельно существующему кнопочному интерфейсу бота создать более
+удобный рабочий интерфейс для регулярного управления двумя маркетплейсами.
+Текущие кнопки и диалоги бота сохраняются как стабильный рабочий контур и
+fallback.
+
+Архитектурное решение:
+
+```text
+Telegram bot buttons (сохраняются)
+             |
+             +--> Mini App Ozon --> /ozon
+             |
+             +--> Mini App WB ----> /wb
+
+одна frontend-кодовая база
+  -> Mini App backend API
+  -> TaskRegistry / JobService / Job Worker
+  -> RunManifest / reports / approvals
+```
+
+Первый релиз только read-only:
+
+- состояние Ozon/WB и свежесть источников;
+- текущие и последние задания Job Worker;
+- отчеты и безопасные артефакты;
+- остатки и зарегистрированные поставки;
+- сводка цен, акций и продвижения без изменения настроек;
+- отдельная навигация и визуальная маркировка Ozon/WB, чтобы исключить
+  смешивание контуров.
+
+Обязательные ограничения:
+
+1. Не переносить бизнес-логику из tasks/workflows во frontend.
+2. Проверять подпись и срок действия Telegram `initData` на backend.
+3. Допускать только owner allowlist; не доверять `user_id` из frontend без
+   серверной проверки `initData`.
+4. Не передавать в браузер токены маркетплейсов, Telegram bot token, cookies,
+   storage state или auth headers.
+5. Read-only API должен иметь явный allowlist задач и артефактов.
+6. Любые будущие write-функции используют существующие checksummed approval
+   packages и цепочку
+   `dry-run -> review -> approved -> apply -> verify`; Mini App не вызывает
+   marketplace adapters напрямую.
+7. Один раздел не может запускать задачу другого маркетплейса без явного
+   переключения и повторного review.
+
+Порядок реализации:
+
+1. Инвентаризировать текущие bot callbacks и read-only задачи TaskRegistry.
+2. Выбрать и зафиксировать минимальный frontend/backend стек в соответствии с
+   текущим Python-проектом, без второго источника бизнес-логики.
+3. Реализовать backend-проверку Telegram `initData`, owner allowlist, health и
+   read-only endpoints.
+4. Собрать общий адаптивный shell и маршруты `/ozon`, `/wb`.
+5. Подключить экраны `Обзор`, `Задания`, `Отчеты`, `Остатки и поставки`.
+6. Добавить две новые Web App кнопки в существующие меню, не удаляя и не
+   переставляя текущие кнопки.
+7. Проверить desktop/mobile Telegram WebView, пустые/loading/error состояния,
+   корректное разделение магазинов и отсутствие marketplace write.
+8. После owner review первого read-only релиза расширять экраны по одному
+   сценарию, начиная с цен/маржи и продвижения.
+
+Критерий готовности первого релиза:
+
+- существующие Telegram-кнопки работают без регрессий;
+- `Mini App Ozon` и `Mini App WB` открывают правильный раздел;
+- доступ без валидного Telegram `initData` и owner allowlist запрещен;
+- все данные приходят из существующих read-only tasks/runtime;
+- секреты не попадают в frontend, логи и ответы API;
+- Mini App не выполняет marketplace write;
+- desktop и mobile smoke пройдены.
 
 ## Этап 7. Approval bot
 

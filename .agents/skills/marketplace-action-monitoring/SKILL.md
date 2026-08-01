@@ -14,6 +14,13 @@ description: "Use for Ozon/Wildberries marketplace action monitoring after promo
   individually against its own baseline.
 - For quick post-action checks, use ordered units/orders rather than buyouts
   when buyouts lag the action timing.
+- For liquidation controls, keep marketplace order evidence separate from
+  advertising attribution: Seller/Statistics API answers whether the exact
+  cohort received an order after apply, while Performance/Promotion API
+  answers whether advertising received credit for it. Do not call an
+  unattributed order an advertising order, and do not call zero advertising
+  orders zero marketplace orders. Confirmed by the first Vital Shevron
+  Ozon/WB liquidation control on 2026-07-31.
 - Save both `by_product` and `daily_by_product` tables. Include zero-sales days.
 - For Ozon `STOCK_DISCOUNT` actions such as `Супербустинг`, keep them separate
   from Elastic and compare action price against min price and the previous
@@ -97,6 +104,17 @@ description: "Use for Ozon/Wildberries marketplace action monitoring after promo
   a generous sensitivity excluding advertising/storage allocation, and use a
   14-full-day controlled disable test for a causal decision. Disabling is a
   marketplace write and still requires owner approval.
+- Confirmed on 2026-07-30 after disabling Ozon `Звёздные товары`: do not
+  classify all later `StarsMembership` operations by finance operation date.
+  Use the UTC `posting.order_date` relative to the exact deactivation time.
+  One completed order created 2h41m after the verified disable still received
+  the exact 1.5% fee; preserve it as a disputed propagation-tail row and
+  recheck after finance maturity. Separately verify live `isActive=false`;
+  an active CDP/keeper does not prove that the Ozon web session is authorized.
+  In daily financial reports keep the fee in total expenses because it affected
+  payout, but split it into orders before disable, the first 24 hours, and
+  after the first 24 hours. Label zero post-24h rows as late/transition
+  accruals, not as evidence that the program is active again.
 - Confirmed on 2026-07-30 for WB dormant-stock analysis: do not classify a
   card from 30-day sales alone. Join current sellable stock, card creation
   date, completed Statistics API sales after removing returned `srid` pairs,
@@ -128,6 +146,13 @@ description: "Use for Ozon/Wildberries marketplace action monitoring after promo
   `nomenclature not found in advert`, first prove whether any existing bids
   changed and whether the card is now registered; only then run a checksummed
   recovery for the same approved package.
+
+- Confirmed on 2026-07-31 for ongoing liquidation control: replace reminder-
+  only timers with a deduplicated Job Worker task over the exact approved
+  cohort. Persist one product/day row including zeros, keep Seller/Statistics
+  orders separate from ad attribution, exclude the incomplete current day and
+  emit only a checksummed stop-review. Reaching a hard stop is not permission
+  to remove a product from CPC automatically.
 
 ## Baseline Pattern
 

@@ -20,7 +20,7 @@ from seller_agent.tasks.registry import get_task_definition
 from seller_agent.tasks.wb_media import build_wb_media_plan
 
 
-def test_wb_media_plan_does_not_duplicate_incremental_url_when_falling_back_to_full_assets() -> None:
+def test_wb_media_plan_never_falls_back_to_generic_assets_when_wb_set_exists() -> None:
     passport = {
         "media": {
             "target_wb_photo_set": [
@@ -44,8 +44,8 @@ def test_wb_media_plan_does_not_duplicate_incremental_url_when_falling_back_to_f
 
     media_plan = build_wb_media_plan(passport)
 
-    assert [row["position"] for row in media_plan] == [1, 2, 3, 4, 5]
-    assert [row["source_url"] for row in media_plan].count("https://ir.ozone.ru/new.jpg") == 1
+    assert [row["position"] for row in media_plan] == [5]
+    assert [row["source_url"] for row in media_plan] == ["https://ir.ozone.ru/new.jpg"]
 
 
 def test_plan_one_ozon_only_does_not_read_or_build_wb(

@@ -237,6 +237,23 @@ def test_job_service_blocks_confirmed_apply_when_resource_lease_is_busy(tmp_path
     ]
 
 
+def test_job_service_blocks_read_only_task_when_resource_lease_is_busy(tmp_path: Path) -> None:
+    from seller_agent.tasks.registry import RegisteredTask, TaskRegistry
+
+    task = RegisteredTask(name="leased-read", command="leased-read", title="Leased read", description="test", mode="read_only", risk="low", lock_keys=("lk:wb:browser-profile",))
+    registry = TaskRegistry()
+    registry.register(task)
+    store = JobStore(tmp_path / "runtime.db")
+    assert store.acquire_resource_lease(resource_key="lk:wb:browser-profile", owner_id="keeper", ttl_seconds=60) is not None
+    service = JobService(store=store, registry=registry, workflow_runner=WorkflowRunner(registry=registry, data_dir=tmp_path / "data", lock_dir=tmp_path / "locks", handlers={"leased-read": lambda *args: (_ for _ in ()).throw(AssertionError("must not start"))}), data_dir=tmp_path / "data")
+    job = service.submit(task_id="leased-read")
+
+    result = service.run(job.job_id)
+
+    assert result.status == "resource_locked"
+    assert result.job.status == "queued"
+
+
 def test_job_service_blocks_repeated_auto_runtime_approval_apply(tmp_path: Path) -> None:
     def handler(task, data_dir, credentials, inputs):  # type: ignore[no-untyped-def]
         return {"run_id": "apply_job_test", "overall_status": "ok", "artifacts": {}}
@@ -303,11 +320,11 @@ def test_job_service_recovery_runs_safe_verify_job_for_unknown_apply(tmp_path: P
 
     assert apply_result.ok is False
     assert approval is not None
-    assert approval.status == "verified"
+    assert approval.status == "closed"
     assert recovery["overall_status"] == "ok"
     assert recovery["queued_verify_jobs"] == 1
     assert recovery["rows"][0]["action"] == "verify_job_ran"
-    assert recovery["rows"][0]["approval_status_after"] == "verified"
+    assert recovery["rows"][0]["approval_status_after"] == "closed"
 
 
 def test_job_service_recovery_does_not_close_approval_on_verify_warning(tmp_path: Path) -> None:

@@ -51,6 +51,11 @@ def notify_telegram_job_result(
     if chat_id is None:
         return JobNotificationResult(ok=False, job_id=job_id, blocked_reason="invalid_chat_id")
 
+    summary = _job_summary(job)
+    if job.task_id in {"ozon-lk-state-monitor", "ozon-min-price-timer-plan"} and summary.get("notification_required") is False:
+        job_store.update_telegram_update_status(update_id=update.update_id, processing_status="completed", job_id=job_id)
+        return JobNotificationResult(ok=True, job_id=job_id, chat_id=chat_id, thread_id=_thread_id_from_update(update), blocked_reason="unchanged_state_suppressed")
+
     thread_id = _thread_id_from_update(update)
     text, reply_markup = build_job_result_presentation(job, update=update, data_dir=data_dir)
     text_results = send_telegram_text(
@@ -117,6 +122,16 @@ def build_job_result_presentation(
         return _with_job_id(commands._status_preflight_chat_text(summary), job.job_id), {}
     if job.task_id == "daily-morning-report":
         return _with_job_id(commands._daily_report_chat_text(summary), job.job_id), {}
+    if job.task_id == "liquidation-daily-control":
+        return _liquidation_control_result(job, summary), {}
+    if job.task_id == "wb-liquidation-stage2-plan":
+        return _wb_liquidation_stage2_result(job, summary), {}
+    if job.task_id == "ozon-stars-control":
+        return _ozon_stars_control_result(job, summary), {}
+    if job.task_id == "ozon-lk-state-monitor":
+        return _ozon_lk_state_result(job, summary), {}
+    if job.task_id == "ozon-min-price-timer-plan":
+        return _ozon_min_price_timer_result(job, summary), {}
     if job.task_id == "wb-parser-warehouse-analytics":
         return _with_job_id(commands._wb_analytics_chat_text(summary), job.job_id), {}
     if job.task_id == "wb-stock-supply-monitor":
@@ -184,6 +199,61 @@ def _generic_job_text(job: JobRecord) -> str:
     if artifacts.get("report"):
         lines.extend(["", "Файл полного отчета будет прикреплен, если он проходит safety-фильтр."])
     return "\n".join(lines)
+
+
+def _liquidation_control_result(job: JobRecord, summary: dict[str, Any]) -> str:
+    ozon = _dict(summary.get("ozon"))
+    wb = _dict(summary.get("wb"))
+    period = _dict(summary.get("period"))
+    return "\n".join(
+        [
+            "Ежедневный контроль распродажи",
+            "",
+            f"Период: `{period.get('date_from') or 'н/д'} - {period.get('date_to') or 'н/д'}`; текущий незавершённый день исключён.",
+            "",
+            "Ozon:",
+            f"- когорта: `{_int(ozon.get('cohort'))}` SKU; остаток: `{_int(ozon.get('stock_products'))}` товаров / `{_int(ozon.get('stock_physical_items'))}` изделий;",
+            f"- Seller API заказы: `{_int(ozon.get('seller_order_units'))}`; CPC-заказы: `{_int(ozon.get('ad_orders'))}`; расход: `{_money(ozon.get('ad_spend'))}`;",
+            f"- кандидаты hard stop: `{_int(ozon.get('hard_stop_candidates'))}`; расхождения minimum: `{_int(ozon.get('min_price_mismatches'))}`.",
+            "",
+            "Wildberries:",
+            f"- когорта: `{_int(wb.get('cohort'))}` nmID; остаток: `{_int(wb.get('stock_goods'))}` товаров / `{_int(wb.get('stock_physical_items'))}` изделий;",
+            f"- Statistics API заказы: `{_int(wb.get('seller_order_units'))}`; CPC-заказы: `{_int(wb.get('ad_orders'))}`; расход: `{_money(wb.get('ad_spend'))}`;",
+            f"- кандидаты hard stop: `{_int(wb.get('hard_stop_candidates'))}`; второй ценовой шаг: `{_int(wb.get('second_price_stage_pending'))}`.",
+            "",
+            "Отключения рекламы, цены и акции автоматически не менялись. Stop-review имеет контрольную сумму и требует отдельного согласования.",
+            f"Run ID: `{summary.get('run_id') or 'н/д'}`",
+            f"Job ID: `{job.job_id}`",
+        ]
+    )
+
+
+def _wb_liquidation_stage2_result(job: JobRecord, summary: dict[str, Any]) -> str:
+    return "\n".join(
+        [
+            "WB: второй ценовой шаг распродажи",
+            "",
+            f"Точная когорта: `{_int(summary.get('cohort_rows'))}`; требуется изменение: `{_int(summary.get('ready_for_owner_review'))}`; уже цель: `{_int(summary.get('already_at_target'))}`; блокированы: `{_int(summary.get('blocked_rows'))}`; drift: `{_int(summary.get('drift_rows'))}`.",
+            f"Checksum: `{summary.get('actions_checksum') or 'н/д'}`.",
+            "",
+            "Это fresh dry-run. Скидки, цены, minimum и акции в WB не менялись.",
+            f"Run ID: `{summary.get('run_id') or 'н/д'}`",
+            f"Job ID: `{job.job_id}`",
+        ]
+    )
+
+
+def _ozon_stars_control_result(job: JobRecord, summary: dict[str, Any]) -> str:
+    fees = _dict(summary.get("stars_fees"))
+    return "\n".join([f"Ozon Stars: контроль `{_int(summary.get('window_days'))}` дней", "", f"Изменение выкупов: `{summary.get('buyout_units_change_pct') if summary.get('buyout_units_change_pct') is not None else 'н/д'}%`; оборота: `{summary.get('gross_change_pct') if summary.get('gross_change_pct') is not None else 'н/д'}%`.", f"Новые StarsMembership по заказам после отключения: `{_int(fees.get('post_deactivation_order_rows'))}` строк / `{_money(fees.get('post_deactivation_order_amount'))}`.", f"Решение: `{summary.get('decision') or 'н/д'}`.", "Повторное подключение автоматически не выполнялось.", f"Run ID: `{summary.get('run_id') or 'н/д'}`", f"Job ID: `{job.job_id}`"])
+
+
+def _ozon_lk_state_result(job: JobRecord, summary: dict[str, Any]) -> str:
+    return "\n".join(["Ozon LK: изменилось состояние", "", f"Было: `{summary.get('previous_state') or 'не зафиксировано'}`.", f"Стало: `{summary.get('state') or 'unknown'}`.", f"Причина: `{summary.get('reason') or 'н/д'}`.", "", "Marketplace write не выполнялся.", f"Job ID: `{job.job_id}`"])
+
+
+def _ozon_min_price_timer_result(job: JobRecord, summary: dict[str, Any]) -> str:
+    return "\n".join(["Ozon: истекает защита минимальной цены", "", f"Проверено: `{_int(summary.get('products_checked'))}`; refresh-кандидатов: `{_int(summary.get('refresh_candidates'))}` в горизонте `{_int(summary.get('warning_days'))}` дней.", f"Checksum: `{summary.get('actions_checksum') or 'н/д'}`.", "", "Срок не продлевался автоматически. Цены и minimum не менялись.", f"Run ID: `{summary.get('run_id') or 'н/д'}`", f"Job ID: `{job.job_id}`"])
 
 
 def _period_report_result(job: JobRecord, summary: dict[str, Any]) -> str:

@@ -8,6 +8,7 @@ from typing import Any
 
 from seller_agent.core.run_manifest import write_summary_run_manifest
 from seller_agent.reports.writer import ensure_dir, write_json
+from seller_agent.tasks.card_audit_prevalidator import validate_card_audit
 
 
 OWNER_APPROVED_PREFIX = "owner_approved"
@@ -264,6 +265,7 @@ def _physical(proposed: dict[str, Any], identity: dict[str, Any] | None = None) 
     if not product_size and source.get("product_width_mm") is not None and source.get("product_height_mm") is not None:
         product_size = f"{_normalize_text(source.get('product_width_mm'))}*{_normalize_text(source.get('product_height_mm'))}"
     ozon_package = _first_existing(
+        source.get("package_dimensions_ozon_mm"),
         source.get("ozon_package_mm"),
         source.get("ozon_package"),
         source.get("package_size_ozon_mm"),
@@ -277,6 +279,7 @@ def _physical(proposed: dict[str, Any], identity: dict[str, Any] | None = None) 
             for key in ("package_depth_mm", "package_width_mm", "package_height_mm")
         )
     wb_package = _first_existing(
+        source.get("package_dimensions_wb_cm"),
         source.get("wb_package_cm"),
         source.get("wb_package"),
         source.get("package_size_wb_cm"),
@@ -777,6 +780,23 @@ def run_promote_approved_card_passport(
         out_path = approved_dir / f"{sku}.json" if sku else approved_dir / "missing_sku.json"
         if out_path.exists() and not overwrite:
             rows.append({"internal_sku": sku, "audit_path": str(path), "passport_path": str(out_path), "status": "skipped_existing", "errors": [], "warnings": []})
+            continue
+        # Legacy owner-approved audits predate the strict auditor contract.
+        # They retain compatibility here; all new auditor handoffs must pass
+        # the dedicated strict `card-audit-prevalidate` task first.
+        prevalidation = validate_card_audit(audit, strict=False)
+        if prevalidation["status"] != "ok":
+            rows.append(
+                {
+                    "internal_sku": sku,
+                    "audit_path": str(path),
+                    "passport_path": str(out_path),
+                    "status": "blocked",
+                    "errors": prevalidation["errors"],
+                    "warnings": prevalidation["warnings"],
+                    "prevalidation": prevalidation,
+                }
+            )
             continue
         passport, errors, warnings = build_passport_from_audit(audit, path)
         if errors or not passport:

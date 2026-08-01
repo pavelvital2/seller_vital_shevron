@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime
+import fcntl
 import json
 from pathlib import Path
 import re
@@ -894,6 +895,193 @@ def _load_inbox_pending(data_dir: Path, source_run_id: str, *, marketplace: str)
     return data
 
 
+def _inbox_action_id(action: dict[str, Any]) -> str:
+    identity = {
+        "platform": action.get("platform") or "",
+        "source_type": action.get("source_type") or "",
+        "source_id": action.get("source_id") or "",
+        "action_type": action.get("action_type") or "",
+        "chat_id": action.get("chat_id") or "",
+        "from_message_id": action.get("from_message_id") or "",
+        "text": action.get("draft_text") or action.get("draft_reply") or "",
+    }
+    return canonical_checksum(identity)
+
+
+def _inbox_receipts_path(data_dir: Path) -> Path:
+    return data_dir / "state" / "inbox_action_receipts.json"
+
+
+def _load_inbox_receipts(data_dir: Path) -> dict[str, dict[str, Any]]:
+    data = _safe_read_json(_inbox_receipts_path(data_dir))
+    rows = data.get("receipts") if isinstance(data, dict) else {}
+    return {
+        str(key): value
+        for key, value in (rows.items() if isinstance(rows, dict) else [])
+        if isinstance(value, dict) and value.get("status") == "verified"
+    }
+
+
+def _record_inbox_receipts(
+    *,
+    data_dir: Path,
+    source_run_id: str,
+    actions: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    path = _inbox_receipts_path(data_dir)
+    ensure_dir(path.parent)
+    lock_path = path.parent / ".inbox_action_receipts.lock"
+    with lock_path.open("a+", encoding="utf-8") as lock_handle:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        current = _safe_read_json(path)
+        receipts = current.get("receipts") if isinstance(current, dict) else {}
+        if not isinstance(receipts, dict):
+            receipts = {}
+        now = _now().isoformat(timespec="seconds")
+        for action in actions:
+            action_id = str(action.get("inbox_action_id") or _inbox_action_id(action))
+            receipts[action_id] = {
+                "status": "verified",
+                "source_run_id": source_run_id,
+                "platform": action.get("platform") or "",
+                "source_type": action.get("source_type") or "",
+                "source_id": action.get("source_id") or "",
+                "action_type": action.get("action_type") or "",
+                "chat_id": action.get("chat_id") or "",
+                "verified_at": now,
+            }
+        temporary = path.with_suffix(".tmp")
+        write_json(temporary, {"schema_version": "inbox-action-receipts/v1", "receipts": receipts})
+        temporary.replace(path)
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+    return receipts
+
+
+def _remaining_inbox_actions(
+    actions: list[dict[str, Any]],
+    *,
+    receipts: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    remaining: list[dict[str, Any]] = []
+    for action in actions:
+        action_id = _inbox_action_id(action)
+        if action_id in receipts:
+            continue
+        remaining.append({**action, "inbox_action_id": action_id})
+    return remaining
+
+
+def _reviews_pending_actions(data_dir: Path, pending_id: str) -> list[dict[str, Any]]:
+    data = _safe_read_json(data_dir / "pending" / pending_id / "draft_answers.json")
+    actions = data.get("actions") if isinstance(data, dict) else []
+    return [row for row in actions if isinstance(row, dict)] if isinstance(actions, list) else []
+
+
+def _approvable_review_actions(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for action in actions:
+        action_type = action.get("action_type")
+        if action_type in {"public_review_reply", "question_answer"} and str(action.get("draft_text") or "").strip():
+            result.append(action)
+        elif action_type == "mark_review_viewed" and action.get("platform") == "ozon":
+            result.append(action)
+    return result
+
+
+def _approvable_messenger_actions(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        action
+        for action in actions
+        if action.get("action_type") == "mark_chat_read"
+        or (
+            action.get("action_type") == "send_chat_message"
+            and str(action.get("draft_reply") or "").strip()
+        )
+    ]
+
+
+def _write_reviews_recovery_pending(
+    *,
+    data_dir: Path,
+    source_pending_id: str,
+    source_run_id: str,
+    marketplace: str,
+    actions: list[dict[str, Any]],
+) -> str:
+    recovery_id = f"{source_run_id}_{marketplace}_reviews_recovery_pending"
+    recovery_dir = ensure_dir(data_dir / "pending" / recovery_id)
+    source_manifest = _safe_read_json(data_dir / "pending" / source_pending_id / "manifest.json")
+    manifest = dict(source_manifest) if isinstance(source_manifest, dict) else {}
+    manifest.update(
+        {
+            "pending_id": recovery_id,
+            "run_id": source_run_id,
+            "status": "pending_owner_review",
+            "actions_count": len(actions),
+            "recovery_from": source_pending_id,
+        }
+    )
+    write_json(recovery_dir / "manifest.json", manifest)
+    write_json(recovery_dir / "draft_answers.json", {"run_id": source_run_id, "actions": actions})
+    return recovery_id
+
+
+def _successful_review_actions(
+    actions: list[dict[str, Any]],
+    reviews_result: dict[str, Any],
+) -> list[dict[str, Any]]:
+    apply = reviews_result.get("apply") if isinstance(reviews_result.get("apply"), dict) else {}
+    successful: set[tuple[str, str, str]] = set()
+    for platform in ("ozon", "wb"):
+        result = apply.get(platform) if isinstance(apply.get(platform), dict) else {}
+        groups = (
+            ("sent", "public_review_reply"),
+            ("questions_answered", "question_answer"),
+            ("marked_viewed", "mark_review_viewed"),
+        )
+        for key, action_type in groups:
+            rows = result.get(key) if isinstance(result.get(key), list) else []
+            for row in rows:
+                if isinstance(row, dict) and row.get("ok") is True:
+                    successful.add((platform, str(row.get("source_id") or ""), action_type))
+    return [
+        action
+        for action in actions
+        if (
+            str(action.get("platform") or ""),
+            str(action.get("source_id") or ""),
+            str(action.get("action_type") or ""),
+        )
+        in successful
+    ]
+
+
+def _successful_messenger_actions(
+    actions: list[dict[str, Any]],
+    messenger_result: dict[str, Any],
+) -> list[dict[str, Any]]:
+    sent_rows = (messenger_result.get("send") or {}).get("results")
+    sent_chat_ids = {
+        str(row.get("chat_id") or "")
+        for row in sent_rows if isinstance(row, dict) and row.get("ok") is True
+    } if isinstance(sent_rows, list) else set()
+    read_keys = {
+        (str(row.get("chat_id") or ""), str(row.get("from_message_id") or ""))
+        for row in messenger_result.get("mark_read") or []
+        if isinstance(row, dict) and row.get("ok") is True
+    }
+    successful: list[dict[str, Any]] = []
+    for action in actions:
+        if action.get("action_type") == "send_chat_message" and str(action.get("chat_id") or "") in sent_chat_ids:
+            successful.append(action)
+        elif action.get("action_type") == "mark_chat_read" and (
+            str(action.get("chat_id") or ""),
+            str(action.get("from_message_id") or ""),
+        ) in read_keys:
+            successful.append(action)
+    return successful
+
+
 def _cleanup_inbox_apply_tail(
     *,
     data_dir: Path,
@@ -911,6 +1099,10 @@ def _cleanup_inbox_apply_tail(
     reviews_pending_id = str(pending.get("reviews_pending_id") or "")
     if reviews_pending_id:
         targets.append(("pending", reviews_pending_id))
+
+    recovery_pending_id = str(reviews_result.get("recovery_pending_id") or "")
+    if recovery_pending_id:
+        targets.append(("pending", recovery_pending_id))
 
     approved = reviews_result.get("approved") if isinstance(reviews_result.get("approved"), dict) else {}
     reviews_approved_id = str(approved.get("approved_id") or "")
@@ -961,21 +1153,43 @@ def _prepare_and_apply_reviews(
     reviews_pending_id: str,
     source_run_id: str,
     marketplace: str,
+    receipts: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if not reviews_pending_id:
         return {"status": "skipped", "reason": "no reviews pending id", "selected_actions_count": 0}
-    approved_id = f"{reviews_pending_id}_approved_{_now().strftime('%Y%m%dT%H%M%S')}"
+    source_actions = _reviews_pending_actions(data_dir, reviews_pending_id)
+    remaining_actions = _remaining_inbox_actions(source_actions, receipts=receipts or {})
+    if not remaining_actions:
+        return {
+            "status": "skipped",
+            "reason": "zero unconfirmed reviews/questions tail",
+            "selected_actions_count": 0,
+            "remaining_actions": [],
+        }
+    recovery_pending_id = _write_reviews_recovery_pending(
+        data_dir=data_dir,
+        source_pending_id=reviews_pending_id,
+        source_run_id=source_run_id,
+        marketplace=marketplace,
+        actions=remaining_actions,
+    )
+    approved_id = f"{recovery_pending_id}_approved_{_now().strftime('%Y%m%dT%H%M%S%f')}"
     try:
         approved = run_reviews_questions_prepare_approved(
             data_dir=data_dir,
-            source_pending=reviews_pending_id,
+            source_pending=recovery_pending_id,
             mode="all",
             approved_id=approved_id,
             approved_by="telegram_owner",
         )
     except RuntimeError as exc:
         if "No approvable" in str(exc):
-            return {"status": "skipped", "reason": str(exc), "selected_actions_count": 0}
+            return {
+                "status": "skipped",
+                "reason": str(exc),
+                "selected_actions_count": 0,
+                "remaining_actions": [],
+            }
         raise
     package_path = Path(approved["artifacts"]["approved_package"])
     apply_result = run_reviews_questions_apply(
@@ -985,7 +1199,13 @@ def _prepare_and_apply_reviews(
         run_id=f"{source_run_id}_{marketplace}_reviews_apply",
         confirmed_by_user=True,
     )
-    return {"status": apply_result.get("overall_status"), "approved": approved, "apply": apply_result}
+    return {
+        "status": apply_result.get("overall_status"),
+        "approved": approved,
+        "apply": apply_result,
+        "remaining_actions": remaining_actions,
+        "recovery_pending_id": recovery_pending_id,
+    }
 
 
 def _write_ozon_messenger_approved(
@@ -1127,12 +1347,22 @@ def _apply_ozon_messenger(
                         row["error"] = ""
             mark_read.append(row)
     write_json(raw_dir / "mark_read_result.json", mark_read)
-    ok = bool(send_result.get("ok", True)) and all(row.get("ok") for row in mark_read)
+    send_rows = send_result.get("results") if isinstance(send_result.get("results"), list) else []
+    confirmed_send_chat_ids = {
+        str(row.get("chat_id") or "")
+        for row in send_rows
+        if isinstance(row, dict) and row.get("ok") is True
+    }
+    send_confirmed = all(str(action.get("chat_id") or "") in confirmed_send_chat_ids for action in send_actions)
+    read_confirmed = all(row.get("ok") is True for row in mark_read)
+    ok = send_confirmed and read_confirmed
     return {
         "status": "ok" if ok else "blocked",
         "approved": approved,
         "send": send_result,
         "mark_read": mark_read,
+        "confirmed_actions_count": len(confirmed_send_chat_ids) + sum(row.get("ok") is True for row in mark_read),
+        "unconfirmed_actions_count": len(send_actions) - len(confirmed_send_chat_ids) + sum(row.get("ok") is not True for row in mark_read),
         "artifacts": {
             "ozon_messenger_approved_package": str(package_path),
             "ozon_messenger_mark_read": str(raw_dir / "mark_read_result.json"),
@@ -1167,37 +1397,69 @@ def run_ozon_inbox_apply(
     confirmed_by_user: bool = False,
 ) -> dict[str, Any]:
     started_at = _now()
-    run_id = f"{source_run_id}_apply"
+    run_id = f"{source_run_id}_apply_{started_at.strftime('%Y%m%dT%H%M%S%f')}"
     run_dir = ensure_dir(data_dir / "runs" / started_at.date().isoformat() / run_id)
     approved_id = f"{source_run_id}_owner_approved"
     artifacts: dict[str, str] = {"run_dir": str(run_dir), "apply_marker": str(apply_marker_for(data_dir=data_dir, approved_id=approved_id))}
     if not confirmed_by_user:
         return {"run_id": run_id, "overall_status": "blocked", "blocker": "Apply requires owner confirmation", "artifacts": artifacts}
 
-    assert_apply_not_repeated(data_dir=data_dir, approved_id=approved_id)
+    if apply_marker_for(data_dir=data_dir, approved_id=approved_id).exists():
+        assert_apply_not_repeated(data_dir=data_dir, approved_id=approved_id)
     pending = _load_inbox_pending(data_dir, source_run_id, marketplace="ozon")
+    receipts = _load_inbox_receipts(data_dir)
+    initial_receipt_ids = set(receipts)
+    reviews_pending_id = str(pending.get("reviews_pending_id") or "")
+    review_source_actions = _approvable_review_actions(
+        _reviews_pending_actions(data_dir, reviews_pending_id) if reviews_pending_id else []
+    )
     reviews_result = _prepare_and_apply_reviews(
         credentials=credentials,
         data_dir=data_dir,
-        reviews_pending_id=str(pending.get("reviews_pending_id") or ""),
+        reviews_pending_id=reviews_pending_id,
         source_run_id=source_run_id,
         marketplace="ozon",
+        receipts=receipts,
     )
+    successful_reviews = _successful_review_actions(
+        reviews_result.get("remaining_actions") or [], reviews_result
+    )
+    if successful_reviews:
+        receipts = _record_inbox_receipts(
+            data_dir=data_dir,
+            source_run_id=source_run_id,
+            actions=successful_reviews,
+        )
     messenger_actions = pending.get("messenger_actions") if isinstance(pending.get("messenger_actions"), list) else []
+    messenger_source_actions = _approvable_messenger_actions(
+        [row for row in messenger_actions if isinstance(row, dict)]
+    )
+    remaining_messenger_actions = _remaining_inbox_actions(messenger_source_actions, receipts=receipts)
     messenger_result = _apply_ozon_messenger(
         credentials=credentials,
         data_dir=data_dir,
         source_run_id=source_run_id,
-        actions=[row for row in messenger_actions if isinstance(row, dict)],
+        actions=remaining_messenger_actions,
         run_dir=run_dir,
     )
+    successful_messenger = _successful_messenger_actions(remaining_messenger_actions, messenger_result)
+    if successful_messenger:
+        receipts = _record_inbox_receipts(
+            data_dir=data_dir,
+            source_run_id=source_run_id,
+            actions=successful_messenger,
+        )
     artifacts.update(((reviews_result.get("apply") or {}).get("artifacts") or {}) if isinstance(reviews_result.get("apply"), dict) else {})
     artifacts.update(messenger_result.get("artifacts") or {})
     report_path = run_dir / "ozon_inbox_apply_result.md"
     report_text = _build_apply_report(run_id=run_id, marketplace="ozon", reviews_result=reviews_result, messenger_result=messenger_result, artifacts=artifacts)
     report_path.write_text(report_text, encoding="utf-8")
     artifacts["report"] = str(report_path)
-    overall_status = "ok" if reviews_result.get("status") in {"ok", "warning", "skipped"} and messenger_result.get("status") in {"ok", "skipped"} else "blocked"
+    pending_action_ids = {
+        _inbox_action_id(action) for action in review_source_actions + messenger_source_actions
+    }
+    remaining_action_ids = sorted(pending_action_ids.difference(receipts))
+    overall_status = "ok" if not remaining_action_ids else "warning"
     summary = {
         "run_id": run_id,
         "started_at": started_at.isoformat(timespec="seconds"),
@@ -1206,6 +1468,13 @@ def run_ozon_inbox_apply(
         "source_run_id": source_run_id,
         "reviews": reviews_result,
         "messenger": messenger_result,
+        "recovery": {
+            "source_actions_count": len(pending_action_ids),
+            "previously_verified_count": len(pending_action_ids.intersection(initial_receipt_ids)),
+            "verified_this_attempt_count": len(successful_reviews) + len(successful_messenger),
+            "remaining_count": len(remaining_action_ids),
+            "remaining_action_ids": remaining_action_ids,
+        },
         "artifacts": artifacts,
     }
     write_json(run_dir / "summary.json", summary)
@@ -1220,17 +1489,18 @@ def run_ozon_inbox_apply(
         risk="low",
         marketplaces=["ozon"],
         inputs={"source_run_id": source_run_id, "confirmed_by_user": confirmed_by_user},
-        approved_id=approved_id,
+        approved_id=approved_id if overall_status == "ok" else "",
     )
-    mark_approved_applied(
-        data_dir=data_dir,
-        approved_id=approved_id,
-        apply_run_id=run_id,
-        task="ozon-inbox-apply",
-        status=overall_status,
-        run_manifest_path=manifest_paths["manifest"],
-        checksum=canonical_checksum({"source_run_id": source_run_id, "pending": pending}),
-    )
+    if overall_status == "ok":
+        mark_approved_applied(
+            data_dir=data_dir,
+            approved_id=approved_id,
+            apply_run_id=run_id,
+            task="ozon-inbox-apply",
+            status=overall_status,
+            run_manifest_path=manifest_paths["manifest"],
+            checksum=canonical_checksum({"source_run_id": source_run_id, "pending": pending}),
+        )
     if overall_status == "ok":
         cleanup = _cleanup_inbox_apply_tail(
             data_dir=data_dir,
@@ -1252,27 +1522,46 @@ def run_wb_inbox_apply(
     confirmed_by_user: bool = False,
 ) -> dict[str, Any]:
     started_at = _now()
-    run_id = f"{source_run_id}_apply"
+    run_id = f"{source_run_id}_apply_{started_at.strftime('%Y%m%dT%H%M%S%f')}"
     run_dir = ensure_dir(data_dir / "runs" / started_at.date().isoformat() / run_id)
     approved_id = f"{source_run_id}_owner_approved"
     artifacts: dict[str, str] = {"run_dir": str(run_dir), "apply_marker": str(apply_marker_for(data_dir=data_dir, approved_id=approved_id))}
     if not confirmed_by_user:
         return {"run_id": run_id, "overall_status": "blocked", "blocker": "Apply requires owner confirmation", "artifacts": artifacts}
 
-    assert_apply_not_repeated(data_dir=data_dir, approved_id=approved_id)
+    if apply_marker_for(data_dir=data_dir, approved_id=approved_id).exists():
+        assert_apply_not_repeated(data_dir=data_dir, approved_id=approved_id)
     pending = _load_inbox_pending(data_dir, source_run_id, marketplace="wb")
+    receipts = _load_inbox_receipts(data_dir)
+    initial_receipt_ids = set(receipts)
+    reviews_pending_id = str(pending.get("reviews_pending_id") or "")
+    review_source_actions = _approvable_review_actions(
+        _reviews_pending_actions(data_dir, reviews_pending_id) if reviews_pending_id else []
+    )
     reviews_result = _prepare_and_apply_reviews(
         credentials=credentials,
         data_dir=data_dir,
-        reviews_pending_id=str(pending.get("reviews_pending_id") or ""),
+        reviews_pending_id=reviews_pending_id,
         source_run_id=source_run_id,
         marketplace="wb",
+        receipts=receipts,
     )
+    successful_reviews = _successful_review_actions(
+        reviews_result.get("remaining_actions") or [], reviews_result
+    )
+    if successful_reviews:
+        receipts = _record_inbox_receipts(
+            data_dir=data_dir,
+            source_run_id=source_run_id,
+            actions=successful_reviews,
+        )
     report_path = run_dir / "wb_inbox_apply_result.md"
     report_text = _build_apply_report(run_id=run_id, marketplace="wb", reviews_result=reviews_result, messenger_result=None, artifacts=artifacts)
     report_path.write_text(report_text, encoding="utf-8")
     artifacts["report"] = str(report_path)
-    overall_status = "ok" if reviews_result.get("status") in {"ok", "warning", "skipped"} else "blocked"
+    pending_action_ids = {_inbox_action_id(action) for action in review_source_actions}
+    remaining_action_ids = sorted(pending_action_ids.difference(receipts))
+    overall_status = "ok" if not remaining_action_ids else "warning"
     summary = {
         "run_id": run_id,
         "started_at": started_at.isoformat(timespec="seconds"),
@@ -1281,6 +1570,13 @@ def run_wb_inbox_apply(
         "source_run_id": source_run_id,
         "reviews": reviews_result,
         "wb_notifications": pending.get("wb_notifications") or {},
+        "recovery": {
+            "source_actions_count": len(pending_action_ids),
+            "previously_verified_count": len(pending_action_ids.intersection(initial_receipt_ids)),
+            "verified_this_attempt_count": len(successful_reviews),
+            "remaining_count": len(remaining_action_ids),
+            "remaining_action_ids": remaining_action_ids,
+        },
         "artifacts": artifacts,
     }
     write_json(run_dir / "summary.json", summary)
@@ -1295,17 +1591,18 @@ def run_wb_inbox_apply(
         risk="low",
         marketplaces=["wb"],
         inputs={"source_run_id": source_run_id, "confirmed_by_user": confirmed_by_user},
-        approved_id=approved_id,
+        approved_id=approved_id if overall_status == "ok" else "",
     )
-    mark_approved_applied(
-        data_dir=data_dir,
-        approved_id=approved_id,
-        apply_run_id=run_id,
-        task="wb-inbox-apply",
-        status=overall_status,
-        run_manifest_path=manifest_paths["manifest"],
-        checksum=canonical_checksum({"source_run_id": source_run_id, "pending": pending}),
-    )
+    if overall_status == "ok":
+        mark_approved_applied(
+            data_dir=data_dir,
+            approved_id=approved_id,
+            apply_run_id=run_id,
+            task="wb-inbox-apply",
+            status=overall_status,
+            run_manifest_path=manifest_paths["manifest"],
+            checksum=canonical_checksum({"source_run_id": source_run_id, "pending": pending}),
+        )
     if overall_status == "ok":
         cleanup = _cleanup_inbox_apply_tail(
             data_dir=data_dir,

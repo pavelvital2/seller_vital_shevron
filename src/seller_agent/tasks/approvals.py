@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from seller_agent.core.run_manifest import read_run_index, write_summary_run_manifest
+from seller_agent.core.job_store import DEFAULT_RUNTIME_DB, JobStore
 from seller_agent.reports.writer import ensure_dir, write_json
 from seller_agent.safety.approvals import (
     approval_identity_from_path,
@@ -21,10 +22,13 @@ def run_approvals_status(
     kind: str = "all",
     include_closed: bool = False,
     limit: int = 50,
+    runtime_db: Path | None = None,
 ) -> dict[str, Any]:
     if kind not in {"all", "pending", "approved"}:
         raise ValueError(f"unsupported approvals status kind: {kind}")
     rows = _approval_rows(data_dir)
+    if runtime_db is not None:
+        rows.extend(_runtime_approval_rows(runtime_db))
     if kind != "all":
         rows = [row for row in rows if row["kind"] == kind]
     if target_id:
@@ -46,8 +50,35 @@ def run_approvals_status(
             "pending_dir": str(data_dir / "pending"),
             "approved_dir": str(data_dir / "approved"),
             "runs_index": str(data_dir / "runs" / "index.jsonl"),
+            "runtime_db": str(runtime_db or DEFAULT_RUNTIME_DB),
         },
     }
+
+
+def _runtime_approval_rows(runtime_db: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for approval in JobStore(runtime_db).list_approvals(limit=200):
+        rows.append(
+            {
+                "kind": "runtime",
+                "id": approval.approval_id,
+                "path": str(runtime_db),
+                "manifest": "",
+                "package_type": str(approval.data.get("task_id") or "runtime_approval"),
+                "lifecycle_status": approval.status,
+                "status": approval.status,
+                "created_at": approval.created_at,
+                "source_run_id": str(approval.data.get("source_ref") or ""),
+                "pending_id": "",
+                "approved_id": approval.approval_id,
+                "linked_approved_ids": [],
+                "closed_marker": "",
+                "identity_candidates": [approval.approval_id],
+                "task_id": str(approval.data.get("task_id") or ""),
+                "verify_task": str(approval.data.get("verify_task") or ""),
+            }
+        )
+    return rows
 
 
 def run_approvals_close(

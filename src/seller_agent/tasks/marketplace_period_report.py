@@ -397,6 +397,26 @@ def _collect_wb(
     }
 
 
+def collect_wb_period_metrics(
+    *,
+    statistics: WbStatisticsAdapter,
+    finance: WbFinanceAdapter,
+    promotion: WbPromotionAdapter,
+    catalog_rows: list[dict[str, str]],
+    start: date,
+    end: date,
+) -> dict[str, Any]:
+    """Collect WB period metrics for other read-only financial workflows."""
+    return _collect_wb(
+        statistics=statistics,
+        finance=finance,
+        promotion=promotion,
+        catalog=_CatalogIndex(catalog_rows),
+        start=start,
+        end=end,
+    )
+
+
 def _ozon_expenses(
     operations: list[dict[str, Any]], *, gross: float, net: float
 ) -> tuple[dict[str, float], Counter[str]]:

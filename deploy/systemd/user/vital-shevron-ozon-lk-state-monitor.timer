@@ -1,0 +1,11 @@
+[Unit]
+Description=Check Ozon LK state every 15 minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=15min
+Persistent=true
+Unit=vital-shevron-ozon-lk-state-monitor.service
+
+[Install]
+WantedBy=timers.target

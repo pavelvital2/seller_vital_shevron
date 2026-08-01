@@ -9,7 +9,10 @@ from typing import Any
 from seller_agent.core.job_models import ApprovalRecord, ApprovalStatus, JobRecord
 from seller_agent.core.job_store import DEFAULT_RUNTIME_DB, JobStore
 from seller_agent.core.workflow_runner import WorkflowRunner
+from seller_agent.core.run_manifest import close_run_manifest
 from seller_agent.tasks.registry import RegisteredTask, TaskRegistry, default_task_registry
+from seller_agent.safety.approval_package import build_approval_package
+from seller_agent.safety.guard import SafetyGuard
 
 
 @dataclass(frozen=True)
@@ -31,10 +34,13 @@ class JobService:
         workflow_runner: WorkflowRunner | None = None,
         data_dir: Path = Path("data"),
         runtime_db: Path = DEFAULT_RUNTIME_DB,
+        safety_guard: SafetyGuard | None = None,
     ) -> None:
         self.store = store or JobStore(runtime_db)
+        self.data_dir = data_dir
         self.registry = registry or default_task_registry()
         self.workflow_runner = workflow_runner or WorkflowRunner(registry=self.registry, data_dir=data_dir)
+        self.safety_guard = safety_guard or SafetyGuard()
 
     def submit(
         self,
@@ -64,6 +70,9 @@ class JobService:
                 checksum=runtime_approval["approval_checksum"],
                 data=runtime_approval,
             )
+            if approval.status == "pending_review" and approval.checksum == runtime_approval["approval_checksum"]:
+                self.store.decide_approval(approval_id=approval.approval_id, status="approved")
+                approval = self.store.get_approval(approval.approval_id) or approval
             self.store.append_event(
                 job_id=job.job_id,
                 event_type="job_runtime_approval_attached",
@@ -118,10 +127,34 @@ class JobService:
             )
             return JobServiceResult(job=failed, ok=False, status="blocked", message=failed.error)
 
+        if task.is_write:
+            approval_id = _runtime_approval_id(job.params)
+            approval = self.store.get_approval(approval_id) if approval_id else None
+            decision = self.safety_guard.validate_apply(task=task, job=job, approval=approval)
+            if not decision.allowed:
+                blocked_status = "safety_blocked"
+                event_type = "job_safety_guard_blocked"
+                if "approval_record_checksum_mismatch" in decision.issues:
+                    blocked_status = "approval_checksum_mismatch"
+                    event_type = "job_approval_checksum_mismatch"
+                elif any(issue.startswith("approval_status_invalid:") for issue in decision.issues):
+                    blocked_status = "approval_not_available"
+                    event_type = "job_approval_blocked"
+                elif "approval_record_missing" in decision.issues:
+                    blocked_status = "approval_missing"
+                failed = self.store.update_job_status(
+                    job_id,
+                    "failed",
+                    error="SafetyGuard blocked apply: " + ", ".join(decision.issues),
+                    message="Job blocked by centralized SafetyGuard before resource acquisition.",
+                )
+                self.store.append_event(job_id=job_id, event_type=event_type, message="Centralized SafetyGuard blocked apply.", data={"issues": list(decision.issues)})
+                return JobServiceResult(job=failed, ok=False, status=blocked_status, message=failed.error)
+
         leases_acquired = False
         reserved_approval_id = ""
         try:
-            if task.is_write and task.lock_keys:
+            if task.lock_keys:
                 ttl_seconds = _lease_ttl_seconds(task.timeout_seconds)
                 leases = self.store.acquire_resource_leases(
                     resource_keys=task.lock_keys,
@@ -206,6 +239,8 @@ class JobService:
                     )
 
             self.store.update_job_status(job_id, "running", message="Job runner started.")
+            if task.is_write:
+                self.store.append_event(job_id=job_id, event_type="job_write_window_started", message="Apply workflow started after approval, checksum and lease gates.", data={"approval_id": reserved_approval_id, "write_started": True})
             allowed_modes = _allowed_modes_for_task(task)
             result = self.workflow_runner.run_task(task.name, inputs=job.params, allowed_modes=allowed_modes)
             result_data = result.to_dict()
@@ -214,6 +249,26 @@ class JobService:
                 final_status = "success" if result.status == "ok" else "partial_success"
                 if reserved_approval_id:
                     self.store.update_approval_status(approval_id=reserved_approval_id, status="applied")
+                    if _result_verification_confirmed(result_data):
+                        self.store.update_approval_status(approval_id=reserved_approval_id, status="verified")
+                        self.store.update_approval_status(approval_id=reserved_approval_id, status="closed")
+                        self.store.append_event(job_id=job_id, event_type="job_approval_closed", message="Apply result contained explicit successful verification; approval lifecycle closed.", data={"approval_id": reserved_approval_id})
+                        approval = self.store.get_approval(reserved_approval_id)
+                        source_run_id = _approval_source_run_id(approval) if approval else ""
+                        apply_summary = result_data.get("summary") if isinstance(result_data.get("summary"), dict) else {}
+                        if source_run_id:
+                            close_run_manifest(
+                                data_dir=self.data_dir,
+                                run_id=source_run_id,
+                                applied_by_run_id=str(apply_summary.get("run_id") or job_id),
+                            )
+                elif task.mode == "verify":
+                    recovery_approval_id = _runtime_approval_id(job.params)
+                    if recovery_approval_id and _result_verification_confirmed(result_data):
+                        self.store.update_approval_status(approval_id=recovery_approval_id, status="verified")
+                        self.store.update_approval_status(approval_id=recovery_approval_id, status="closed")
+                elif task.mode == "dry_run":
+                    self._register_plan_approval(job=job, task=task, result_data=result_data)
                 final = self.store.update_job_status(
                     job_id,
                     final_status,
@@ -260,6 +315,88 @@ class JobService:
             message=f"Job cancelled: {reason}",
         )
         return JobServiceResult(job=cancelled, ok=True, status="cancelled", message=reason)
+
+    def approve(self, approval_id: str) -> ApprovalRecord:
+        if not self.store.decide_approval(approval_id=approval_id, status="approved"):
+            current = self.store.get_approval(approval_id)
+            if current is None:
+                raise KeyError(f"Unknown approval: {approval_id}")
+            if current.status != "approved":
+                raise RuntimeError(f"Approval `{approval_id}` cannot be approved from `{current.status}`.")
+        return self.store.get_approval(approval_id)  # type: ignore[return-value]
+
+    def reject(self, approval_id: str) -> ApprovalRecord:
+        if not self.store.decide_approval(approval_id=approval_id, status="rejected"):
+            current = self.store.get_approval(approval_id)
+            if current is None:
+                raise KeyError(f"Unknown approval: {approval_id}")
+            if current.status != "rejected":
+                raise RuntimeError(f"Approval `{approval_id}` cannot be rejected from `{current.status}`.")
+        return self.store.get_approval(approval_id)  # type: ignore[return-value]
+
+    def submit_approval_apply(self, approval_id: str, *, actor: str = "owner") -> JobRecord:
+        approval = self.store.get_approval(approval_id)
+        if approval is None:
+            raise KeyError(f"Unknown approval: {approval_id}")
+        if approval.status != "approved":
+            raise RuntimeError(f"Approval `{approval_id}` is `{approval.status}`, expected `approved`.")
+        params = dict(approval.data.get("apply_params") or {})
+        params.update(
+            {
+                "confirmed_by_user": True,
+                "approval_id": approval.approval_id,
+                "approval_checksum": approval.checksum,
+            }
+        )
+        return self.submit(task_id=str(approval.data.get("task_id") or ""), params=params, actor=actor, source="runtime_approval")
+
+    def submit_approval_verify(self, approval_id: str, *, actor: str = "owner") -> JobRecord:
+        approval = self.store.get_approval(approval_id)
+        if approval is None:
+            raise KeyError(f"Unknown approval: {approval_id}")
+        if approval.status not in {"applied", "applying_unknown"}:
+            raise RuntimeError(f"Approval `{approval_id}` is `{approval.status}`, verify is not available.")
+        request = self._build_recovery_verify_request(approval)
+        if not request["ok"]:
+            raise RuntimeError(str(request["blocked_reason"]))
+        return self.submit(task_id=request["task_id"], params=request["params"], actor=actor, source="runtime_approval_verify")
+
+    def _register_plan_approval(
+        self,
+        *,
+        job: JobRecord,
+        task: RegisteredTask,
+        result_data: dict[str, Any],
+    ) -> ApprovalRecord | None:
+        apply_tasks = [candidate for candidate in self.registry.list() if candidate.is_write and candidate.source_plan_task == task.name]
+        if len(apply_tasks) != 1:
+            return None
+        summary = result_data.get("summary") if isinstance(result_data.get("summary"), dict) else {}
+        source_ref = str(summary.get("run_id") or result_data.get("run_id") or "").strip()
+        if not source_ref:
+            return None
+        apply_task = apply_tasks[0]
+        source_key = "source_run_id" if task.name.endswith("inbox") else "plan_run_id"
+        apply_params = {source_key: source_ref}
+        approval_source = {"kind": source_key, "ref": _canonical_json(source_ref)}
+        approval_id = f"runtime:{apply_task.name}:{_canonical_hash({'task_id': apply_task.name, 'source': approval_source})[:24]}"
+        package = build_approval_package(
+            approval_id=approval_id,
+            task_id=apply_task.name,
+            source_plan_task=task.name,
+            verify_task=apply_task.verify_task,
+            source_kind=approval_source["kind"],
+            source_ref=approval_source["ref"],
+            apply_params=apply_params,
+            marketplaces=apply_task.marketplaces,
+        )
+        return self.store.ensure_approval(
+            approval_id=approval_id,
+            source_job_id=job.job_id,
+            status="pending_review",
+            checksum=package["approval_checksum"],
+            data=package,
+        )
 
     def recover_runtime_approvals(
         self,
@@ -327,7 +464,8 @@ class JobService:
                 )
                 if verify_confirmed:
                     self.store.update_approval_status(approval_id=approval.approval_id, status="verified")
-                    row["approval_status_after"] = "verified"
+                    self.store.update_approval_status(approval_id=approval.approval_id, status="closed")
+                    row["approval_status_after"] = "closed"
                 else:
                     current = self.store.get_approval(approval.approval_id)
                     row["approval_status_after"] = current.status if current else approval.status
@@ -426,20 +564,21 @@ def _runtime_approval_for_submit(task: RegisteredTask, params: dict[str, Any]) -
         return None
     approval_source = _runtime_approval_source(params)
     approval_payload = _approval_payload(params)
-    approval_checksum = f"sha256:{_canonical_hash({'task_id': task.name, 'params': approval_payload})}"
     approval_id = f"runtime:{task.name}:{_canonical_hash({'task_id': task.name, 'source': approval_source})[:24]}"
+    package = build_approval_package(
+        approval_id=approval_id,
+        task_id=task.name,
+        source_plan_task=task.source_plan_task,
+        verify_task=task.verify_task,
+        source_kind=approval_source["kind"],
+        source_ref=approval_source["ref"],
+        apply_params=approval_payload,
+        marketplaces=task.marketplaces,
+    )
+    approval_checksum = package["approval_checksum"]
     params["approval_id"] = approval_id
     params["approval_checksum"] = approval_checksum
-    return {
-        "approval_id": approval_id,
-        "approval_checksum": approval_checksum,
-        "task_id": task.name,
-        "source_plan_task": task.source_plan_task,
-        "verify_task": task.verify_task,
-        "source_kind": approval_source["kind"],
-        "source_ref": approval_source["ref"],
-        "apply_params": approval_payload,
-    }
+    return package
 
 
 def _runtime_approval_source(params: dict[str, Any]) -> dict[str, str]:
@@ -489,9 +628,33 @@ def _runtime_recovery_verify_params(approval: ApprovalRecord) -> dict[str, Any]:
     return {key: value for key, value in sorted(apply_params.items()) if key not in ignored}
 
 
+def _approval_source_run_id(approval: ApprovalRecord) -> str:
+    if str(approval.data.get("source_kind") or "") not in {"plan_run_id", "source_run_id"}:
+        return ""
+    value = approval.data.get("source_ref")
+    try:
+        decoded = json.loads(str(value))
+    except (json.JSONDecodeError, TypeError):
+        decoded = value
+    return str(decoded or "").strip()
+
+
 def _canonical_hash(value: Any) -> str:
     return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
 
 
 def _canonical_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _result_verification_confirmed(result: dict[str, Any]) -> bool:
+    summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+    if str(summary.get("lifecycle_status") or "") in {"verified", "closed"}:
+        return True
+    if summary.get("verified") is True or summary.get("verification_confirmed") is True:
+        return True
+    for key in ("verify", "verification"):
+        value = summary.get(key)
+        if isinstance(value, dict) and str(value.get("overall_status") or value.get("status") or "") == "ok":
+            return True
+    return False

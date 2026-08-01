@@ -11,6 +11,7 @@ from typing import Any, Iterator
 from seller_agent.core.job_models import (
     ApprovalRecord,
     ApprovalStatus,
+    CardWorkEvent,
     CardWorkItem,
     CardWorkStatus,
     JobEvent,
@@ -266,6 +267,15 @@ class JobStore:
             ).fetchone()
         return _telegram_update_from_row(row) if row is not None else None
 
+    def list_telegram_updates(self, *, limit: int = 50) -> list[TelegramUpdateRecord]:
+        self.initialize()
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM telegram_updates ORDER BY received_at DESC, update_id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [_telegram_update_from_row(row) for row in rows]
+
     def get_telegram_update_by_job_id(self, job_id: str) -> TelegramUpdateRecord | None:
         self.initialize()
         with self._connect() as connection:
@@ -478,6 +488,24 @@ class JobStore:
             )
         return cursor.rowcount == 1
 
+    def decide_approval(
+        self,
+        *,
+        approval_id: str,
+        status: ApprovalStatus,
+        expected_statuses: tuple[ApprovalStatus, ...] = ("pending_review",),
+    ) -> bool:
+        if status not in {"approved", "rejected"}:
+            raise ValueError("approval decision must be approved or rejected")
+        placeholders = ",".join("?" for _ in expected_statuses)
+        now = _now()
+        with self._transaction() as connection:
+            cursor = connection.execute(
+                f"UPDATE approvals SET status = ?, updated_at = ? WHERE approval_id = ? AND status IN ({placeholders})",
+                (status, now, approval_id, *expected_statuses),
+            )
+        return cursor.rowcount == 1
+
     def get_approval(self, approval_id: str) -> ApprovalRecord | None:
         self.initialize()
         with self._connect() as connection:
@@ -562,6 +590,64 @@ class JobStore:
             raise KeyError(f"Unknown card work item after upsert: {internal_sku}")
         return item
 
+    def transition_card_work_item(
+        self,
+        *,
+        internal_sku: str,
+        status: CardWorkStatus,
+        reason: str = "",
+        approval_id: str = "",
+        plan_run_id: str = "",
+        apply_run_id: str = "",
+        post_verify_run_id: str = "",
+        checksum: str = "",
+        data: dict[str, Any] | None = None,
+    ) -> CardWorkItem:
+        current = self.get_card_work_item(internal_sku)
+        before = current.status if current else ""
+        if current and status != current.status and status not in CARD_WORK_TRANSITIONS.get(current.status, set()):
+            raise ValueError(f"invalid card lifecycle transition: {current.status} -> {status}")
+        item = self.upsert_card_work_item(
+            internal_sku=internal_sku,
+            status=status,
+            approval_id=approval_id,
+            plan_run_id=plan_run_id,
+            apply_run_id=apply_run_id,
+            post_verify_run_id=post_verify_run_id,
+            checksum=checksum,
+            data=data,
+        )
+        with self._transaction() as connection:
+            connection.execute(
+                """
+                INSERT INTO card_work_events (
+                  internal_sku, status_before, status_after, reason, data_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (internal_sku, before, status, reason, _json_dumps(data or {}), _now()),
+            )
+        return item
+
+    def list_card_work_events(self, internal_sku: str) -> list[CardWorkEvent]:
+        self.initialize()
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM card_work_events WHERE internal_sku = ? ORDER BY event_id ASC",
+                (internal_sku,),
+            ).fetchall()
+        return [
+            CardWorkEvent(
+                event_id=int(row["event_id"]),
+                internal_sku=str(row["internal_sku"]),
+                status_before=str(row["status_before"]),
+                status_after=str(row["status_after"]),  # type: ignore[arg-type]
+                reason=str(row["reason"]),
+                data=_json_loads(str(row["data_json"])),
+                created_at=str(row["created_at"]),
+            )
+            for row in rows
+        ]
+
     def get_card_work_item(self, internal_sku: str) -> CardWorkItem | None:
         self.initialize()
         with self._connect() as connection:
@@ -638,6 +724,18 @@ class JobStore:
 
 
 TERMINAL_JOB_STATUSES = {"success", "partial_success", "failed", "timeout", "cancelled"}
+
+CARD_WORK_TRANSITIONS: dict[str, set[str]] = {
+    "draft": {"owner_review", "blocked", "failed"},
+    "owner_review": {"owner_approved", "blocked", "failed"},
+    "owner_approved": {"applying", "blocked", "failed"},
+    "applying": {"applied", "verified", "closed", "blocked", "failed"},
+    "applied": {"verified", "closed", "blocked", "failed"},
+    "verified": {"closed", "failed"},
+    "blocked": {"owner_review", "owner_approved", "applying", "failed"},
+    "failed": {"owner_review", "owner_approved", "applying"},
+    "closed": set(),
+}
 
 
 SCHEMA_SQL = """
@@ -724,6 +822,18 @@ CREATE TABLE IF NOT EXISTS card_work_items (
 );
 
 CREATE INDEX IF NOT EXISTS idx_card_work_items_status ON card_work_items(status, updated_at);
+
+CREATE TABLE IF NOT EXISTS card_work_events (
+  event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  internal_sku TEXT NOT NULL,
+  status_before TEXT NOT NULL DEFAULT '',
+  status_after TEXT NOT NULL,
+  reason TEXT NOT NULL DEFAULT '',
+  data_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_card_work_events_sku ON card_work_events(internal_sku, event_id);
 """
 
 

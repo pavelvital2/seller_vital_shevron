@@ -88,6 +88,9 @@
 - `data/planning/revision_2026-07-21.md` - актуальная ревизия накопленного
   checkpoint: полный test/preflight/runtime контроль, revision-fixes,
   остаточные риски и состояние перед commit/push.
+- `data/planning/revision_2026-08-01.md` - ревизия карточного pipeline,
+  runtime approvals, ежедневного отчёта, Ozon/WB `Цены и маржа`, inbox
+  recovery и маршрутизации scheduled-отчётов.
 - `data/planning/revision_2026-07-24.md` - актуальная ревизия marketplace
   reporting, pricing, promotion, карточного checkpoint и production runtime:
   полный test/preflight/systemd контроль, найденные риски и состояние перед
@@ -138,6 +141,10 @@
 - `data/planning/chat_report_templates.md` - унифицированные шаблоны вывода
   отчетов в Telegram-чат и правило прикрепления полного файла отчета.
 - `data/planning/ozon_elastic_runbook.md` - Ozon Elastic Boosting.
+- `data/planning/liquidation_daily_control_runbook.md` - ежедневный Job Worker
+  контроль точных Ozon/WB ликвидационных когорт и checksummed stop-review.
+- `data/planning/runtime_safety_guard_runbook.md` - единый runtime approval
+  package, централизованный SafetyGuard, lifecycle и shared WB profile lease.
 - `data/planning/ozon_actions_optimizer_runbook.md` - read-only/dry-run
   оптимизатор всех доступных Ozon акций: выбор лучшей акции по товару с
   учетом бустинга, `min_price` и FBO-остатка.

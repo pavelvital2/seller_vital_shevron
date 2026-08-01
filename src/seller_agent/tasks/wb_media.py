@@ -68,19 +68,12 @@ def build_wb_media_plan(passport: dict[str, Any]) -> list[dict[str, Any]]:
                 )
         if result:
             ordered = sorted(result, key=lambda item: int(item["position"]))
-            positions = [int(item["position"]) for item in ordered]
-            if positions == list(range(1, len(positions) + 1)):
-                return ordered
-            if any(item.get("source_kind") == "owner_approved_local" for item in ordered):
-                return ordered
-            # Existing-card media plans may keep protected WB positions and add
-            # one neutral URL. In that contract target_assets contains the
-            # complete exact set required by /content/v3/media/save.
-            assets = media.get("target_assets")
-            if isinstance(assets, list) and assets:
-                result = []
-            else:
-                return ordered
+            return ordered
+
+    # Marketplace-specific sets are authoritative. A present WB set, even an
+    # all-keep set, must never fall back to generic/Ozon-derived assets.
+    if isinstance(rows, list):
+        return sorted(result, key=lambda item: int(item["position"]))
 
     assets = media.get("target_assets")
     if isinstance(assets, list):

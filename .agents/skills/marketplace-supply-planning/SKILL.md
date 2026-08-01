@@ -173,6 +173,31 @@ description: "Use for Ozon/Wildberries stock and supply planning: current stocks
   detail export, or a previously owner-approved workbook only when marketplace,
   region/cluster, quantity and date/supply id match; otherwise report
   `composition_not_confirmed`.
+- For WB warehouse fire/incident loss audits, calculate the store-wide
+  accounting delta as `baseline + accepted inbound - net sales - current`,
+  using identical stock states at both ends. Internal WB movements cancel at
+  store level. Do not call that delta physical destruction when WB keeps
+  damaged/frozen goods in the current stock ledger.
+- Per-warehouse deltas require internal movement data: movements cancel for the
+  whole store but create apparent shortages and surpluses by warehouse. Without
+  movement evidence, label the row `preliminary balance deviation`, not loss.
+  Treat the nearest incident snapshot, including `inWayToClient` and
+  `inWayFromClient`, only as an exposed inventory upper bound.
+- Confirm destroyed WB quantity only from a line-item loss/compensation
+  document, preferably Documents API category `compensation-report`, or another
+  official row with `nmId` and quantity. A `Добровольная выплата` finance row
+  with `nmId=0` and `quantity=0` confirms only the paid amount; negative
+  `deduction` increases seller payout.
+- Convert confirmed marketplace quantities to physical items with the unified
+  catalog `pack_qty`. Keep attacked warehouses without confirmed storage-zone
+  damage in a separate control section and schedule a follow-up for the stated
+  WB financial-report date.
+
+- Confirmed on 2026-07-31: a recurring incident audit may automate the
+  store-wide balance and compensation search, but its per-warehouse table must
+  keep `loss_confirmed=false` until WB internal movements and a line-item
+  compensation/loss document are available. A live stock drop inside the day
+  is a control signal, not proof of destruction.
 
 ## Workbook Shape
 

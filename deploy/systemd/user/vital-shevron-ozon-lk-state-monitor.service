@@ -1,0 +1,10 @@
+[Unit]
+Description=Queue Vital Shevron Ozon LK state monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/pavel/projects/seller_vital_shevron
+Environment=PYTHONPATH=/home/pavel/projects/seller_vital_shevron/src:/home/pavel/projects/seller_vital_shevron
+ExecStart=/home/Codex/agent-tools/python/bin/python scripts/monitoring/enqueue_ozon_lk_state_monitor.py

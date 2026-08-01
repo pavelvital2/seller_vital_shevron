@@ -260,6 +260,57 @@ def find_run(
     return None
 
 
+def close_run_manifest(
+    *,
+    data_dir: Path,
+    run_id: str,
+    applied_by_run_id: str = "",
+) -> bool:
+    """Close one exact source RunManifest after confirmed apply -> verify."""
+    row = find_run(data_dir=data_dir, run_id=run_id)
+    if not isinstance(row, dict):
+        return False
+    manifest_path: Path | None = None
+    artifact_manifest = (row.get("artifacts") or {}).get("run_manifest") if isinstance(row.get("artifacts"), dict) else None
+    if artifact_manifest:
+        candidate = Path(str(artifact_manifest))
+        if candidate.is_file():
+            manifest_path = candidate
+    if manifest_path is None:
+        candidates = list((data_dir / "runs").glob(f"*/{run_id}/manifest.json"))
+        manifest_path = candidates[0] if candidates else None
+    row.update(
+        {
+            "lifecycle_status": "closed",
+            "closed": True,
+            "applied_by_run_id": applied_by_run_id or str(row.get("applied_by_run_id") or ""),
+            "finished_at": datetime.now().isoformat(timespec="seconds"),
+        }
+    )
+    if manifest_path is not None:
+        write_json(manifest_path, row)
+    manifest = RunManifest(
+        run_id=str(row.get("run_id") or run_id),
+        task=str(row.get("task") or "unknown"),
+        mode=str(row.get("mode") or "dry_run"),  # type: ignore[arg-type]
+        risk=str(row.get("risk") or "normal"),  # type: ignore[arg-type]
+        marketplaces=list(row.get("marketplaces") or []),
+        status=_normalize_status(str(row.get("status") or "warning")),
+        started_at=str(row.get("started_at") or ""),
+        lifecycle_status="closed",
+        finished_at=str(row.get("finished_at") or ""),
+        inputs=dict(row.get("inputs") or {}),
+        artifacts=_string_artifacts(row.get("artifacts") if isinstance(row.get("artifacts"), dict) else {}),
+        source_run_ids=list(row.get("source_run_ids") or []),
+        pending_id=str(row.get("pending_id") or ""),
+        approved_id=str(row.get("approved_id") or ""),
+        applied_by_run_id=str(row.get("applied_by_run_id") or ""),
+        closed=True,
+    )
+    _upsert_index(data_dir / "runs" / "index.jsonl", manifest)
+    return True
+
+
 def _upsert_index(index_path: Path, manifest: RunManifest) -> None:
     ensure_dir(index_path.parent)
     rows = [row for row in read_run_index(index_path.parent.parent) if row.get("run_id") != manifest.run_id]

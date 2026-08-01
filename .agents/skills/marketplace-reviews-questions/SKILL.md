@@ -88,5 +88,10 @@ links to a nested report are not a substitute for these texts. For an empty
 rating-only review, state explicitly that the text is absent and show the
 planned action (`mark viewed` or a public reply).
 
+For Telegram approval messages, show the numeric rating next to every review
+that has a proposed public reply. Rating-only rows may be grouped only with an
+explicit rating distribution. Never send counts without rating values and rely
+on the attachment for the missing ratings.
+
 After a successful operation, update `reviews_questions_runbook.md` with any
 new confirmed recovery path or marketplace limitation.

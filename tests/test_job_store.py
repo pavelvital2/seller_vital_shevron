@@ -227,4 +227,29 @@ def test_job_store_initializes_schema_once(tmp_path: Path) -> None:
         "resource_leases",
         "telegram_updates",
         "card_work_items",
+        "card_work_events",
     }.issubset(tables)
+
+
+def test_card_work_item_transition_history_and_repeat_guard(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "runtime.db")
+    store.upsert_card_work_item(internal_sku="sku-2", status="draft")
+
+    for status in ("owner_review", "owner_approved", "applying", "applied", "verified", "closed"):
+        store.transition_card_work_item(internal_sku="sku-2", status=status, reason=f"to_{status}")
+
+    assert [event.status_after for event in store.list_card_work_events("sku-2")] == [
+        "owner_review",
+        "owner_approved",
+        "applying",
+        "applied",
+        "verified",
+        "closed",
+    ]
+
+    try:
+        store.transition_card_work_item(internal_sku="sku-2", status="applying", reason="repeat")
+    except ValueError as exc:
+        assert "closed -> applying" in str(exc)
+    else:
+        raise AssertionError("closed card lifecycle must reject repeated apply")

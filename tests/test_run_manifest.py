@@ -179,7 +179,7 @@ def test_status_preflight_writes_run_manifest(tmp_path: Path, monkeypatch) -> No
     )
     monkeypatch.setattr(
         "seller_agent.tasks.status_preflight._check_lk_sessions",
-        lambda include_lk: {"ozon_cdp": {"status": "skipped"}},
+        lambda include_lk, marketplaces=("ozon", "wb"): {"ozon_cdp": {"status": "skipped"}},
     )
 
     result = run_status_preflight(
@@ -225,7 +225,7 @@ def test_status_preflight_can_be_scoped_to_ozon_without_wb_or_catalog(tmp_path: 
     monkeypatch.setattr("seller_agent.tasks.status_preflight._check_ozon_performance_api", fail_if_performance_called)
     monkeypatch.setattr(
         "seller_agent.tasks.status_preflight._check_lk_sessions",
-        lambda include_lk: {"ozon_cdp": {"status": "skipped"}},
+        lambda include_lk, marketplaces=("ozon", "wb"): {"ozon_cdp": {"status": "skipped"}},
     )
 
     result = run_status_preflight(

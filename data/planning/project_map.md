@@ -473,8 +473,16 @@
   завершился success и доставил text/report владельцу.
 - `deploy/systemd/user/vital-shevron-liquidation-daily-reminder.service`
 - `deploy/systemd/user/vital-shevron-liquidation-daily-reminder.timer` -
-  ежедневное read-only напоминание в `09:00 МСК` о контроле распродажи
-  залежалых когорт Ozon/WB и их CPC hard stop.
+  ежедневная постановка фактического read-only контроля распродажи в Job
+  Worker в `09:00 МСК`; legacy-имя unit сохранено для совместимости.
+- `deploy/systemd/user/vital-shevron-ozon-lk-state-monitor.service|timer` -
+  контроль Ozon LK каждые 15 минут с уведомлением только при переходе состояния.
+- `deploy/systemd/user/vital-shevron-ozon-min-price-timer-plan.service|timer` -
+  ежедневный timer-status и refresh dry-run защиты минимальной цены.
+- `deploy/systemd/user/vital-shevron-ozon-stars-control@.service` и timers
+  `3d/7d/14d` - one-shot контроль после отключения программы.
+- `deploy/systemd/user/vital-shevron-wb-incident-audit.service|timer` -
+  контрольный read-only баланс складских инцидентов 2026-08-03.
 
 Ozon CDP port по умолчанию: `9544`.
 
@@ -539,6 +547,9 @@ Ozon CDP port по умолчанию: `9544`.
 - `data/planning/revision_2026-07-14.md` - ревизия runtime/card/inbox изменений,
   проверка VPS-сервисов, тестов, секретов и рисков перед checkpoint commit.
 - `data/planning/recommendations_index.md`
+- `data/planning/priority_automation_plan_2026-07-31.md` - утвержденный
+  порядок первых десяти задач автоматизации без Mini App и без автономного
+  marketplace write.
 - `data/planning/followups.md` - контрольные follow-up задачи, которые нельзя
   потерять между сессиями агентов.
 - `data/planning/vital_shevron_bootstrap_plan.md`
@@ -591,6 +602,10 @@ Ozon CDP port по умолчанию: `9544`.
 - `data/planning/ozon_stars_profitability_runbook.md` - read-only оценка
   экономики Ozon `Звёздные товары`, порог окупаемости и контролируемое
   отключение после отдельного owner approval.
+- `data/planning/liquidation_daily_control_runbook.md` - Job Worker контроль
+  точных ликвидационных когорт, нулевые строки и checksummed hard-stop review.
+- `data/planning/runtime_safety_guard_runbook.md` - единый approval package,
+  централизованный SafetyGuard, lifecycle и общий WB browser-profile lease.
 - `data/planning/ozon_cpc_efficiency_runbook.md`
 - `data/planning/wb_promotion_runbook.md`
 - `data/planning/wb_actions_runbook.md`
@@ -691,3 +706,14 @@ Ozon CDP port по умолчанию: `9544`.
   хранить во внешнем secret-файле вне проекта, например
   `/home/pavel/.secrets/vital_shevron_telegram_bot_token`.
 - `tmp/auth/` - временные auth/cookie файлы. Не коммитить.
+# Runtime hardening 2026-08-01
+
+- `src/seller_agent/tasks/card_audit_prevalidator.py` - обязательный quality
+  gate Layer 2 перед owner review/passport promotion.
+- `src/seller_agent/tasks/ozon_pricing_margin.py` и
+  `src/seller_agent/tasks/wb_pricing_margin.py` - dry-run финансовая модель,
+  сетка цен, stock/action gates и отчеты 15/30 дней.
+- `src/seller_agent/core/scheduled_jobs.py` - дедуплицированные scheduled jobs
+  и штатный маршрут отчетов в Manager bot.
+- `data/state/inbox_action_receipts.json` - runtime-состояние подтвержденных
+  inbox действий; создается при первом успешном action-level apply.

@@ -9,6 +9,7 @@ from typing import Any, Callable
 from seller_agent.config import AppCredentials, load_credentials
 from seller_agent.tasks.approved_cards_apply import run_apply_approved_cards, run_plan_approved_cards
 from seller_agent.tasks.card_content_update import run_card_content_update_verify
+from seller_agent.tasks.card_audit_prevalidator import run_card_audit_prevalidate
 from seller_agent.tasks.daily_morning_report import run_daily_morning_report
 from seller_agent.tasks.inbox_workflow import (
     run_ozon_inbox_apply,
@@ -16,6 +17,7 @@ from seller_agent.tasks.inbox_workflow import (
     run_wb_inbox_apply,
     run_wb_inbox_triage,
 )
+from seller_agent.tasks.liquidation_daily_control import run_liquidation_daily_control
 from seller_agent.tasks.marketplace_period_report import run_marketplace_period_report
 from seller_agent.tasks.ozon_actions_optimizer_apply import (
     run_ozon_actions_optimizer_apply,
@@ -30,6 +32,9 @@ from seller_agent.tasks.ozon_product_remove import run_ozon_product_remove_verif
 from seller_agent.tasks.ozon_pricing_margin import run_ozon_pricing_margin
 from seller_agent.tasks.ozon_production_work_plan import run_ozon_production_work_plan
 from seller_agent.tasks.ozon_stock_supply_monitor import run_ozon_stock_supply_monitor
+from seller_agent.tasks.ozon_stars_control import run_ozon_stars_control
+from seller_agent.tasks.ozon_lk_state_monitor import run_ozon_lk_state_monitor
+from seller_agent.tasks.ozon_min_price_timer_plan import run_ozon_min_price_timer_plan
 from seller_agent.tasks.pricing_status import run_pricing_status
 from seller_agent.tasks.registry import RegisteredTask, TaskRegistry, default_task_registry
 from seller_agent.tasks.reviews_questions import run_reviews_questions_apply, run_reviews_questions_verify
@@ -37,6 +42,9 @@ from seller_agent.tasks.seller_sku_update import run_seller_sku_update_verify
 from seller_agent.tasks.status_preflight import run_status_preflight
 from seller_agent.tasks.wb_actions_discount_apply import run_wb_actions_discount_apply, run_wb_actions_discount_verify
 from seller_agent.tasks.wb_actions_discount_plan import run_wb_actions_discount_plan
+from seller_agent.tasks.wb_liquidation_stage2_plan import run_wb_liquidation_stage2_plan
+from seller_agent.tasks.wb_pricing_margin import run_wb_pricing_margin
+from seller_agent.tasks.wb_incident_audit import run_wb_incident_audit
 from seller_agent.tasks.wb_best_price_action import (
     run_wb_best_price_action_apply,
     run_wb_best_price_action_plan,
@@ -240,10 +248,17 @@ class _WorkflowLock:
 def default_workflow_handlers() -> dict[str, WorkflowHandler]:
     return {
         "daily-morning-report": _daily_morning_report_handler,
+        "liquidation-daily-control": _liquidation_daily_control_handler,
+        "wb-liquidation-stage2-plan": _wb_liquidation_stage2_plan_handler,
+        "ozon-stars-control": _ozon_stars_control_handler,
+        "wb-incident-audit": _wb_incident_audit_handler,
+        "ozon-lk-state-monitor": _ozon_lk_state_monitor_handler,
+        "ozon-min-price-timer-plan": _ozon_min_price_timer_plan_handler,
         "marketplace-period-report": _marketplace_period_report_handler,
         "ozon-stock-supply-monitor": _ozon_stock_supply_monitor_handler,
         "ozon-production-work-plan": _ozon_production_work_plan_handler,
         "ozon-pricing-margin": _ozon_pricing_margin_handler,
+        "wb-pricing-margin": _wb_pricing_margin_handler,
         "ozon-inbox": _ozon_inbox_handler,
         "wb-inbox": _wb_inbox_handler,
         "ozon-elastic-plan": _ozon_elastic_plan_handler,
@@ -256,6 +271,7 @@ def default_workflow_handlers() -> dict[str, WorkflowHandler]:
         "wb-stock-supply-monitor": _wb_stock_supply_monitor_handler,
         "wb-production-work-plan": _wb_production_work_plan_handler,
         "approved-cards-batch-plan": _approved_cards_batch_plan_handler,
+        "card-audit-prevalidate": _card_audit_prevalidate_handler,
         "approved-cards-batch-apply": _approved_cards_batch_apply_handler,
         "card-content-update-verify": _card_content_update_verify_handler,
         "ozon-card-create-verify": _ozon_card_create_verify_handler,
@@ -299,6 +315,69 @@ def _daily_morning_report_handler(
         seller_v2=_bool_input(inputs, "seller_v2", False),
         seller_v3=_bool_input(inputs, "seller_v3", True),
     )
+
+
+def _liquidation_daily_control_handler(
+    task: RegisteredTask,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    if credentials is None:
+        raise ValueError(f"Task `{task.name}` requires credentials.")
+    return run_liquidation_daily_control(
+        credentials=credentials,
+        data_dir=data_dir,
+        date_to=_optional_str(inputs.get("date_to")),
+        ozon_cohort_path=Path(inputs.get("ozon_cohort_path") or "data/runs/2026-07-30/ozon_dormant_reset_plan_docs_fixed_20260730T1050/ozon_dormant_reset_plan.csv"),
+        wb_cohort_path=Path(inputs.get("wb_cohort_path") or "data/runs/2026-07-30/wb_dormant_liquidation_fresh_preapply_20260730T1421/liquidation_plan.csv"),
+        run_id=_optional_str(inputs.get("run_id")),
+    )
+
+
+def _wb_liquidation_stage2_plan_handler(
+    task: RegisteredTask,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    if credentials is None:
+        raise ValueError(f"Task `{task.name}` requires credentials.")
+    return run_wb_liquidation_stage2_plan(
+        credentials=credentials,
+        data_dir=data_dir,
+        cohort_path=Path(inputs.get("cohort_path") or "data/runs/2026-07-30/wb_dormant_liquidation_fresh_preapply_20260730T1421/liquidation_plan.csv"),
+        run_id=_optional_str(inputs.get("run_id")),
+    )
+
+
+def _ozon_stars_control_handler(
+    task: RegisteredTask,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    if credentials is None:
+        raise ValueError(f"Task `{task.name}` requires credentials.")
+    return run_ozon_stars_control(credentials=credentials, data_dir=data_dir, window_days=_int_input(inputs, "window_days", 3), date_to=_optional_str(inputs.get("date_to")), run_id=_optional_str(inputs.get("run_id")))
+
+
+def _wb_incident_audit_handler(task: RegisteredTask, data_dir: Path, credentials: AppCredentials | None, inputs: dict[str, Any]) -> dict[str, Any]:
+    if credentials is None:
+        raise ValueError(f"Task `{task.name}` requires credentials.")
+    return run_wb_incident_audit(credentials=credentials, data_dir=data_dir, run_id=_optional_str(inputs.get("run_id")))
+
+
+def _ozon_lk_state_monitor_handler(task: RegisteredTask, data_dir: Path, credentials: AppCredentials | None, inputs: dict[str, Any]) -> dict[str, Any]:
+    if credentials is None:
+        raise ValueError(f"Task `{task.name}` requires credentials.")
+    return run_ozon_lk_state_monitor(credentials=credentials, data_dir=data_dir, state_path=Path(inputs.get("state_path") or "runtime/state/ozon_lk_monitor.json"), run_id=_optional_str(inputs.get("run_id")))
+
+
+def _ozon_min_price_timer_plan_handler(task: RegisteredTask, data_dir: Path, credentials: AppCredentials | None, inputs: dict[str, Any]) -> dict[str, Any]:
+    if credentials is None:
+        raise ValueError(f"Task `{task.name}` requires credentials.")
+    return run_ozon_min_price_timer_plan(credentials=credentials, data_dir=data_dir, warning_days=_int_input(inputs, "warning_days", 5), run_id=_optional_str(inputs.get("run_id")))
 
 
 def _marketplace_period_report_handler(
@@ -362,6 +441,24 @@ def _ozon_pricing_margin_handler(
     if credentials is None:
         raise ValueError(f"Task `{task.name}` requires credentials.")
     return run_ozon_pricing_margin(
+        credentials=credentials,
+        data_dir=data_dir,
+        unit_cost=inputs.get("unit_cost"),
+        target_margin=inputs.get("target_margin"),
+        period_days=_int_input(inputs, "period_days", 0),
+        run_id=_optional_str(inputs.get("run_id")),
+    )
+
+
+def _wb_pricing_margin_handler(
+    task: RegisteredTask,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    if credentials is None:
+        raise ValueError(f"Task `{task.name}` requires credentials.")
+    return run_wb_pricing_margin(
         credentials=credentials,
         data_dir=data_dir,
         unit_cost=inputs.get("unit_cost"),
@@ -550,6 +647,24 @@ def _wb_production_work_plan_handler(
         mode=_required_str(inputs, "mode", task.name),
         value=_int_input(inputs, "value", 0),
         cluster_count=_int_input(inputs, "cluster_count", 0),
+        run_id=_optional_str(inputs.get("run_id")),
+    )
+
+
+def _card_audit_prevalidate_handler(
+    task: RegisteredTask,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    raw_paths = inputs.get("audit_paths") or inputs.get("audit_path") or []
+    if isinstance(raw_paths, (str, Path)):
+        raw_paths = [raw_paths]
+    if not isinstance(raw_paths, list) or not raw_paths:
+        raise ValueError(f"Task `{task.name}` requires audit_paths.")
+    return run_card_audit_prevalidate(
+        data_dir=data_dir,
+        audit_paths=[Path(str(path)) for path in raw_paths],
         run_id=_optional_str(inputs.get("run_id")),
     )
 
