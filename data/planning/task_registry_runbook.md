@@ -274,6 +274,9 @@ approved card batch, card create/remove и seller SKU update. Legacy
 - `apply-ozon-cpc-bids`;
 - `plan-wb-actions-discounts`;
 - `apply-wb-actions-discounts`;
+- `wb-liquidation-stage2-plan`;
+- `apply-wb-liquidation-stage2`;
+- `verify-wb-liquidation-stage2`;
 - `plan-wb-best-price-actions`;
 - `apply-wb-best-price-actions`;
 - `verify-wb-best-price-actions`;
@@ -348,6 +351,9 @@ approved card batch, card create/remove и seller SKU update. Legacy
   `confirmed_by_user=true`;
 - `wb-actions-discount-apply`: требует `plan_run_id` и
   `confirmed_by_user=true`;
+- `wb-liquidation-stage2-apply`: требует `plan_run_id` и
+  `confirmed_by_user=true`; fresh checksum и полный payload должны совпасть с
+  owner-approved планом, после одного upload обязателен Prices API verify;
 - `wb-best-price-action-apply`: требует `plan_run_id` и
   `confirmed_by_user=true`; использует owner-reviewed план выбора акций от
   минимальной цены и отдельный read-only verify;

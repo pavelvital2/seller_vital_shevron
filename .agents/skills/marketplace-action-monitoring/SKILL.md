@@ -161,6 +161,16 @@ description: "Use for Ozon/Wildberries marketplace action monitoring after promo
   impressions may be absent from statistics while remaining active in CPC.
   Regression-test both source shapes and expose exact cohort membership counts
   in the owner report.
+- Confirmed on 2026-08-01 for the WB liquidation second price stage: register
+  a dedicated Job Worker `plan -> approval -> apply -> verify` chain. Rebuild
+  the exact cohort immediately before upload and require the fresh actions
+  checksum and full payload to match the owner-approved plan. Upload only the
+  discount while preserving the reviewed base price, then require both upload
+  history success and fresh Prices API equality for every target. Confirmed
+  run `wb_liquidation_stage2_apply_20260801T150526`: drift `0`, upload
+  `17/17`, Prices API `17/17`, base price unchanged. Start effectiveness
+  evaluation from the new final-price window, not the earlier intermediate
+  price stage.
 
 ## Baseline Pattern
 

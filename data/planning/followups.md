@@ -1637,10 +1637,14 @@ data/runs/2026-07-30/ozon_dormant_cpc_budget_tail_apply_20260730T105226/
 
 - ежедневное напоминание распродажи заменено Job Worker задачей
   `liquidation-daily-control`; marketplace write отсутствует;
-- для WB второго шага готов `wb-liquidation-stage2-plan`, требуется fresh
-  запуск и отдельное owner approval перед любым upload;
-- fresh запуск `wb_liquidation_stage2_plan_20260731T223733`: `17` изменений,
-  `1` строка уже на целевой скидке, `0` blocked; пакет не применен;
+- WB второй ценовой шаг применён 2026-08-01 через Job Worker: fresh plan
+  `wb_liquidation_stage2_plan_20260801T150359`, apply
+  `wb_liquidation_stage2_apply_20260801T150526`, upload ID `181544452`, drift
+  `0`, WB/Prices API verify `17/17`; базовая и минимальная цены не менялись;
+- новый 48-часовой контроль для 17 строк считать только по полным дням
+  `2026-08-02` и `2026-08-03`; первый итоговый review — ежедневный отчёт
+  `2026-08-04 09:00 МСК`. До него не останавливать CPC только по раннему
+  сигналу;
 - анализ за завершенные дни `2026-07-30 - 2026-07-31` и рекомендации сохранены
   в `data/planning/liquidation_analysis_checkpoint_2026-08-01.md`; владелец
   отложил решение и вернется к нему позже, поэтому сохраненный dry-run не

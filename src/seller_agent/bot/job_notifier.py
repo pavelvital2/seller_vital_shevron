@@ -126,6 +126,8 @@ def build_job_result_presentation(
         return _liquidation_control_result(job, summary), {}
     if job.task_id == "wb-liquidation-stage2-plan":
         return _wb_liquidation_stage2_result(job, summary), {}
+    if job.task_id in {"wb-liquidation-stage2-apply", "wb-liquidation-stage2-verify"}:
+        return _wb_liquidation_stage2_apply_result(job, summary), {}
     if job.task_id == "ozon-stars-control":
         return _ozon_stars_control_result(job, summary), {}
     if job.task_id == "ozon-lk-state-monitor":
@@ -237,6 +239,23 @@ def _wb_liquidation_stage2_result(job: JobRecord, summary: dict[str, Any]) -> st
             f"Checksum: `{summary.get('actions_checksum') or 'н/д'}`.",
             "",
             "Это fresh dry-run. Скидки, цены, minimum и акции в WB не менялись.",
+            f"Run ID: `{summary.get('run_id') or 'н/д'}`",
+            f"Job ID: `{job.job_id}`",
+        ]
+    )
+
+
+def _wb_liquidation_stage2_apply_result(job: JobRecord, summary: dict[str, Any]) -> str:
+    verify = _dict(summary.get("verify"))
+    applied = _dict(summary.get("applied"))
+    return "\n".join(
+        [
+            "WB: второй ценовой шаг распродажи",
+            "",
+            f"Статус: `{summary.get('overall_status') or 'warning'}`; отправлено: `{_int(applied.get('payload_rows_count'))}`; подтверждено: `{_int(verify.get('matched_rows'))}` / `{_int(verify.get('expected_rows'))}`.",
+            f"Drift: `{_int(_dict(summary.get('drift')).get('drift_rows'))}`; upload ID: `{applied.get('upload_id') or 'н/д'}`.",
+            "",
+            "Базовые и минимальные цены не изменялись.",
             f"Run ID: `{summary.get('run_id') or 'н/д'}`",
             f"Job ID: `{job.job_id}`",
         ]

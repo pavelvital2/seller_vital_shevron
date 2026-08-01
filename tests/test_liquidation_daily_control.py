@@ -1,12 +1,21 @@
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 
 from seller_agent.tasks.liquidation_daily_control import (
+    WB_STAGE2_APPLIED_NM_IDS,
     _ozon_elastic_active,
     _wb_active_cpc_nm_ids,
+    _wb_seller_orders,
     build_liquidation_rows,
 )
+
+
+def test_verified_stage2_monitoring_cohort_contains_exact_applied_rows() -> None:
+    assert len(WB_STAGE2_APPLIED_NM_IDS) == 17
+    assert 707892598 in WB_STAGE2_APPLIED_NM_IDS
+    assert 690790447 not in WB_STAGE2_APPLIED_NM_IDS
 
 
 def test_liquidation_control_reads_current_ozon_actions_and_wb_campaign_membership() -> None:
@@ -25,6 +34,17 @@ def test_liquidation_control_reads_current_ozon_actions_and_wb_campaign_membersh
             ]
         }
     ) == {100}
+
+
+def test_wb_stage2_order_window_excludes_orders_before_full_price_day() -> None:
+    rows = [
+        {"nmId": 100, "date": "2026-08-01T20:00:00", "finishedPrice": 630, "isCancel": False},
+        {"nmId": 100, "date": "2026-08-02T10:00:00", "finishedPrice": 630, "isCancel": False},
+    ]
+
+    totals = _wb_seller_orders(rows, {100}, date_from=date(2026, 8, 2))
+
+    assert totals == {100: {"units": 1, "value": Decimal("630")}}
 
 
 def test_build_liquidation_rows_keeps_zero_rows_and_marks_only_seller_order_free_stops() -> None:
@@ -68,6 +88,7 @@ def test_build_liquidation_rows_keeps_zero_rows_and_marks_only_seller_order_free
                 "post_apply_click_stop": "10",
                 "post_apply_spend_stop": "20",
                 "requires_second_price_stage": "True",
+                "target_discount": "70",
             },
         ],
         ozon_stocks=[
@@ -88,6 +109,10 @@ def test_build_liquidation_rows_keeps_zero_rows_and_marks_only_seller_order_free
             {"nmId": 2001, "quantity": 5, "inWayToClient": 1, "inWayFromClient": 0},
             {"nmId": 2002, "quantity": 6, "inWayToClient": 0, "inWayFromClient": 1},
         ],
+        wb_prices=[
+            {"nmID": 2001, "discount": 50},
+            {"nmID": 2002, "discount": 70},
+        ],
         wb_active_cpc_nm_ids={2001},
         wb_ad_totals={
             2001: {"views": 40, "clicks": 10, "to_cart": 0, "orders": 0, "spend": Decimal("10"), "revenue": Decimal("0")},
@@ -103,7 +128,10 @@ def test_build_liquidation_rows_keeps_zero_rows_and_marks_only_seller_order_free
     assert ozon_rows[1]["min_price_document_mismatch"] is True
     assert wb_rows[0]["hard_stop_reached"] is True
     assert wb_rows[1]["hard_stop_reached"] is False
-    assert wb_rows[1]["requires_second_price_stage"] is True
+    assert wb_rows[1]["second_price_stage_configured"] is True
+    assert wb_rows[1]["second_price_stage_applied"] is True
+    assert wb_rows[1]["requires_second_price_stage"] is False
+    assert wb_rows[1]["action_state"] == "verified_stage2"
     assert {(row["marketplace"], str(row["product_id"])) for row in stop_rows} == {
         ("ozon", "1001"),
         ("wb", "2001"),

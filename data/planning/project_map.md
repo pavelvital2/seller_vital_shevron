@@ -603,7 +603,11 @@ Ozon CDP port по умолчанию: `9544`.
   экономики Ozon `Звёздные товары`, порог окупаемости и контролируемое
   отключение после отдельного owner approval.
 - `data/planning/liquidation_daily_control_runbook.md` - Job Worker контроль
-  точных ликвидационных когорт, нулевые строки и checksummed hard-stop review.
+  точных ликвидационных когорт, нулевые строки, checksummed hard-stop review и
+  WB second-stage `plan/apply/verify` с отдельным окном эффективности.
+- `src/seller_agent/tasks/wb_liquidation_stage2_apply.py` - точечный WB apply
+  второго ценового шага: scoped preflight, полный checksum/payload drift-check,
+  один upload скидок и независимый Prices API verify без изменения base/minimum.
 - `data/planning/runtime_safety_guard_runbook.md` - единый approval package,
   централизованный SafetyGuard, lifecycle и общий WB browser-profile lease.
 - `data/planning/ozon_cpc_efficiency_runbook.md`

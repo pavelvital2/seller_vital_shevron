@@ -43,6 +43,10 @@ from seller_agent.tasks.status_preflight import run_status_preflight
 from seller_agent.tasks.wb_actions_discount_apply import run_wb_actions_discount_apply, run_wb_actions_discount_verify
 from seller_agent.tasks.wb_actions_discount_plan import run_wb_actions_discount_plan
 from seller_agent.tasks.wb_liquidation_stage2_plan import run_wb_liquidation_stage2_plan
+from seller_agent.tasks.wb_liquidation_stage2_apply import (
+    run_wb_liquidation_stage2_apply,
+    run_wb_liquidation_stage2_verify,
+)
 from seller_agent.tasks.wb_pricing_margin import run_wb_pricing_margin
 from seller_agent.tasks.wb_incident_audit import run_wb_incident_audit
 from seller_agent.tasks.wb_best_price_action import (
@@ -250,6 +254,8 @@ def default_workflow_handlers() -> dict[str, WorkflowHandler]:
         "daily-morning-report": _daily_morning_report_handler,
         "liquidation-daily-control": _liquidation_daily_control_handler,
         "wb-liquidation-stage2-plan": _wb_liquidation_stage2_plan_handler,
+        "wb-liquidation-stage2-apply": _wb_liquidation_stage2_apply_handler,
+        "wb-liquidation-stage2-verify": _wb_liquidation_stage2_verify_handler,
         "ozon-stars-control": _ozon_stars_control_handler,
         "wb-incident-audit": _wb_incident_audit_handler,
         "ozon-lk-state-monitor": _ozon_lk_state_monitor_handler,
@@ -347,6 +353,39 @@ def _wb_liquidation_stage2_plan_handler(
         credentials=credentials,
         data_dir=data_dir,
         cohort_path=Path(inputs.get("cohort_path") or "data/runs/2026-07-30/wb_dormant_liquidation_fresh_preapply_20260730T1421/liquidation_plan.csv"),
+        run_id=_optional_str(inputs.get("run_id")),
+    )
+
+
+def _wb_liquidation_stage2_apply_handler(
+    task: RegisteredTask,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    if credentials is None:
+        raise ValueError(f"Task `{task.name}` requires credentials.")
+    return run_wb_liquidation_stage2_apply(
+        credentials=credentials,
+        data_dir=data_dir,
+        plan_run_id=_required_str(inputs, "plan_run_id", task.name),
+        confirmed_by_user=_bool_input(inputs, "confirmed_by_user", False),
+        run_id=_optional_str(inputs.get("run_id")),
+    )
+
+
+def _wb_liquidation_stage2_verify_handler(
+    task: RegisteredTask,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    if credentials is None:
+        raise ValueError(f"Task `{task.name}` requires credentials.")
+    return run_wb_liquidation_stage2_verify(
+        credentials=credentials,
+        data_dir=data_dir,
+        plan_run_id=_required_str(inputs, "plan_run_id", task.name),
         run_id=_optional_str(inputs.get("run_id")),
     )
 

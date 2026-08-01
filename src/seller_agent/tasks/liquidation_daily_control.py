@@ -13,6 +13,7 @@ from seller_agent.core.run_manifest import write_summary_run_manifest
 from seller_agent.marketplaces.ozon.adapter import OzonSellerAdapter
 from seller_agent.marketplaces.ozon.performance_adapter import OzonPerformanceAdapter
 from seller_agent.marketplaces.wb.analytics_adapter import WbAnalyticsAdapter
+from seller_agent.marketplaces.wb.prices_adapter import WbPricesAdapter
 from seller_agent.marketplaces.wb.statistics_adapter import WbStatisticsAdapter
 from seller_agent.reports.writer import ensure_dir, write_json
 from seller_agent.safety.approvals import action_rows_checksum
@@ -29,6 +30,29 @@ DEFAULT_WB_COHORT = Path(
 )
 OZON_APPLY_STARTED_AT = datetime.fromisoformat("2026-07-30T10:46:33+03:00")
 WB_APPLY_STARTED_AT = datetime.fromisoformat("2026-07-30T14:31:53+03:00")
+WB_STAGE2_APPLY_STARTED_AT = datetime.fromisoformat("2026-08-01T15:05:26+03:00")
+WB_STAGE2_FULL_DAY_FROM = WB_STAGE2_APPLY_STARTED_AT.date() + timedelta(days=1)
+WB_STAGE2_APPLIED_NM_IDS = frozenset(
+    {
+        591272235,
+        593425414,
+        593433042,
+        603649826,
+        603953640,
+        682403338,
+        682422212,
+        682429632,
+        682449213,
+        684929778,
+        707770409,
+        707805912,
+        707833047,
+        707892598,
+        707892600,
+        707892602,
+        707892603,
+    }
+)
 
 
 def _decimal(value: Any) -> Decimal:
@@ -125,11 +149,19 @@ def _ozon_seller_orders(postings: list[dict[str, Any]], cohort_offer_ids: set[st
     return totals
 
 
-def _wb_seller_orders(rows: list[dict[str, Any]], cohort_nm_ids: set[int]) -> dict[int, dict[str, Decimal | int]]:
+def _wb_seller_orders(
+    rows: list[dict[str, Any]],
+    cohort_nm_ids: set[int],
+    *,
+    date_from: date | None = None,
+) -> dict[int, dict[str, Decimal | int]]:
     totals: dict[int, dict[str, Decimal | int]] = {}
     for row in rows:
         nm_id = _integer(row.get("nmId"))
         if nm_id not in cohort_nm_ids or bool(row.get("isCancel")):
+            continue
+        order_day = str(row.get("date") or "")[:10]
+        if date_from is not None and (not order_day or order_day < date_from.isoformat()):
             continue
         item = totals.setdefault(nm_id, {"units": 0, "value": Decimal("0")})
         item["units"] = int(item["units"]) + 1
@@ -215,6 +247,7 @@ def build_liquidation_rows(
     ozon_ad_totals: dict[str, dict[str, Decimal | int]],
     ozon_orders: dict[str, dict[str, Decimal | int]],
     wb_stocks: list[dict[str, Any]],
+    wb_prices: list[dict[str, Any]],
     wb_active_cpc_nm_ids: set[int],
     wb_ad_totals: dict[int, dict[str, Decimal | int]],
     wb_orders: dict[int, dict[str, Decimal | int]],
@@ -222,6 +255,7 @@ def build_liquidation_rows(
     ozon_stock_map = {str(row.get("offer_id") or ""): _stock_from_ozon_row(row) for row in ozon_stocks}
     ozon_price_map = {str(row.get("offer_id") or ""): row for row in ozon_prices}
     wb_stock_map: dict[int, dict[str, int]] = {}
+    wb_price_map = {_integer(row.get("nmID")): row for row in wb_prices}
     for row in wb_stocks:
         nm_id = _integer(row.get("nmId"))
         item = wb_stock_map.setdefault(nm_id, {"quantity": 0, "to": 0, "from": 0})
@@ -282,6 +316,10 @@ def build_liquidation_rows(
             or Decimal(ad["spend"]) >= _decimal(source.get("post_apply_spend_stop") or 20)
         )
         stock = wb_stock_map.get(nm_id, {"quantity": 0, "to": 0, "from": 0})
+        price = wb_price_map.get(nm_id, {})
+        current_discount = _integer(price.get("discount")) if price else 0
+        stage2_configured = str(source.get("requires_second_price_stage") or "").lower() == "true"
+        stage2_applied = stage2_configured and current_discount == _integer(source.get("target_discount"))
         row = {
             "group": source.get("group", ""),
             "nm_id": nm_id,
@@ -293,10 +331,14 @@ def build_liquidation_rows(
             "in_way_to_client": stock["to"],
             "in_way_from_client": stock["from"],
             "price_mode": source.get("price_mode", ""),
-            "action_state": "documented_stage1",
+            "action_state": "verified_stage2" if stage2_applied else ("pending_stage2" if stage2_configured else "documented_stage1"),
+            "live_discount": current_discount,
             "active_cpc": nm_id in wb_active_cpc_nm_ids,
             "recommended_bid": float(_decimal(source.get("target_bid_recalc") or source.get("recommended_bid"))),
-            "requires_second_price_stage": str(source.get("requires_second_price_stage") or "").lower() == "true",
+            "second_price_stage_configured": stage2_configured,
+            "second_price_stage_applied": stage2_applied,
+            "requires_second_price_stage": stage2_configured and not stage2_applied,
+            "monitor_from": WB_STAGE2_FULL_DAY_FROM.isoformat() if nm_id in WB_STAGE2_APPLIED_NM_IDS else WB_APPLY_STARTED_AT.date().isoformat(),
             "views": int(ad["views"]),
             "clicks": int(ad["clicks"]),
             "to_cart": int(ad["to_cart"]),
@@ -383,6 +425,7 @@ def run_liquidation_daily_control(
     ozon_seller = OzonSellerAdapter(credentials.ozon_seller)
     ozon_performance = OzonPerformanceAdapter(credentials.ozon_performance)
     wb_analytics = WbAnalyticsAdapter(credentials.wb)
+    wb_prices_adapter = WbPricesAdapter(credentials.wb)
     wb_statistics = WbStatisticsAdapter(credentials.wb)
 
     ozon_prices = ozon_seller.fetch_product_info_prices_by_offer_ids(ozon_offer_ids)
@@ -404,6 +447,7 @@ def run_liquidation_daily_control(
     ozon_ad_totals, ozon_daily = _ozon_ad_rows(report=ozon_report, campaign_ids=set(campaign_ids))
 
     wb_stocks = wb_analytics.fetch_wb_warehouse_stocks(nm_ids=sorted(wb_nm_ids))
+    wb_prices = wb_prices_adapter.fetch_goods_prices(limit=1000)
     wb_orders_raw = wb_statistics.fetch_orders(date_from=WB_APPLY_STARTED_AT.isoformat(), flag=0)
     wb_promotion = run_wb_promotion_report(credentials=credentials, data_dir=data_dir, run_id=f"wb_promotion_report_{run_id}", date_from=WB_APPLY_STARTED_AT.date().isoformat(), date_to=completed_to.isoformat(), payment_type="cpc")
     wb_stats_raw = json.loads(Path(wb_promotion["artifacts"]["fullstats_raw"]).read_text(encoding="utf-8"))
@@ -413,6 +457,19 @@ def run_liquidation_daily_control(
 
     ozon_orders = _ozon_seller_orders(ozon_postings, set(ozon_offer_ids))
     wb_orders = _wb_seller_orders(wb_orders_raw, wb_nm_ids)
+    stage2_nm_ids = wb_nm_ids & WB_STAGE2_APPLIED_NM_IDS
+    stage2_orders = _wb_seller_orders(
+        wb_orders_raw,
+        stage2_nm_ids,
+        date_from=WB_STAGE2_FULL_DAY_FROM,
+    )
+    for nm_id in stage2_nm_ids:
+        wb_orders[nm_id] = stage2_orders.get(nm_id, {"units": 0, "value": Decimal("0")})
+        metrics = _empty_metrics()
+        for (daily_nm_id, day), values in wb_daily.items():
+            if daily_nm_id == nm_id and day >= WB_STAGE2_FULL_DAY_FROM.isoformat():
+                _add_metrics(metrics, values)
+        wb_ad_totals[nm_id] = metrics
     ozon_rows, wb_rows, stop_rows = build_liquidation_rows(
         ozon_cohort=ozon_cohort,
         wb_cohort=wb_cohort,
@@ -422,6 +479,7 @@ def run_liquidation_daily_control(
         ozon_ad_totals=ozon_ad_totals,
         ozon_orders=ozon_orders,
         wb_stocks=wb_stocks,
+        wb_prices=wb_prices,
         wb_active_cpc_nm_ids=current_wb_cpc,
         wb_ad_totals=wb_ad_totals,
         wb_orders=wb_orders,
@@ -436,6 +494,8 @@ def run_liquidation_daily_control(
     for day in _dates(WB_APPLY_STARTED_AT.date(), completed_to):
         for row in wb_cohort:
             nm_id = _integer(row.get("nm_id"))
+            if nm_id in WB_STAGE2_APPLIED_NM_IDS and day < WB_STAGE2_FULL_DAY_FROM:
+                continue
             metrics = wb_daily.get((nm_id, day.isoformat()), _empty_metrics())
             daily_rows.append({"marketplace": "wb", "date": day.isoformat(), "product_id": nm_id, **{key: float(value) if isinstance(value, Decimal) else value for key, value in metrics.items()}})
 
@@ -501,6 +561,7 @@ def run_liquidation_daily_control(
     write_json(raw_dir / "ozon_statistics_report.json", ozon_report)
     write_json(raw_dir / "wb_orders.json", wb_orders_raw)
     write_json(raw_dir / "wb_stocks.json", wb_stocks)
+    write_json(raw_dir / "wb_prices.json", wb_prices)
     Path(artifacts["report"]).write_text(_render_markdown(summary), encoding="utf-8")
     Path(artifacts["report_html"]).write_text(_render_html(summary, ozon_rows, wb_rows), encoding="utf-8")
     write_json(Path(artifacts["summary"]), summary)
