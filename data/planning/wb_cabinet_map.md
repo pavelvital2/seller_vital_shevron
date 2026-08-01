@@ -570,7 +570,7 @@ https://seller.wildberries.ru/suppliers-mutual-settlements
 ### История платежей
 
 ```text
-https://seller.wildberries.ru/payment-history
+https://seller.wildberries.ru/payment-history/active
 ```
 
 Что лежит:
@@ -578,6 +578,19 @@ https://seller.wildberries.ru/payment-history
 - платежи;
 - выплаты;
 - история операций.
+
+Проверено 2026-08-01:
+
+- read-only источник страницы:
+  `GET /ns/api/seller-wb-balance/v1/payments`;
+- для фактически выведенных денег учитывать только платежи со статусом
+  `approved`, который интерфейс подтверждает как успешно проведенный банком;
+- группировать по `createDT`, сумму до комиссии брать из `change`, комиссию за
+  вывод из `commission`, фактически перечисленную сумму из `totalAmount`;
+- не подменять фактический вывод полями финансовых отчетов `bankPaymentSum`,
+  текущим балансом или суммой, доступной к выводу;
+- для июня и июля 2026 у Vital Shevron `commission=0` по всем `18` успешным
+  платежам, поэтому `change=totalAmount`.
 
 Для расчетов минимальной цены:
 
