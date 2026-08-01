@@ -14,8 +14,13 @@ from seller_agent.bot.telegram_runner import (
     telegram_api_document_request,
     telegram_api_request,
 )
-from seller_agent.core.job_models import JobRecord, TelegramUpdateRecord
-from seller_agent.core.job_store import DEFAULT_RUNTIME_DB, JobStore
+from seller_agent.core.job_models import ApprovalRecord, JobRecord, TelegramUpdateRecord
+from seller_agent.core.job_store import (
+    DEFAULT_RUNTIME_DB,
+    ApprovalSourceJobAmbiguousError,
+    JobStore,
+    approval_callback_token,
+)
 
 
 @dataclass(frozen=True)
@@ -57,7 +62,28 @@ def notify_telegram_job_result(
         return JobNotificationResult(ok=True, job_id=job_id, chat_id=chat_id, thread_id=_thread_id_from_update(update), blocked_reason="unchanged_state_suppressed")
 
     thread_id = _thread_id_from_update(update)
-    text, reply_markup = build_job_result_presentation(job, update=update, data_dir=data_dir)
+    try:
+        approval = job_store.get_approval_by_source_job_id(job.job_id)
+    except ApprovalSourceJobAmbiguousError as exc:
+        job_store.update_telegram_update_status(
+            update_id=update.update_id,
+            processing_status="notification_failed",
+            job_id=job_id,
+        )
+        return JobNotificationResult(
+            ok=False,
+            job_id=job_id,
+            chat_id=chat_id,
+            thread_id=thread_id,
+            blocked_reason="ambiguous_runtime_approval",
+            error=str(exc),
+        )
+    text, reply_markup = build_job_result_presentation(
+        job,
+        update=update,
+        approval=approval,
+        data_dir=data_dir,
+    )
     text_results = send_telegram_text(
         token=token,
         chat_id=chat_id,
@@ -104,6 +130,7 @@ def build_job_result_presentation(
     job: JobRecord,
     *,
     update: TelegramUpdateRecord | None = None,
+    approval: ApprovalRecord | None = None,
     data_dir: Path = Path("data"),
 ) -> tuple[str, dict[str, Any]]:
     if job.task_id == "ozon-pricing-margin":
@@ -145,15 +172,15 @@ def build_job_result_presentation(
     if job.task_id in {"ozon-production-work-plan", "wb-production-work-plan"}:
         return _production_plan_result(job, summary)
     if job.task_id == "ozon-elastic-plan":
-        return _ozon_elastic_plan_result(job, summary)
+        return _ozon_elastic_plan_result(job, summary, approval=approval)
     if job.task_id == "ozon-actions-optimizer-plan":
-        return _ozon_actions_plan_result(job, summary)
+        return _ozon_actions_plan_result(job, summary, approval=approval)
     if job.task_id == "wb-actions-discount-plan":
-        return _wb_actions_plan_result(job, summary, update=update)
+        return _wb_actions_plan_result(job, summary, update=update, approval=approval)
     if job.task_id == "wb-best-price-action-plan":
-        return _wb_best_price_action_plan_result(job, summary)
+        return _wb_best_price_action_plan_result(job, summary, approval=approval)
     if job.task_id in {"ozon-inbox", "wb-inbox"}:
-        return _inbox_plan_result(job, summary, data_dir=data_dir)
+        return _inbox_plan_result(job, summary, approval=approval, data_dir=data_dir)
     if job.task_id == "wb-actions-discount-apply":
         return _wb_actions_apply_result(job, summary)
     if job.task_id == "wb-best-price-action-apply":
@@ -376,7 +403,32 @@ def _production_plan_result(job: JobRecord, summary: dict[str, Any]) -> tuple[st
     return "\n".join(lines), markup
 
 
-def _ozon_elastic_plan_result(job: JobRecord, result: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+def _runtime_approval_markup(approval: ApprovalRecord | None) -> dict[str, Any]:
+    if approval is None:
+        return {}
+    token = approval_callback_token(approval.approval_id)
+    if approval.status == "pending_review":
+        return {
+            "inline_keyboard": [
+                [
+                    {"text": "Согласовать", "callback_data": f"apa:{token}"},
+                    {"text": "Отклонить", "callback_data": f"apr:{token}"},
+                ]
+            ]
+        }
+    if approval.status == "approved":
+        return {"inline_keyboard": [[{"text": "Применить", "callback_data": f"app:{token}"}]]}
+    if approval.status in {"applied", "applying_unknown"}:
+        return {"inline_keyboard": [[{"text": "Проверить", "callback_data": f"apv:{token}"}]]}
+    return {}
+
+
+def _ozon_elastic_plan_result(
+    job: JobRecord,
+    result: dict[str, Any],
+    *,
+    approval: ApprovalRecord | None,
+) -> tuple[str, dict[str, Any]]:
     summary = _dict(result.get("summary"))
     run_id = str(result.get("run_id") or "")
     changed = sum(
@@ -400,15 +452,16 @@ def _ozon_elastic_plan_result(job: JobRecord, result: dict[str, Any]) -> tuple[s
         "",
         "Изменений в Ozon не выполнялось.",
     ]
-    markup = {}
-    if changed and run_id:
-        markup = {
-            "inline_keyboard": [[{"text": "Применить Ozon Elastic", "callback_data": f"oe_apply:{run_id}"}]]
-        }
+    markup = _runtime_approval_markup(approval) if changed and run_id else {}
     return "\n".join(lines), markup
 
 
-def _ozon_actions_plan_result(job: JobRecord, result: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+def _ozon_actions_plan_result(
+    job: JobRecord,
+    result: dict[str, Any],
+    *,
+    approval: ApprovalRecord | None,
+) -> tuple[str, dict[str, Any]]:
     summary = _dict(result.get("summary"))
     run_id = str(result.get("run_id") or "")
     changed = sum(
@@ -432,11 +485,7 @@ def _ozon_actions_plan_result(job: JobRecord, result: dict[str, Any]) -> tuple[s
         "",
         "Изменений в Ozon не выполнялось.",
     ]
-    markup = {}
-    if changed and run_id:
-        markup = {
-            "inline_keyboard": [[{"text": "Применить Ozon все акции", "callback_data": f"oza_apply:{run_id}"}]]
-        }
+    markup = _runtime_approval_markup(approval) if changed and run_id else {}
     return "\n".join(lines), markup
 
 
@@ -445,6 +494,7 @@ def _wb_actions_plan_result(
     result: dict[str, Any],
     *,
     update: TelegramUpdateRecord | None,
+    approval: ApprovalRecord | None,
 ) -> tuple[str, dict[str, Any]]:
     summary = _dict(result.get("summary"))
     run_id = str(result.get("run_id") or "")
@@ -474,12 +524,7 @@ def _wb_actions_plan_result(
             "Разбивка участия и скидок не подтверждена: CSV полного расчета отсутствует или поврежден.",
             "Скидки в WB не изменялись.",
         ]
-        markup = {}
-        if changed and run_id:
-            rows = [[{"text": "Применить скидки", "callback_data": f"wba_apply:{run_id}"}]]
-            if manual:
-                rows.append([{"text": "Отклонить", "callback_data": f"wbam_reject:{run_id}"}])
-            markup = {"inline_keyboard": rows}
+        markup = _runtime_approval_markup(approval) if changed and run_id else {}
         return "\n".join(lines), markup
 
     current_participating = commands._wb_report_stat(report_stats, "current_participating")
@@ -545,18 +590,15 @@ def _wb_actions_plan_result(
             "Скидки в WB не изменялись. Полный расчёт приложен.",
         ]
     )
-    markup = {}
-    if changed and run_id:
-        rows = [[{"text": "Применить скидки", "callback_data": f"wba_apply:{run_id}"}]]
-        if manual:
-            rows.append([{"text": "Отклонить", "callback_data": f"wbam_reject:{run_id}"}])
-        markup = {"inline_keyboard": rows}
+    markup = _runtime_approval_markup(approval) if changed and run_id else {}
     return "\n".join(lines), markup
 
 
 def _wb_best_price_action_plan_result(
     job: JobRecord,
     result: dict[str, Any],
+    *,
+    approval: ApprovalRecord | None,
 ) -> tuple[str, dict[str, Any]]:
     summary = _dict(result.get("summary"))
     run_id = str(result.get("run_id") or "")
@@ -596,12 +638,7 @@ def _wb_best_price_action_plan_result(
     ]
     markup: dict[str, Any] = {}
     if safe_to_apply and changed > 0 and run_id:
-        markup = {
-            "inline_keyboard": [
-                [{"text": "Применить", "callback_data": f"wbmp_apply:{run_id}"}],
-                [{"text": "Отклонить", "callback_data": f"wbmp_reject:{run_id}"}],
-            ]
-        }
+        markup = _runtime_approval_markup(approval)
     elif not safe_to_apply:
         lines.extend(
             [
@@ -667,6 +704,7 @@ def _inbox_plan_result(
     job: JobRecord,
     summary: dict[str, Any],
     *,
+    approval: ApprovalRecord | None,
     data_dir: Path,
 ) -> tuple[str, dict[str, Any]]:
     ozon = job.task_id == "ozon-inbox"
@@ -695,12 +733,7 @@ def _inbox_plan_result(
         notifications = _dict(summary.get("wb_notifications"))
         items = notifications.get("items") if isinstance(notifications.get("items"), list) else []
         lines.insert(-2, f"- прочитано WB уведомлений: `{len(items)}`.")
-    markup = {}
-    if actions_count and run_id:
-        prefix = "ozin" if ozon else "wbin"
-        markup = {
-            "inline_keyboard": [[{"text": f"Применить {marketplace} входящие", "callback_data": f"{prefix}_apply:{run_id}"}]]
-        }
+    markup = _runtime_approval_markup(approval) if actions_count and run_id else {}
     _ = data_dir
     return "\n".join(lines), markup
 

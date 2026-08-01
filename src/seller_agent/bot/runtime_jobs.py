@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-import hashlib
 from typing import Any
 
 from seller_agent.bot.commands import (
@@ -14,7 +13,22 @@ from seller_agent.bot.commands import (
     _parse_command,
 )
 from seller_agent.core.job_service import JobService
-from seller_agent.core.job_store import DEFAULT_RUNTIME_DB, JobStore
+from seller_agent.core.job_store import (
+    DEFAULT_RUNTIME_DB,
+    ApprovalCallbackTokenCollisionError,
+    JobStore,
+)
+
+
+APPROVAL_CALLBACK_PREFIXES = ("apa:", "apr:", "app:", "apv:")
+LEGACY_WRITE_CALLBACK_TASKS = {
+    "oe_apply:": "ozon-elastic-apply",
+    "oza_apply:": "ozon-actions-optimizer-apply",
+    "wba_apply:": "wb-actions-discount-apply",
+    "wbmp_apply:": "wb-best-price-action-apply",
+    "ozin_apply:": "ozon-inbox-apply",
+    "wbin_apply:": "wb-inbox-apply",
+}
 
 
 @dataclass(frozen=True)
@@ -36,6 +50,7 @@ def dispatch_runtime_job_message(
     live_today: bool = False,
     live_status: bool = False,
     conversation_state: dict[str, Any] | None = None,
+    update_registered: bool = False,
 ) -> TelegramCommandResult | None:
     runtime_request = _runtime_request_for_message(
         message,
@@ -55,6 +70,7 @@ def dispatch_runtime_job_message(
         data_dir=data_dir,
         runtime_db=runtime_db,
         payload={"kind": "message", "message": message},
+        update_registered=update_registered,
     )
 
 
@@ -66,18 +82,58 @@ def dispatch_runtime_job_callback(
     thread_id: int | None = None,
     data_dir: Path = Path("data"),
     runtime_db: Path = DEFAULT_RUNTIME_DB,
+    update_registered: bool = False,
 ) -> TelegramCommandResult | None:
-    if callback_data.startswith(("apa:", "apr:", "app:", "apv:")):
+    store = JobStore(runtime_db)
+    if not update_registered:
+        registered = store.register_telegram_update(
+            update_id=update_id,
+            chat_id=str(chat_id),
+            command="callback",
+            payload={
+                "kind": "callback",
+                "callback_data": callback_data,
+                "thread_id": thread_id,
+            },
+            processing_status="received",
+        )
+        if not registered:
+            return _duplicate_telegram_update_result(
+                store=store,
+                update_id=update_id,
+                command="callback",
+                title="Telegram callback",
+                runtime_db=runtime_db,
+            )
+
+    if callback_data.startswith(APPROVAL_CALLBACK_PREFIXES):
         return _handle_runtime_approval_callback(
             callback_data,
+            update_id=update_id,
             chat_id=chat_id,
+            thread_id=thread_id,
             data_dir=data_dir,
             runtime_db=runtime_db,
+            store=store,
         )
+    for prefix, expected_task_id in LEGACY_WRITE_CALLBACK_TASKS.items():
+        if callback_data.startswith(prefix):
+            return _handle_legacy_write_callback(
+                callback_data,
+                prefix=prefix,
+                expected_task_id=expected_task_id,
+                update_id=update_id,
+                chat_id=chat_id,
+                data_dir=data_dir,
+                runtime_db=runtime_db,
+                store=store,
+            )
     runtime_request = _runtime_request_for_callback(callback_data)
     if isinstance(runtime_request, TelegramCommandResult):
+        store.update_telegram_update_status(update_id=update_id, processing_status="rejected")
         return runtime_request
     if runtime_request is None:
+        store.update_telegram_update_status(update_id=update_id, processing_status="delegated_read_only")
         return None
     return _enqueue_runtime_request(
         request=runtime_request,
@@ -87,43 +143,136 @@ def dispatch_runtime_job_callback(
         data_dir=data_dir,
         runtime_db=runtime_db,
         payload={"kind": "callback", "callback_data": callback_data},
+        update_registered=True,
     )
 
 
 def _handle_runtime_approval_callback(
     callback_data: str,
     *,
+    update_id: int,
+    chat_id: int,
+    thread_id: int | None,
+    data_dir: Path,
+    runtime_db: Path,
+    store: JobStore,
+) -> TelegramCommandResult:
+    action, token = callback_data.split(":", 1)
+    try:
+        approval = store.get_approval_by_callback_token(token)
+    except ApprovalCallbackTokenCollisionError:
+        store.update_telegram_update_status(
+            update_id=update_id,
+            processing_status="approval_token_ambiguous",
+        )
+        return _invalid_callback(
+            "Согласование",
+            "Runtime approval token неоднозначен; callback безопасно заблокирован.",
+        )
+    if approval is None:
+        store.update_telegram_update_status(update_id=update_id, processing_status="approval_not_found")
+        return _invalid_callback("Согласование", "Runtime approval не найден.")
+    return _apply_registered_approval_action(
+        action=action,
+        approval_id=approval.approval_id,
+        update_id=update_id,
+        chat_id=chat_id,
+        data_dir=data_dir,
+        runtime_db=runtime_db,
+        store=store,
+    )
+
+
+def _handle_legacy_write_callback(
+    callback_data: str,
+    *,
+    prefix: str,
+    expected_task_id: str,
+    update_id: int,
     chat_id: int,
     data_dir: Path,
     runtime_db: Path,
+    store: JobStore,
 ) -> TelegramCommandResult:
-    action, token = callback_data.split(":", 1)
-    store = JobStore(runtime_db)
-    matches = [
-        approval
-        for approval in store.list_approvals(limit=500)
-        if hashlib.sha256(approval.approval_id.encode("utf-8")).hexdigest()[:16] == token
-    ]
-    if len(matches) != 1:
-        return _invalid_callback("Согласование", "Runtime approval не найден или идентификатор неоднозначен.")
-    approval = matches[0]
+    approval_id = callback_data.removeprefix(prefix).strip()
+    approval = store.get_approval(approval_id) if approval_id else None
+    if approval is None:
+        store.update_telegram_update_status(update_id=update_id, processing_status="approval_required")
+        return TelegramCommandResult(
+            command="/approvals",
+            ok=False,
+            mode="apply",
+            blocked_reason="runtime_approval_required",
+            text=(
+                "Apply заблокирован\n\n"
+                "Legacy callback больше не принимает plan/source run ID как подтверждение владельца. "
+                "Нужен существующий runtime approval ID из `/approvals`.\n\n"
+                "Изменений в Ozon/WB не выполнялось."
+            ),
+        )
+    approval_task_id = str(approval.data.get("task_id") or "")
+    if approval_task_id != expected_task_id:
+        store.update_telegram_update_status(update_id=update_id, processing_status="approval_task_mismatch")
+        return _invalid_callback(
+            "Согласование",
+            f"Approval относится к `{approval_task_id or 'unknown'}`, а callback ожидает `{expected_task_id}`.",
+        )
+    return _apply_registered_approval_action(
+        action="app",
+        approval_id=approval.approval_id,
+        update_id=update_id,
+        chat_id=chat_id,
+        data_dir=data_dir,
+        runtime_db=runtime_db,
+        store=store,
+    )
+
+
+def _apply_registered_approval_action(
+    *,
+    action: str,
+    approval_id: str,
+    update_id: int,
+    chat_id: int,
+    data_dir: Path,
+    runtime_db: Path,
+    store: JobStore,
+) -> TelegramCommandResult:
     service = JobService(store=store, data_dir=data_dir, runtime_db=runtime_db)
+    job_id = ""
     try:
         if action == "apa":
-            current = service.approve(approval.approval_id)
+            current = service.approve(approval_id)
             message = f"Согласование `{current.approval_id}` подтверждено. Для записи нажмите «Применить» в /approvals."
+            processing_status = "approval_approved"
         elif action == "apr":
-            current = service.reject(approval.approval_id)
+            current = service.reject(approval_id)
             message = f"Согласование `{current.approval_id}` отклонено. Изменений в магазинах не выполнено."
+            processing_status = "approval_rejected"
         elif action == "app":
-            job = service.submit_approval_apply(approval.approval_id, actor=f"telegram:{chat_id}")
+            job = service.submit_approval_apply(approval_id, actor=f"telegram:{chat_id}")
+            job_id = job.job_id
             message = f"Apply поставлен в Job Worker. Job ID: `{job.job_id}`."
+            processing_status = "queued"
         else:
-            job = service.submit_approval_verify(approval.approval_id, actor=f"telegram:{chat_id}")
+            job = service.submit_approval_verify(approval_id, actor=f"telegram:{chat_id}")
+            job_id = job.job_id
             message = f"Verify поставлен в Job Worker. Job ID: `{job.job_id}`."
+            processing_status = "queued"
     except (KeyError, RuntimeError, ValueError) as exc:
+        store.update_telegram_update_status(update_id=update_id, processing_status="approval_action_failed")
         return _invalid_callback("Согласование", _safe_enqueue_error(exc))
-    return TelegramCommandResult(command="/approvals", ok=True, text="Согласования\n\n" + message)
+    store.update_telegram_update_status(
+        update_id=update_id,
+        processing_status=processing_status,
+        job_id=job_id,
+    )
+    return TelegramCommandResult(
+        command="/approvals",
+        ok=True,
+        text="Согласования\n\n" + message,
+        artifacts={"runtime_db": str(runtime_db)},
+    )
 
 
 def _enqueue_runtime_request(
@@ -135,6 +284,7 @@ def _enqueue_runtime_request(
     data_dir: Path,
     runtime_db: Path,
     payload: dict[str, Any],
+    update_registered: bool = False,
 ) -> TelegramCommandResult:
     store = JobStore(runtime_db)
     update_payload = {
@@ -144,28 +294,22 @@ def _enqueue_runtime_request(
         "title": request.title,
         "thread_id": thread_id,
     }
-    registered = store.register_telegram_update(
-        update_id=update_id,
-        chat_id=str(chat_id),
-        command=request.command,
-        payload=update_payload,
-        processing_status="received",
-    )
-    if not registered:
-        existing = store.get_telegram_update(update_id)
-        job_id = existing.job_id if existing else ""
-        return TelegramCommandResult(
+    if not update_registered:
+        registered = store.register_telegram_update(
+            update_id=update_id,
+            chat_id=str(chat_id),
             command=request.command,
-            ok=True,
-            text=(
-                request.title
-                + "\n\n"
-                + "Итог: повторный Telegram update не поставлен в очередь второй раз.\n\n"
-                + f"Job ID: `{job_id or 'не найден'}`\n"
-                + f"Runtime DB: `{runtime_db}`"
-            ),
-            artifacts={"runtime_db": str(runtime_db)},
+            payload=update_payload,
+            processing_status="received",
         )
+        if not registered:
+            return _duplicate_telegram_update_result(
+                store=store,
+                update_id=update_id,
+                command=request.command,
+                title=request.title,
+                runtime_db=runtime_db,
+            )
 
     try:
         service = JobService(store=store, data_dir=data_dir, runtime_db=runtime_db)
@@ -203,6 +347,38 @@ def _enqueue_runtime_request(
             + "Job Worker выполнит задачу и отправит итоговый отчёт."
         ),
         artifacts={"runtime_db": str(runtime_db)},
+    )
+
+
+def _duplicate_telegram_update_result(
+    *,
+    store: JobStore,
+    update_id: int,
+    command: str,
+    title: str,
+    runtime_db: Path,
+) -> TelegramCommandResult:
+    existing = store.get_telegram_update(update_id)
+    job_id = existing.job_id if existing else ""
+    return TelegramCommandResult(
+        command=command,
+        ok=True,
+        text=(
+            title
+            + "\n\n"
+            + "Итог: повторный Telegram update не поставлен в очередь второй раз "
+            + "и не выполнил действие повторно.\n\n"
+            + f"Job ID: `{job_id or 'не создан'}`\n"
+            + f"Runtime DB: `{runtime_db}`"
+        ),
+        artifacts={"runtime_db": str(runtime_db)},
+    )
+
+
+def is_write_callback(callback_data: str) -> bool:
+    value = str(callback_data or "").strip()
+    return value.startswith(APPROVAL_CALLBACK_PREFIXES) or value.startswith(
+        tuple(LEGACY_WRITE_CALLBACK_TASKS)
     )
 
 
@@ -400,31 +576,6 @@ def _runtime_request_for_callback(data: str) -> RuntimeJobRequest | TelegramComm
             "Акции от минимальной цены",
         )
 
-    apply_prefixes = {
-        "oe_apply:": ("/elastic_apply", "ozon-elastic-apply", "plan_run_id", "Ozon Elastic apply"),
-        "oza_apply:": ("/ozon_actions_apply", "ozon-actions-optimizer-apply", "plan_run_id", "Ozon все акции apply"),
-        "wba_apply:": ("/wb_actions_apply", "wb-actions-discount-apply", "plan_run_id", "WB акции apply"),
-        "wbmp_apply:": (
-            "/wb-actions-min-price",
-            "wb-best-price-action-apply",
-            "plan_run_id",
-            "Акции от минимальной цены apply",
-        ),
-        "ozin_apply:": ("/ozon_inbox_apply", "ozon-inbox-apply", "source_run_id", "Ozon входящие apply"),
-        "wbin_apply:": ("/wb_inbox_apply", "wb-inbox-apply", "source_run_id", "WB входящие apply"),
-    }
-    for prefix, (command, task_id, source_key, title) in apply_prefixes.items():
-        if not value.startswith(prefix):
-            continue
-        source_id = value.removeprefix(prefix).strip()
-        if not _safe_runtime_id(source_id):
-            return _invalid_callback(title, "Идентификатор согласованного пакета некорректен.")
-        return RuntimeJobRequest(
-            command,
-            task_id,
-            {source_key: source_id, "confirmed_by_user": True},
-            title,
-        )
     return None
 
 

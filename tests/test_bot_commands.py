@@ -916,7 +916,7 @@ def test_bot_rejects_unsupported_write_like_command() -> None:
     assert "не поддерживается" in result.text
 
 
-def test_bot_elastic_builds_plan_and_apply_button(
+def test_bot_elastic_builds_plan_without_legacy_apply_button(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -956,7 +956,8 @@ def test_bot_elastic_builds_plan_and_apply_button(
     assert result.mode == "dry_run"
     assert "свежий dry-run построен" in result.text
     assert "добавить в акцию: `2`" in result.text
-    assert result.reply_markup["inline_keyboard"][0][0]["callback_data"] == "oe_apply:ozon_elastic_plan_test"
+    assert result.reply_markup == {}
+    assert "apply доступен только через runtime approval" in result.text
     assert result.artifacts["report"] == str(report)
 
 
@@ -994,7 +995,7 @@ def test_bot_elastic_plan_without_write_rows_has_no_apply_button(
     assert result.reply_markup == {}
 
 
-def test_bot_elastic_callback_applies_specific_plan(
+def test_bot_elastic_callback_requires_runtime_approval(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -1028,25 +1029,22 @@ def test_bot_elastic_callback_applies_specific_plan(
 
     result = dispatch_callback("oe_apply:ozon_elastic_plan_test", data_dir=tmp_path)
 
-    assert result.ok is True
+    assert result.ok is False
     assert result.mode == "apply"
-    assert "apply завершен" in result.text
-    assert "Job ID: `job_ozon_elastic_apply_test`" in result.text
-    assert "добавить/обновить: `4`" in result.text
-    assert calls[0]["task_id"] == "ozon-elastic-apply"
-    assert calls[0]["data_dir"] == tmp_path
-    assert calls[0]["plan_run_id"] == "ozon_elastic_plan_test"
+    assert result.blocked_reason == "runtime_jobs_required"
+    assert "approval ID" in result.text
+    assert calls == []
 
 
 def test_bot_elastic_callback_rejects_invalid_plan_id(tmp_path: Path) -> None:
     result = dispatch_callback("oe_apply:../../bad", data_dir=tmp_path)
 
     assert result.ok is False
-    assert result.blocked_reason == "invalid_plan_run_id"
+    assert result.blocked_reason == "runtime_jobs_required"
     assert "Изменений в Ozon/WB не выполнял" in result.text
 
 
-def test_bot_ozon_actions_builds_plan_and_apply_button(
+def test_bot_ozon_actions_builds_plan_without_legacy_apply_button(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -1087,7 +1085,8 @@ def test_bot_ozon_actions_builds_plan_and_apply_button(
     assert result.mode == "dry_run"
     assert "Ozon все акции" in result.text
     assert "переключить на другую акцию: `2`" in result.text
-    assert result.reply_markup["inline_keyboard"][0][0]["callback_data"] == "oza_apply:ozon_actions_optimizer_plan_test"
+    assert result.reply_markup == {}
+    assert "apply доступен только через runtime approval" in result.text
     assert result.artifacts["report"] == str(report)
 
 
@@ -1126,7 +1125,7 @@ def test_bot_ozon_actions_plan_without_write_rows_has_no_apply_button(
     assert result.reply_markup == {}
 
 
-def test_bot_ozon_actions_callback_applies_specific_plan(
+def test_bot_ozon_actions_callback_requires_runtime_approval(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -1156,28 +1155,23 @@ def test_bot_ozon_actions_callback_applies_specific_plan(
             "artifacts": {"report": str(tmp_path / "runs" / "ozon_actions_apply.md")},
         }
 
-    monkeypatch.setattr(commands, "run_ozon_actions_optimizer_apply", fake_apply)
-
     result = dispatch_callback("oza_apply:ozon_actions_optimizer_plan_test", data_dir=tmp_path)
 
-    assert result.ok is True
+    assert result.ok is False
     assert result.mode == "apply"
-    assert "apply завершен" in result.text
-    assert "переключений: `1`" in result.text
-    assert calls[0]["data_dir"] == tmp_path
-    assert calls[0]["plan_run_id"] == "ozon_actions_optimizer_plan_test"
-    assert calls[0]["confirmed_by_user"] is True
+    assert result.blocked_reason == "runtime_jobs_required"
+    assert calls == []
 
 
 def test_bot_ozon_actions_callback_rejects_invalid_plan_id(tmp_path: Path) -> None:
     result = dispatch_callback("oza_apply:../../bad", data_dir=tmp_path)
 
     assert result.ok is False
-    assert result.blocked_reason == "invalid_plan_run_id"
+    assert result.blocked_reason == "runtime_jobs_required"
     assert "Изменений в Ozon/WB не выполнял" in result.text
 
 
-def test_bot_wb_actions_builds_plan_and_apply_button(
+def test_bot_wb_actions_builds_plan_without_legacy_apply_button(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -1296,7 +1290,8 @@ def test_bot_wb_actions_builds_plan_and_apply_button(
     assert "не будут участвовать в акциях: `3`" in result.text
     assert "скидка 60%: `1` товаров" in result.text
     assert "скидка 55%: `3` товаров" in result.text
-    assert result.reply_markup["inline_keyboard"][0][0]["callback_data"] == "wba_apply:wb_actions_discount_plan_70-55-55_test"
+    assert result.reply_markup == {}
+    assert "apply доступен только через runtime approval" in result.text
     assert result.artifacts["report"] == str(report)
 
 
@@ -1407,14 +1402,14 @@ def test_bot_wb_manual_actions_confirm_builds_exact_plan(
     assert "порог акции: `57%`" in result.text
     assert "после превышения порога: `52%`" in result.text
     assert "вне активных акций: `48%`" in result.text
-    assert (
-        result.reply_markup["inline_keyboard"][0][0]["callback_data"]
-        == "wba_apply:wb_actions_discount_plan_57-48-52_test"
-    )
-    assert (
-        result.reply_markup["inline_keyboard"][1][0]["callback_data"]
-        == "wbam_reject:wb_actions_discount_plan_57-48-52_test"
-    )
+    assert result.reply_markup["inline_keyboard"] == [
+        [
+            {
+                "text": "Отклонить",
+                "callback_data": "wbam_reject:wb_actions_discount_plan_57-48-52_test",
+            }
+        ]
+    ]
 
 
 def test_bot_wb_manual_actions_cancel_and_reject_are_noop() -> None:
@@ -1456,7 +1451,7 @@ def test_bot_wb_min_price_actions_uses_default_or_manual_outside_discount() -> N
     assert invalid.conversation_state == start.conversation_state
 
 
-def test_bot_wb_actions_callback_applies_specific_plan(
+def test_bot_wb_actions_callback_requires_runtime_approval(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -1498,26 +1493,21 @@ def test_bot_wb_actions_callback_applies_specific_plan(
 
     result = dispatch_callback("wba_apply:wb_actions_discount_plan_70-55-55_test", data_dir=tmp_path)
 
-    assert result.ok is True
+    assert result.ok is False
     assert result.mode == "apply"
-    assert "apply завершен" in result.text
-    assert "Job ID: `job_wb_actions_apply_test`" in result.text
-    assert "отправлено строк: `4`" in result.text
-    assert "successful goods: `4` / `4`" in result.text
-    assert calls[0]["task_id"] == "wb-actions-discount-apply"
-    assert calls[0]["data_dir"] == tmp_path
-    assert calls[0]["plan_run_id"] == "wb_actions_discount_plan_70-55-55_test"
+    assert result.blocked_reason == "runtime_jobs_required"
+    assert calls == []
 
 
 def test_bot_wb_actions_callback_rejects_invalid_plan_id(tmp_path: Path) -> None:
     result = dispatch_callback("wba_apply:../../bad", data_dir=tmp_path)
 
     assert result.ok is False
-    assert result.blocked_reason == "invalid_plan_run_id"
+    assert result.blocked_reason == "runtime_jobs_required"
     assert "Изменений в Ozon/WB не выполнял" in result.text
 
 
-def test_bot_ozon_inbox_builds_fresh_package_and_apply_button(
+def test_bot_ozon_inbox_builds_fresh_package_without_legacy_apply_button(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -1576,7 +1566,8 @@ def test_bot_ozon_inbox_builds_fresh_package_and_apply_button(
     assert "автоответы на вопросы: `1`" in result.text
     assert "вопросы на ручную проверку: `2`" in result.text
     assert "ответы покупателям в чатах: `1`" in result.text
-    assert result.reply_markup["inline_keyboard"][0][0]["callback_data"] == "ozin_apply:ozon_inbox_test"
+    assert result.reply_markup == {}
+    assert "runtime approval" in result.text
     assert result.artifacts["report"] == str(report)
 
 
@@ -1611,10 +1602,11 @@ def test_bot_wb_inbox_builds_fresh_package_and_reports_notifications(
     assert "WB вопросы входят" in result.text
     assert "WB уведомления: `ok`" in result.text
     assert "важных WB новостей/уведомлений: `1`" in result.text
-    assert result.reply_markup["inline_keyboard"][0][0]["callback_data"] == "wbin_apply:wb_inbox_test"
+    assert result.reply_markup == {}
+    assert "runtime approval" in result.text
 
 
-def test_bot_inbox_callbacks_apply_specific_packages(
+def test_bot_inbox_callbacks_require_runtime_approval(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -1660,15 +1652,11 @@ def test_bot_inbox_callbacks_apply_specific_packages(
     ozon_result = dispatch_callback("ozin_apply:ozon_inbox_test", data_dir=tmp_path)
     wb_result = dispatch_callback("wbin_apply:wb_inbox_test", data_dir=tmp_path)
 
-    assert ozon_result.ok is True
-    assert "Ozon входящие apply" in ozon_result.text
-    assert "Ozon уведомления mark-read: `1` из `1`" in ozon_result.text
-    assert wb_result.ok is True
-    assert "вопросы WB: `1`" in wb_result.text
-    assert calls[0][0] == "ozon-inbox-apply"
-    assert calls[0][1]["source_run_id"] == "ozon_inbox_test"
-    assert calls[1][0] == "wb-inbox-apply"
-    assert calls[1][1]["source_run_id"] == "wb_inbox_test"
+    assert ozon_result.ok is False
+    assert ozon_result.blocked_reason == "runtime_jobs_required"
+    assert wb_result.ok is False
+    assert wb_result.blocked_reason == "runtime_jobs_required"
+    assert calls == []
 
 
 def test_bot_inbox_callbacks_reject_invalid_ids(tmp_path: Path) -> None:
@@ -1676,9 +1664,9 @@ def test_bot_inbox_callbacks_reject_invalid_ids(tmp_path: Path) -> None:
     wb_result = dispatch_callback("wbin_apply:../../bad", data_dir=tmp_path)
 
     assert ozon_result.ok is False
-    assert ozon_result.blocked_reason == "invalid_source_run_id"
+    assert ozon_result.blocked_reason == "runtime_jobs_required"
     assert wb_result.ok is False
-    assert wb_result.blocked_reason == "invalid_source_run_id"
+    assert wb_result.blocked_reason == "runtime_jobs_required"
 
 
 def test_cli_bot_preview_text_and_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -1727,7 +1715,7 @@ def test_send_preview_command_forwards_reply_markup(
     from seller_agent.bot.commands import TelegramCommandResult
 
     calls: list[tuple[str, str, dict]] = []
-    markup = {"inline_keyboard": [[{"text": "Apply", "callback_data": "oe_apply:ozon_elastic_plan_test"}]]}
+    markup = {"inline_keyboard": [[{"text": "Период", "callback_data": "opm_period:30"}]]}
 
     monkeypatch.setattr(
         telegram_runner,
@@ -1906,6 +1894,7 @@ def test_poll_once_dispatches_allowed_chat_and_writes_offset(tmp_path: Path) -> 
         data_dir=tmp_path,
         state_file=state_file,
         allowed_chat_ids={123},
+        runtime_db=tmp_path / "runtime.db",
         api_request=fake_api,
     )
 
@@ -1956,6 +1945,7 @@ def test_poll_once_keeps_manual_wb_conversation_per_chat_and_thread(tmp_path: Pa
         data_dir=tmp_path,
         state_file=state_file,
         allowed_chat_ids={123},
+        runtime_db=tmp_path / "runtime.db",
         api_request=fake_api,
     )
 
@@ -2127,6 +2117,16 @@ def test_runtime_job_dispatch_queues_all_operation_callbacks(
     )
 
     assert result is not None
+    if callback_data.startswith(
+        ("oe_apply:", "oza_apply:", "wba_apply:", "wbmp_apply:", "ozin_apply:", "wbin_apply:")
+    ):
+        assert result.ok is False
+        assert result.blocked_reason == "runtime_approval_required"
+        assert JobStore(runtime_db).list_jobs() == []
+        update = JobStore(runtime_db).get_telegram_update(4001)
+        assert update is not None
+        assert update.processing_status == "approval_required"
+        return
     assert result.ok is True
     job = JobStore(runtime_db).list_jobs()[0]
     assert job.task_id == task_id
@@ -2415,7 +2415,7 @@ def test_job_result_text_redacts_sensitive_worker_error(tmp_path: Path) -> None:
     assert "подробности скрыты safety-фильтром" in text
 
 
-def test_notify_telegram_plan_result_keeps_apply_button(tmp_path: Path) -> None:
+def test_notify_telegram_plan_result_without_approval_has_no_apply_button(tmp_path: Path) -> None:
     runtime_db = tmp_path / "runtime.db"
     store = JobStore(runtime_db)
     job = store.create_job(
@@ -2469,9 +2469,7 @@ def test_notify_telegram_plan_result_keeps_apply_button(tmp_path: Path) -> None:
     assert result.ok is True
     payload = calls[0][2]
     assert "добавить: `2`" in payload["text"]
-    assert payload["reply_markup"]["inline_keyboard"][0][0]["callback_data"] == (
-        "oe_apply:ozon_elastic_plan_notify_test"
-    )
+    assert "reply_markup" not in payload
 
 
 def test_job_worker_wb_actions_report_shows_participation_transitions(tmp_path: Path) -> None:
@@ -2585,7 +2583,7 @@ def test_job_worker_wb_actions_report_shows_participation_transitions(tmp_path: 
     assert "не будут участвовать в акциях: `4`" in text
 
 
-def test_job_worker_wb_min_price_plan_shows_apply_button(tmp_path: Path) -> None:
+def test_job_worker_wb_min_price_plan_without_approval_has_no_apply_button(tmp_path: Path) -> None:
     store = JobStore(tmp_path / "runtime.db")
     job = store.create_job(
         task_id="wb-best-price-action-plan",
@@ -2629,9 +2627,7 @@ def test_job_worker_wb_min_price_plan_shows_apply_button(tmp_path: Path) -> None
 
     assert "Скидка вне подходящих акций: `47%`" in text
     assert "будут участвовать в лучшей допустимой акции: `11`" in text
-    assert markup["inline_keyboard"][0][0]["callback_data"] == (
-        "wbmp_apply:wb_best_price_actions_plan_47_20260729T120000"
-    )
+    assert markup == {}
 
 
 def test_job_worker_wb_actions_apply_reports_safe_step_and_offers_followup(
@@ -2790,16 +2786,17 @@ def test_poll_once_dispatches_callback_query(
         data_dir=tmp_path,
         state_file=state_file,
         allowed_chat_ids={123},
+        runtime_db=tmp_path / "runtime.db",
         api_request=fake_api,
     )
 
     assert result["ok"] is True
     assert result["processed_updates"] == 1
-    assert dispatched == ["oe_apply:ozon_elastic_plan_test"]
+    assert dispatched == []
     methods = [call[1] for call in calls]
     assert "answerCallbackQuery" in methods
     send_call = [call for call in calls if call[1] == "sendMessage"][0]
-    assert send_call[2]["text"] == "Applied"
+    assert "runtime_jobs=false" in send_call[2]["text"]
     assert send_call[2]["message_thread_id"] == 55
     assert json.loads(state_file.read_text(encoding="utf-8"))["offset"] == 302
 
@@ -2849,6 +2846,7 @@ def test_poll_once_persists_conversation_state_from_callback(
         data_dir=tmp_path,
         state_file=state_file,
         allowed_chat_ids={123},
+        runtime_db=tmp_path / "runtime.db",
         api_request=fake_api,
     )
 
@@ -2891,6 +2889,7 @@ def test_poll_loop_runs_one_iteration_with_lock(tmp_path: Path) -> None:
         state_file=tmp_path / ".sessions" / "telegram" / "state.json",
         lock_file=tmp_path / ".sessions" / "telegram" / "lock",
         allowed_chat_ids={123},
+        runtime_db=tmp_path / "runtime.db",
         max_iterations=1,
         api_request=fake_api,
         emit_logs=False,

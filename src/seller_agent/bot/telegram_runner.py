@@ -12,10 +12,15 @@ import uuid
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from seller_agent.bot.commands import TelegramCommandResult
 from seller_agent.bot.dispatcher import dispatch_callback, dispatch_message
-from seller_agent.bot.runtime_jobs import dispatch_runtime_job_callback, dispatch_runtime_job_message
+from seller_agent.bot.runtime_jobs import (
+    dispatch_runtime_job_callback,
+    dispatch_runtime_job_message,
+    is_write_callback,
+)
 from seller_agent.config import read_non_empty_lines
-from seller_agent.core.job_store import DEFAULT_RUNTIME_DB
+from seller_agent.core.job_store import DEFAULT_RUNTIME_DB, JobStore
 
 
 DEFAULT_TOKEN_FILE_ENVS = (
@@ -351,9 +356,44 @@ def poll_once(
 
             thread_id = _maybe_int(message_obj.get("message_thread_id"))
             conversation_key = _conversation_key(chat_id, thread_id)
-            conversations.pop(conversation_key, None)
-            command_result = None
-            if runtime_jobs and update_id is not None:
+            update_store = JobStore(runtime_db) if update_id is not None else None
+            registered = True
+            if update_store is not None:
+                registered = update_store.register_telegram_update(
+                    update_id=update_id,
+                    chat_id=str(chat_id),
+                    command="callback",
+                    payload={
+                        "kind": "callback",
+                        "callback_data": data,
+                        "thread_id": thread_id,
+                    },
+                    processing_status="received",
+                )
+            command_result = (
+                None
+                if registered
+                else _duplicate_poll_update_result(
+                    store=update_store,
+                    update_id=update_id,
+                    runtime_db=runtime_db,
+                )
+            )
+            if registered:
+                conversations.pop(conversation_key, None)
+            write_callback = is_write_callback(data)
+            if command_result is None and write_callback and (not runtime_jobs or update_id is None):
+                if update_store is not None:
+                    update_store.update_telegram_update_status(
+                        update_id=update_id,
+                        processing_status="runtime_jobs_disabled",
+                    )
+                command_result = _write_callback_fail_closed(
+                    duplicate=False,
+                    runtime_jobs=runtime_jobs,
+                    update_id=update_id,
+                )
+            elif command_result is None and runtime_jobs and update_id is not None:
                 command_result = dispatch_runtime_job_callback(
                     data,
                     update_id=update_id,
@@ -361,9 +401,26 @@ def poll_once(
                     thread_id=thread_id,
                     data_dir=data_dir,
                     runtime_db=runtime_db,
+                    update_registered=True,
                 )
-            if command_result is None:
+            if command_result is None and not write_callback:
                 command_result = dispatch_callback(data, data_dir=data_dir)
+            elif command_result is None:
+                command_result = _write_callback_fail_closed(
+                    duplicate=False,
+                    runtime_jobs=runtime_jobs,
+                    update_id=update_id,
+                )
+            if registered and update_store is not None:
+                current_update = update_store.get_telegram_update(update_id)
+                if current_update is not None and current_update.processing_status in {
+                    "received",
+                    "delegated_read_only",
+                }:
+                    update_store.update_telegram_update_status(
+                        update_id=update_id,
+                        processing_status="processed" if command_result.ok else "processing_failed",
+                    )
             if command_result.conversation_state:
                 conversations[conversation_key] = command_result.conversation_state
             send_results = send_telegram_text(
@@ -408,8 +465,26 @@ def poll_once(
 
         thread_id = _maybe_int(message_obj.get("message_thread_id"))
         conversation_key = _conversation_key(chat_id, thread_id)
-        command_result = None
-        if runtime_jobs and update_id is not None:
+        update_store = JobStore(runtime_db) if update_id is not None else None
+        registered = True
+        if update_store is not None:
+            registered = update_store.register_telegram_update(
+                update_id=update_id,
+                chat_id=str(chat_id),
+                command="message",
+                payload={"kind": "message", "message": text, "thread_id": thread_id},
+                processing_status="received",
+            )
+        command_result = (
+            None
+            if registered
+            else _duplicate_poll_update_result(
+                store=update_store,
+                update_id=update_id,
+                runtime_db=runtime_db,
+            )
+        )
+        if command_result is None and runtime_jobs and update_id is not None:
             command_result = dispatch_runtime_job_message(
                 text,
                 update_id=update_id,
@@ -420,6 +495,7 @@ def poll_once(
                 live_today=live_today,
                 live_status=live_status,
                 conversation_state=conversations.get(conversation_key),
+                update_registered=True,
             )
         if command_result is None:
             command_result = dispatch_message(
@@ -430,10 +506,18 @@ def poll_once(
                 runtime_db=runtime_db,
                 conversation_state=conversations.get(conversation_key),
             )
-        if command_result.conversation_state:
-            conversations[conversation_key] = command_result.conversation_state
-        else:
-            conversations.pop(conversation_key, None)
+        if registered and update_store is not None:
+            current_update = update_store.get_telegram_update(update_id)
+            if current_update is not None and current_update.processing_status == "received":
+                update_store.update_telegram_update_status(
+                    update_id=update_id,
+                    processing_status="processed" if command_result.ok else "processing_failed",
+                )
+        if registered:
+            if command_result.conversation_state:
+                conversations[conversation_key] = command_result.conversation_state
+            else:
+                conversations.pop(conversation_key, None)
         send_results = send_telegram_text(
             token=token,
             chat_id=chat_id,
@@ -478,6 +562,53 @@ def poll_once(
         "errors": errors,
         "state_file": str(state_file),
     }
+
+
+def _duplicate_poll_update_result(
+    *,
+    store: JobStore | None,
+    update_id: int | None,
+    runtime_db: Path,
+) -> TelegramCommandResult:
+    existing = store.get_telegram_update(update_id) if store is not None and update_id is not None else None
+    return TelegramCommandResult(
+        command="telegram_update",
+        ok=True,
+        text=(
+            "Telegram update уже обработан\n\n"
+            "Повторная доставка не выполнила callback/command side effect.\n\n"
+            f"Job ID: `{existing.job_id if existing and existing.job_id else 'не создан'}`\n"
+            f"Runtime DB: `{runtime_db}`"
+        ),
+        artifacts={"runtime_db": str(runtime_db)},
+    )
+
+
+def _write_callback_fail_closed(
+    *,
+    duplicate: bool,
+    runtime_jobs: bool,
+    update_id: int | None,
+) -> TelegramCommandResult:
+    if duplicate:
+        detail = "Повторный Telegram update уже зарегистрирован; действие второй раз не выполнялось."
+    elif update_id is None:
+        detail = "Telegram update_id отсутствует, поэтому безопасная дедупликация невозможна."
+    elif not runtime_jobs:
+        detail = "Runtime Job Worker отключён (`runtime_jobs=false`)."
+    else:
+        detail = "Безопасный runtime-маршрут для callback недоступен."
+    return TelegramCommandResult(
+        command="callback",
+        ok=False,
+        mode="apply",
+        blocked_reason="runtime_jobs_required",
+        text=(
+            "Apply заблокирован\n\n"
+            f"{detail}\n\n"
+            "Прямой workflow не запускался. Изменений в Ozon/WB не выполнялось."
+        ),
+    )
 
 
 def poll_loop(

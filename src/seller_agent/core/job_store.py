@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 from pathlib import Path
 import secrets
@@ -25,6 +26,26 @@ from seller_agent.core.job_models import (
 
 
 DEFAULT_RUNTIME_DB = Path("runtime/runtime.db")
+APPROVAL_CALLBACK_TOKEN_HEX_LENGTH = 16
+APPROVAL_CALLBACK_TOKENS_MIGRATION = "approval_callback_tokens_v1"
+
+
+class ApprovalLookupAmbiguousError(RuntimeError):
+    """Raised when an exact approval lookup cannot identify one record safely."""
+
+
+class ApprovalCallbackTokenCollisionError(ApprovalLookupAmbiguousError):
+    """Raised when a callback token maps to more than one approval."""
+
+
+class ApprovalSourceJobAmbiguousError(ApprovalLookupAmbiguousError):
+    """Raised when a source job has more than one approval."""
+
+
+def approval_callback_token(approval_id: str) -> str:
+    return hashlib.sha256(str(approval_id).encode("utf-8")).hexdigest()[
+        :APPROVAL_CALLBACK_TOKEN_HEX_LENGTH
+    ]
 
 
 class JobStore:
@@ -37,6 +58,37 @@ class JobStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
             connection.executescript(SCHEMA_SQL)
+            migration = connection.execute(
+                "SELECT 1 FROM schema_migrations WHERE migration_name = ?",
+                (APPROVAL_CALLBACK_TOKENS_MIGRATION,),
+            ).fetchone()
+            if migration is not None:
+                return
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                migration = connection.execute(
+                    "SELECT 1 FROM schema_migrations WHERE migration_name = ?",
+                    (APPROVAL_CALLBACK_TOKENS_MIGRATION,),
+                ).fetchone()
+                if migration is None:
+                    rows = connection.execute(
+                        "SELECT approval_id, created_at FROM approvals"
+                    ).fetchall()
+                    for row in rows:
+                        _insert_approval_callback_token(
+                            connection,
+                            approval_id=str(row["approval_id"]),
+                            created_at=str(row["created_at"] or _now()),
+                        )
+                    connection.execute(
+                        "INSERT INTO schema_migrations (migration_name, applied_at) VALUES (?, ?)",
+                        (APPROVAL_CALLBACK_TOKENS_MIGRATION, _now()),
+                    )
+            except Exception:
+                connection.rollback()
+                raise
+            else:
+                connection.commit()
 
     def create_job(
         self,
@@ -779,6 +831,11 @@ class JobStore:
                 """,
                 (approval_id, source_job_id, status, "", checksum, _json_dumps(data or {}), now, now),
             )
+            _insert_approval_callback_token(
+                connection,
+                approval_id=approval_id,
+                created_at=now,
+            )
         record = self.get_approval(approval_id)
         if record is None:
             raise KeyError(f"Unknown approval after create: {approval_id}")
@@ -804,6 +861,11 @@ class JobStore:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (approval_id, source_job_id, status, "", checksum, _json_dumps(data or {}), now, now),
+            )
+            _insert_approval_callback_token(
+                connection,
+                approval_id=approval_id,
+                created_at=now,
             )
         record = self.get_approval(approval_id)
         if record is None:
@@ -871,6 +933,54 @@ class JobStore:
                 (approval_id,),
             ).fetchone()
         return _approval_from_row(row) if row is not None else None
+
+    def get_approval_by_source_job_id(self, source_job_id: str) -> ApprovalRecord | None:
+        source_job_id = str(source_job_id or "").strip()
+        if not source_job_id:
+            return None
+        self.initialize()
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM approvals
+                WHERE source_job_id = ?
+                ORDER BY approval_id ASC
+                LIMIT 2
+                """,
+                (source_job_id,),
+            ).fetchall()
+        if len(rows) > 1:
+            raise ApprovalSourceJobAmbiguousError(
+                "Multiple runtime approvals refer to the same source job."
+            )
+        return _approval_from_row(rows[0]) if rows else None
+
+    def get_approval_by_callback_token(self, callback_token: str) -> ApprovalRecord | None:
+        callback_token = str(callback_token or "").strip().lower()
+        if (
+            len(callback_token) != APPROVAL_CALLBACK_TOKEN_HEX_LENGTH
+            or any(char not in "0123456789abcdef" for char in callback_token)
+        ):
+            return None
+        self.initialize()
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT a.*
+                FROM approval_callback_tokens AS token
+                JOIN approvals AS a ON a.approval_id = token.approval_id
+                WHERE token.callback_token = ?
+                ORDER BY a.approval_id ASC
+                LIMIT 2
+                """,
+                (callback_token,),
+            ).fetchall()
+        if len(rows) > 1:
+            raise ApprovalCallbackTokenCollisionError(
+                "Runtime approval callback token is ambiguous."
+            )
+        return _approval_from_row(rows[0]) if rows else None
 
     def list_approvals(
         self,
@@ -1152,6 +1262,22 @@ CREATE TABLE IF NOT EXISTS approvals (
 );
 
 CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status);
+CREATE INDEX IF NOT EXISTS idx_approvals_source_job_id
+  ON approvals(source_job_id) WHERE source_job_id != '';
+
+CREATE TABLE IF NOT EXISTS approval_callback_tokens (
+  approval_id TEXT PRIMARY KEY REFERENCES approvals(approval_id) ON DELETE CASCADE,
+  callback_token TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_approval_callback_tokens_token
+  ON approval_callback_tokens(callback_token);
+
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  migration_name TEXT PRIMARY KEY,
+  applied_at TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS resource_leases (
   resource_key TEXT PRIMARY KEY,
@@ -1208,6 +1334,23 @@ def _new_job_id(task_id: str) -> str:
     safe_task = "".join(char if char.isalnum() or char in {"-", "_"} else "_" for char in task_id)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     return f"job_{safe_task}_{timestamp}_{uuid.uuid4().hex[:8]}"
+
+
+def _insert_approval_callback_token(
+    connection: sqlite3.Connection,
+    *,
+    approval_id: str,
+    created_at: str,
+) -> None:
+    connection.execute(
+        """
+        INSERT OR IGNORE INTO approval_callback_tokens (
+          approval_id, callback_token, created_at
+        )
+        VALUES (?, ?, ?)
+        """,
+        (approval_id, approval_callback_token(approval_id), created_at),
+    )
 
 
 def _now() -> str:

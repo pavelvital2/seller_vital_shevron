@@ -21,19 +21,17 @@ from seller_agent.bot.job_notifier import notify_telegram_job_result
 from seller_agent.config import load_credentials
 from seller_agent.core.job_runner import JobRunner
 from seller_agent.core.job_service import JobService
-from seller_agent.core.job_store import JobStore
+from seller_agent.core.job_store import DEFAULT_RUNTIME_DB, JobStore
 from seller_agent.core.job_worker import JobWorker
 from seller_agent.core.run_manifest import find_run, latest_run, list_runs
 from seller_agent.tasks.approvals import run_approvals_close, run_approvals_status
-from seller_agent.tasks.approved_cards_apply import run_apply_approved_cards, run_plan_approved_cards
+from seller_agent.tasks.approved_cards_apply import run_plan_approved_cards
 from seller_agent.tasks.card_content_audit_backlog import run_card_content_audit_backlog
 from seller_agent.tasks.card_content_audit_packages import run_card_content_audit_packages
 from seller_agent.tasks.card_content_parameter_inventory import run_card_content_parameter_inventory
 from seller_agent.tasks.card_content_signals import run_collect_card_signals
 from seller_agent.tasks.card_content_snapshot import run_card_content_snapshot
 from seller_agent.tasks.card_content_update import (
-    run_apply_approved_card,
-    run_card_content_update_apply,
     run_card_content_update_plan,
     run_card_content_update_verify,
 )
@@ -42,24 +40,17 @@ from seller_agent.tasks.catalog_fetch import run_catalog_fetch
 from seller_agent.tasks.catalog_content_master import run_catalog_content_master
 from seller_agent.tasks.catalog_internal_sku_plan import run_internal_sku_plan
 from seller_agent.tasks.catalog_unified import run_build_unified_catalog
-from seller_agent.tasks.actions_apply import run_actions_apply
 from seller_agent.tasks.daily_morning_report import run_daily_morning_report
 from seller_agent.tasks.marketplace_period_report import run_marketplace_period_report
-from seller_agent.tasks.ozon_cpc_bids_apply import run_ozon_cpc_bids_apply
-from seller_agent.tasks.ozon_card_create_apply import run_ozon_card_create_apply
 from seller_agent.tasks.ozon_card_create_plan import run_ozon_card_create_plan
-from seller_agent.tasks.ozon_actions_optimizer_apply import run_ozon_actions_optimizer_apply
 from seller_agent.tasks.ozon_actions_optimizer_plan import run_ozon_actions_optimizer_plan
-from seller_agent.tasks.ozon_elastic_apply import run_ozon_elastic_apply
 from seller_agent.tasks.ozon_cpc_optimization_plan import CpcOptimizationThresholds, run_ozon_cpc_optimization_plan
 from seller_agent.tasks.ozon_elastic_plan import run_ozon_elastic_plan
 from seller_agent.tasks.inbox_workflow import (
-    run_ozon_inbox_apply,
     run_ozon_inbox_triage,
-    run_wb_inbox_apply,
     run_wb_inbox_triage,
 )
-from seller_agent.tasks.ozon_product_remove import run_ozon_product_remove_apply, run_ozon_product_remove_plan
+from seller_agent.tasks.ozon_product_remove import run_ozon_product_remove_plan
 from seller_agent.tasks.ozon_pricing_margin import run_ozon_pricing_margin
 from seller_agent.tasks.ozon_production_work_plan import run_ozon_production_work_plan
 from seller_agent.tasks.ozon_stock_supply_monitor import run_ozon_stock_supply_monitor
@@ -67,33 +58,31 @@ from seller_agent.tasks.pricing_status import run_pricing_status
 from seller_agent.tasks.product_passport_design import run_product_passport_design
 from seller_agent.tasks.reviews_questions import (
     run_reviews_questions,
-    run_reviews_questions_apply,
     run_reviews_questions_prepare_approved,
 )
 from seller_agent.tasks.registry import default_task_registry, get_task_definition, list_task_definitions
 from seller_agent.tasks.seo_query_pack import build_seo_query_pack
-from seller_agent.tasks.seller_sku_update import run_seller_sku_update_apply, run_seller_sku_update_plan
-from seller_agent.tasks.ozon_messenger_workflow import run_ozon_messenger_workflow
+from seller_agent.tasks.seller_sku_update import run_seller_sku_update_plan
 from seller_agent.tasks.ozon_partial_approved import (
     run_ozon_partial_approved_diagnose,
-    run_ozon_partial_approved_recovery_apply,
 )
 from seller_agent.tasks.status_preflight import run_status_preflight
 from seller_agent.tasks.supply_workbooks_plan import run_supply_workbooks_plan
 from seller_agent.tasks.telegram_report_sender import run_send_telegram_report
-from seller_agent.tasks.wb_actions_discount_apply import run_wb_actions_discount_apply
 from seller_agent.tasks.wb_actions_discount_plan import run_wb_actions_discount_plan
-from seller_agent.tasks.wb_card_create_apply import run_wb_card_create_apply
 from seller_agent.tasks.wb_card_create_plan import run_wb_card_create_plan
 from seller_agent.tasks.wb_parser_warehouse_analytics import run_wb_parser_warehouse_analytics
 from seller_agent.tasks.wb_production_work_plan import run_wb_production_work_plan
-from seller_agent.tasks.wb_promotion_bid_parser_enriched_apply import run_wb_promotion_bid_parser_enriched_apply
 from seller_agent.tasks.wb_promotion_bid_parser_enriched_plan import run_wb_promotion_bid_parser_enriched_plan
 from seller_agent.tasks.wb_promotion_bid_plan import WbPromotionBidThresholds, run_wb_promotion_bid_plan
-from seller_agent.tasks.wb_promotion_bids_apply import run_wb_promotion_bids_apply
 from seller_agent.tasks.wb_promotion_report import run_wb_promotion_report
 from seller_agent.tasks.wb_stock_supply_monitor import run_wb_stock_supply_monitor
 from seller_agent.sessions.manager import install_systemd_units, restore_ozon_session, run_session_manager
+
+
+# Kept as a non-callable compatibility seam for regression tests and external
+# monkeypatches; production CLI routing never invokes a task-level apply here.
+run_actions_apply: object | None = None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -2136,9 +2125,100 @@ def _json_object_arg(raw: str, label: str) -> dict[str, object]:
     return value
 
 
+def _json_safe_cli_value(value: object) -> object:
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, set):
+        return sorted(_json_safe_cli_value(item) for item in value)
+    if isinstance(value, (list, tuple)):
+        return [_json_safe_cli_value(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _json_safe_cli_value(item) for key, item in value.items()}
+    return value
+
+
+def _enqueue_cli_write(args: argparse.Namespace) -> int | None:
+    registry = default_task_registry()
+    try:
+        task = registry.get(args.command)
+    except KeyError:
+        return None
+    if not task.is_write:
+        return None
+    if not task.enabled:
+        result = {
+            "ok": False,
+            "status": "blocked",
+            "blocked_reason": "task_disabled",
+            "task": task.name,
+            "message": (
+                f"Write command `{args.command}` is disabled in TaskRegistry; "
+                "direct marketplace apply is forbidden."
+            ),
+        }
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 2
+    if bool(getattr(args, "no_runtime_db", False)):
+        result = {
+            "ok": False,
+            "status": "blocked",
+            "blocked_reason": "runtime_db_required",
+            "task": task.name,
+            "message": "Write command requires the runtime JobService database.",
+        }
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 2
+
+    runtime_db_arg = getattr(args, "runtime_db", None)
+    runtime_db = Path(runtime_db_arg) if runtime_db_arg else Path(
+        os.environ.get("VITAL_SHEVRON_RUNTIME_DB") or DEFAULT_RUNTIME_DB
+    )
+    data_dir = Path(getattr(args, "data_dir", "data"))
+    excluded = {"command", "data_dir", "runtime_db", "no_runtime_db"}
+    params = {
+        key: _json_safe_cli_value(value)
+        for key, value in vars(args).items()
+        if key not in excluded and value is not None
+    }
+    store = JobStore(runtime_db)
+    service = JobService(store=store, data_dir=data_dir, runtime_db=runtime_db)
+    try:
+        job = service.submit(
+            task_id=task.name,
+            params=params,
+            actor="cli",
+            source="cli",
+        )
+    except (KeyError, RuntimeError, ValueError) as exc:
+        result = {
+            "ok": False,
+            "status": "blocked",
+            "blocked_reason": "runtime_enqueue_failed",
+            "task": task.name,
+            "message": " ".join(str(exc).split())[:500],
+            "artifacts": {"runtime_db": str(runtime_db)},
+        }
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 2
+    result = {
+        "ok": True,
+        "status": "queued",
+        "job": asdict(job),
+        "artifacts": {"runtime_db": str(runtime_db)},
+    }
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    write_result = _enqueue_cli_write(args)
+    if write_result is not None:
+        return write_result
 
     if args.command == "runs":
         data_dir = Path(args.data_dir)
@@ -2563,35 +2643,11 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["overall_status"] in {"ok", "warning"} else 2
 
-    if args.command == "apply-ozon-product-remove":
-        result = run_ozon_product_remove_apply(
-            credentials=load_credentials(),
-            data_dir=Path(args.data_dir),
-            plan_run_id=args.plan_run_id,
-            run_id=args.run_id,
-            confirmed_by_user=args.confirmed_by_user,
-        )
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        return 0 if result["overall_status"] in {"ok", "warning"} else 2
-
     if args.command == "ozon-partial-approved-diagnose":
         result = run_ozon_partial_approved_diagnose(
             credentials=load_credentials(),
             data_dir=Path(args.data_dir),
             run_id=args.run_id,
-        )
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        return 0 if result["overall_status"] in {"ok", "warning"} else 2
-
-    if args.command == "apply-ozon-partial-approved-recovery":
-        result = run_ozon_partial_approved_recovery_apply(
-            credentials=load_credentials(),
-            data_dir=Path(args.data_dir),
-            plan_run_id=args.plan_run_id,
-            run_id=args.run_id,
-            confirmed_by_user=args.confirmed_by_user,
-            wait_seconds=args.wait_seconds,
-            poll_interval=args.poll_interval,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["overall_status"] in {"ok", "warning"} else 2
@@ -2825,28 +2881,6 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["overall_status"] in {"ok", "warning"} else 2
 
-    if args.command == "apply-ozon-elastic":
-        result = run_ozon_elastic_apply(
-            credentials=load_credentials(),
-            data_dir=Path(args.data_dir),
-            plan_run_id=args.plan_run_id,
-            run_id=args.run_id,
-            confirmed_by_user=args.confirmed_by_user,
-        )
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        return 0 if result["overall_status"] in {"ok", "warning"} else 2
-
-    if args.command == "apply-ozon-actions-optimizer":
-        result = run_ozon_actions_optimizer_apply(
-            credentials=load_credentials(),
-            data_dir=Path(args.data_dir),
-            plan_run_id=args.plan_run_id,
-            run_id=args.run_id,
-            confirmed_by_user=args.confirmed_by_user,
-        )
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        return 0 if result["overall_status"] in {"ok", "warning"} else 2
-
     if args.command == "plan-ozon-cpc-optimization":
         result = run_ozon_cpc_optimization_plan(
             data_dir=Path(args.data_dir),
@@ -2870,18 +2904,6 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
 
-    if args.command == "apply-ozon-cpc-bids":
-        result = run_ozon_cpc_bids_apply(
-            credentials=load_credentials(),
-            data_dir=Path(args.data_dir),
-            plan_run_id=args.plan_run_id,
-            run_id=args.run_id,
-            confirmed_by_user=args.confirmed_by_user,
-            min_bid=Decimal(args.min_bid),
-        )
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        return 0 if result["overall_status"] in {"ok", "warning"} else 2
-
     if args.command == "plan-wb-actions-discounts":
         result = run_wb_actions_discount_plan(
             credentials=load_credentials(),
@@ -2893,17 +2915,6 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
-
-    if args.command == "apply-wb-actions-discounts":
-        result = run_wb_actions_discount_apply(
-            credentials=load_credentials(),
-            data_dir=Path(args.data_dir),
-            plan_run_id=args.plan_run_id,
-            run_id=args.run_id,
-            confirmed_by_user=args.confirmed_by_user,
-        )
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        return 0 if result["overall_status"] in {"ok", "warning"} else 2
 
     if args.command == "wb-promotion-report":
         result = run_wb_promotion_report(
@@ -2968,71 +2979,6 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
 
-    if args.command == "apply-wb-promotion-bids-parser-enriched":
-        result = run_wb_promotion_bid_parser_enriched_apply(
-            credentials=load_credentials(),
-            data_dir=Path(args.data_dir),
-            plan_run_id=args.plan_run_id,
-            run_id=args.run_id,
-            confirmed_by_user=args.confirmed_by_user,
-            wait_seconds=args.wait_seconds,
-            approved_actions={item.strip() for item in args.approved_actions.split(",") if item.strip()},
-        )
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        return 0 if result["overall_status"] in {"ok", "warning"} else 2
-
-    if args.command == "apply-wb-promotion-bids":
-        result = run_wb_promotion_bids_apply(
-            credentials=load_credentials(),
-            data_dir=Path(args.data_dir),
-            plan_run_id=args.plan_run_id,
-            run_id=args.run_id,
-            confirmed_by_user=args.confirmed_by_user,
-            allowed_actions={item.strip() for item in args.actions.split(",") if item.strip()},
-            wait_seconds=args.wait_seconds,
-        )
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        return 0 if result["overall_status"] in {"ok", "warning"} else 2
-
-    if args.command == "apply-actions":
-        result = run_actions_apply(
-            credentials=load_credentials(),
-            data_dir=Path(args.data_dir),
-            run_id=args.run_id,
-            pending_id=args.pending_id,
-            confirmed_by_user=args.confirmed_by_user,
-        )
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        return 0 if result["overall_status"] in {"ok", "warning"} else 2
-
-    if args.command == "apply-wb-card-create":
-        result = run_wb_card_create_apply(
-            credentials=load_credentials(),
-            data_dir=Path(args.data_dir),
-            plan_run_id=args.plan_run_id,
-            run_id=args.run_id,
-            confirmed_by_user=args.confirmed_by_user,
-            allow_manual_review=args.allow_manual_review,
-            wait_seconds=args.wait_seconds,
-            poll_interval=args.poll_interval,
-        )
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        return 0
-
-    if args.command == "apply-ozon-card-create":
-        result = run_ozon_card_create_apply(
-            credentials=load_credentials(),
-            data_dir=Path(args.data_dir),
-            plan_run_id=args.plan_run_id,
-            run_id=args.run_id,
-            confirmed_by_user=args.confirmed_by_user,
-            allow_manual_review=args.allow_manual_review,
-            wait_seconds=args.wait_seconds,
-            poll_interval=args.poll_interval,
-        )
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        return 0 if result["overall_status"] in {"ok", "warning"} else 2
-
     if args.command == "plan-seller-sku-update":
         result = run_seller_sku_update_plan(
             credentials=load_credentials(),
@@ -3042,20 +2988,6 @@ def main(argv: list[str] | None = None) -> int:
             products_path=Path(args.products_path) if args.products_path else None,
             run_id=args.run_id,
             skip_api=args.skip_api,
-        )
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        return 0 if result["overall_status"] in {"ok", "warning"} else 2
-
-    if args.command == "apply-seller-sku-update":
-        result = run_seller_sku_update_apply(
-            credentials=load_credentials(),
-            data_dir=Path(args.data_dir),
-            plan_run_id=args.plan_run_id,
-            run_id=args.run_id,
-            confirmed_by_user=args.confirmed_by_user,
-            wait_seconds=args.wait_seconds,
-            poll_interval=args.poll_interval,
-            update_local_layers=not args.skip_local_layer_update,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["overall_status"] in {"ok", "warning"} else 2
@@ -3086,19 +3018,6 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["overall_status"] in {"ok", "warning"} else 2
 
-    if args.command == "apply-card-content-update":
-        result = run_card_content_update_apply(
-            credentials=load_credentials(),
-            data_dir=Path(args.data_dir),
-            plan_run_id=args.plan_run_id,
-            run_id=args.run_id,
-            confirmed_by_user=args.confirmed_by_user,
-            wait_seconds=args.wait_seconds,
-            poll_interval=args.poll_interval,
-        )
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        return 0 if result["overall_status"] in {"ok", "warning"} else 2
-
     if args.command == "verify-card-content-update":
         result = run_card_content_update_verify(
             credentials=load_credentials(),
@@ -3107,43 +3026,6 @@ def main(argv: list[str] | None = None) -> int:
             internal_skus=args.internal_sku,
             run_id=args.run_id,
             skip_api=args.skip_api,
-        )
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        return 0 if result["overall_status"] in {"ok", "warning"} else 2
-
-    if args.command == "apply-approved-card":
-        result = run_apply_approved_card(
-            credentials=load_credentials(),
-            data_dir=Path(args.data_dir),
-            passport_paths=[Path(path) for path in args.passport],
-            internal_skus=args.internal_sku,
-            run_id=args.run_id,
-            confirmed_by_user=args.confirmed_by_user,
-            wait_seconds=args.wait_seconds,
-            poll_interval=args.poll_interval,
-        )
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        return 0 if result["overall_status"] in {"ok", "warning"} else 2
-
-    if args.command == "apply-approved-cards":
-        result = run_apply_approved_cards(
-            credentials=load_credentials(),
-            data_dir=Path(args.data_dir),
-            internal_skus=args.internal_sku,
-            plan_run_id=args.plan_run_id,
-            run_id=args.run_id,
-            confirmed_by_user=args.confirmed_by_user,
-            content_wait_seconds=args.content_wait_seconds,
-            content_poll_interval=args.content_poll_interval,
-            seller_sku_wait_seconds=args.seller_sku_wait_seconds,
-            seller_sku_poll_interval=args.seller_sku_poll_interval,
-            wb_create_wait_seconds=args.wb_create_wait_seconds,
-            wb_create_poll_interval=args.wb_create_poll_interval,
-            ozon_create_min_price=args.ozon_create_min_price,
-            ozon_create_allow_manual_review=args.ozon_create_allow_manual_review,
-            ozon_create_wait_seconds=args.ozon_create_wait_seconds,
-            ozon_create_poll_interval=args.ozon_create_poll_interval,
-            runtime_db=None if args.no_runtime_db else Path(args.runtime_db),
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["overall_status"] in {"ok", "warning"} else 2
@@ -3172,17 +3054,6 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["overall_status"] in {"ok", "warning"} else 2
 
-    if args.command == "apply-reviews-questions":
-        result = run_reviews_questions_apply(
-            credentials=load_credentials(),
-            approved_path=Path(args.approved_path),
-            data_dir=Path(args.data_dir),
-            run_id=args.run_id,
-            confirmed_by_user=args.confirmed_by_user,
-        )
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        return 0 if result["overall_status"] in {"ok", "warning"} else 2
-
     if args.command == "prepare-reviews-questions-approved":
         result = run_reviews_questions_prepare_approved(
             data_dir=Path(args.data_dir),
@@ -3195,17 +3066,6 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
 
-    if args.command == "ozon-messenger-workflow":
-        result = run_ozon_messenger_workflow(
-            data_dir=Path(args.data_dir),
-            run_id=args.run_id,
-            stage=args.stage,
-            approved_path=Path(args.approved_path) if args.approved_path else None,
-            confirmed_by_user=args.confirmed_by_user,
-        )
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        return 0 if result["overall_status"] in {"ok", "warning"} else 2
-
     if args.command == "ozon-inbox":
         result = run_ozon_inbox_triage(
             credentials=load_credentials(),
@@ -3216,32 +3076,12 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["overall_status"] in {"ok", "warning"} else 2
 
-    if args.command == "apply-ozon-inbox":
-        result = run_ozon_inbox_apply(
-            credentials=load_credentials(),
-            data_dir=Path(args.data_dir),
-            source_run_id=args.source_run_id,
-            confirmed_by_user=args.confirmed_by_user,
-        )
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        return 0 if result["overall_status"] in {"ok", "warning"} else 2
-
     if args.command == "wb-inbox":
         result = run_wb_inbox_triage(
             credentials=load_credentials(),
             data_dir=Path(args.data_dir),
             run_id=args.run_id,
             limit=args.limit,
-        )
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        return 0 if result["overall_status"] in {"ok", "warning"} else 2
-
-    if args.command == "apply-wb-inbox":
-        result = run_wb_inbox_apply(
-            credentials=load_credentials(),
-            data_dir=Path(args.data_dir),
-            source_run_id=args.source_run_id,
-            confirmed_by_user=args.confirmed_by_user,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["overall_status"] in {"ok", "warning"} else 2

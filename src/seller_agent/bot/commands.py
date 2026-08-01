@@ -11,11 +11,10 @@ from typing import Any
 
 from seller_agent.config import AppCredentials, load_credentials
 from seller_agent.core.job_service import JobService
-from seller_agent.core.job_store import DEFAULT_RUNTIME_DB, JobStore
+from seller_agent.core.job_store import DEFAULT_RUNTIME_DB, JobStore, approval_callback_token
 from seller_agent.core.run_manifest import latest_run
 from seller_agent.core.workflow_runner import WorkflowRunner
 from seller_agent.tasks.approvals import run_approvals_status
-from seller_agent.tasks.ozon_actions_optimizer_apply import run_ozon_actions_optimizer_apply
 from seller_agent.tasks.ozon_actions_optimizer_plan import run_ozon_actions_optimizer_plan
 from seller_agent.tasks.ozon_elastic_plan import run_ozon_elastic_plan
 from seller_agent.tasks.inbox_workflow import (
@@ -333,15 +332,8 @@ def handle_telegram_callback(
         return _wb_work_plan_decision_callback(data, data_dir=data_dir, approved=False)
     if data == "wbwp_cancel":
         return _wb_work_plan_cancel()
-    if data.startswith("oe_apply:"):
-        plan_run_id = data.removeprefix("oe_apply:").strip()
-        return _ozon_elastic_apply(plan_run_id=plan_run_id, data_dir=data_dir, credentials=credentials)
-    if data.startswith("oza_apply:"):
-        plan_run_id = data.removeprefix("oza_apply:").strip()
-        return _ozon_actions_apply(plan_run_id=plan_run_id, data_dir=data_dir, credentials=credentials)
-    if data.startswith("wba_apply:"):
-        plan_run_id = data.removeprefix("wba_apply:").strip()
-        return _wb_actions_apply(plan_run_id=plan_run_id, data_dir=data_dir, credentials=credentials)
+    if data.startswith(("oe_apply:", "oza_apply:", "wba_apply:")):
+        return _legacy_write_callback_blocked()
     if data.startswith("wbam_confirm:"):
         scheme_text = data.removeprefix("wbam_confirm:").strip()
         return _wb_manual_actions_plan(
@@ -363,23 +355,15 @@ def handle_telegram_callback(
             credentials=credentials,
         )
     if data.startswith("wbmp_apply:"):
-        return _wb_min_price_actions_apply(
-            plan_run_id=data.removeprefix("wbmp_apply:").strip(),
-            data_dir=data_dir,
-            credentials=credentials,
-        )
+        return _legacy_write_callback_blocked()
     if data == "wbmp_change":
         return _wb_min_price_actions_start()
     if data == "wbmp_cancel":
         return _wb_min_price_actions_cancel()
     if data.startswith("wbmp_reject:"):
         return _wb_min_price_actions_reject(data.removeprefix("wbmp_reject:").strip())
-    if data.startswith("ozin_apply:"):
-        source_run_id = data.removeprefix("ozin_apply:").strip()
-        return _ozon_inbox_apply(source_run_id=source_run_id, data_dir=data_dir, credentials=credentials)
-    if data.startswith("wbin_apply:"):
-        source_run_id = data.removeprefix("wbin_apply:").strip()
-        return _wb_inbox_apply(source_run_id=source_run_id, data_dir=data_dir, credentials=credentials)
+    if data.startswith(("ozin_apply:", "wbin_apply:")):
+        return _legacy_write_callback_blocked()
     return TelegramCommandResult(
         command="callback",
         ok=False,
@@ -388,6 +372,21 @@ def handle_telegram_callback(
             "Действие не поддерживается.\n\n"
             f"Callback: `{_truncate(data, 80)}`\n\n"
             "Изменений в Ozon/WB не выполнял."
+        ),
+    )
+
+
+def _legacy_write_callback_blocked() -> TelegramCommandResult:
+    return TelegramCommandResult(
+        command="callback",
+        ok=False,
+        mode="apply",
+        blocked_reason="runtime_jobs_required",
+        text=(
+            "Apply заблокирован\n\n"
+            "Write callback разрешён только через runtime Job Worker и существующий approval ID. "
+            "Legacy plan/source run ID не является подтверждением владельца.\n\n"
+            "Изменений в Ozon/WB не выполнялось."
         ),
     )
 
@@ -1510,8 +1509,8 @@ def _ozon_inbox_plan(
     if actions_count:
         lines.extend(
             [
-                "Нажатие кнопки ниже является явным подтверждением владельца для этого Ozon-пакета.",
-                "Apply отправит согласованные ответы, отметит согласованные уведомления и сохранит результат.",
+                "В синхронном dry-run write-кнопка не показывается.",
+                "Apply доступен только из runtime Job Worker после создания и согласования runtime approval.",
             ]
         )
     else:
@@ -1521,18 +1520,13 @@ def _ozon_inbox_plan(
         lines.extend(["", "Файлы:"])
         if artifacts.get("report"):
             lines.append(f"- отчет: `{artifacts['report']}`")
-    reply_markup: dict[str, Any] = {}
-    if actions_count and run_id:
-        reply_markup = {
-            "inline_keyboard": [[{"text": "✅ Применить Ozon входящие", "callback_data": f"ozin_apply:{run_id}"}]]
-        }
     return TelegramCommandResult(
         command="/ozon-inbox",
         ok=True,
         mode="dry_run",
         text="\n".join(lines),
         artifacts=artifacts,
-        reply_markup=reply_markup,
+        reply_markup={},
     )
 
 
@@ -1589,8 +1583,8 @@ def _wb_inbox_plan(
     if actions_count:
         lines.extend(
             [
-                "Нажатие кнопки ниже является явным подтверждением владельца для этого WB-пакета.",
-                "Apply отправит согласованные ответы на WB отзывы и вопросы.",
+                "В синхронном dry-run write-кнопка не показывается.",
+                "Apply доступен только из runtime Job Worker после создания и согласования runtime approval.",
             ]
         )
     else:
@@ -1600,18 +1594,13 @@ def _wb_inbox_plan(
         lines.extend(["", "Файлы:"])
         if artifacts.get("report"):
             lines.append(f"- отчет: `{artifacts['report']}`")
-    reply_markup: dict[str, Any] = {}
-    if actions_count and run_id:
-        reply_markup = {
-            "inline_keyboard": [[{"text": "✅ Применить WB входящие", "callback_data": f"wbin_apply:{run_id}"}]]
-        }
     return TelegramCommandResult(
         command="/wb-inbox",
         ok=True,
         mode="dry_run",
         text="\n".join(lines),
         artifacts=artifacts,
-        reply_markup=reply_markup,
+        reply_markup={},
     )
 
 
@@ -2188,7 +2177,6 @@ def _wb_min_price_actions_plan_result(
     if safe_to_apply and run_id and int(summary.get("to_change_discount") or 0) > 0:
         markup = {
             "inline_keyboard": [
-                [{"text": "Применить", "callback_data": f"wbmp_apply:{run_id}"}],
                 [{"text": "Отклонить", "callback_data": f"wbmp_reject:{run_id}"}],
             ]
         }
@@ -2510,7 +2498,7 @@ def _wb_actions_plan_for_scheme(
     if changed_rows:
         lines.extend(
             [
-                "Нажатие кнопки ниже является явным подтверждением владельца для этого dry-run.",
+                "В синхронном dry-run write-кнопка не показывается; apply доступен только через runtime approval.",
                 "Перед записью apply сам выполнит fresh preflight, fresh dry-run, partial drift-check и verify.",
                 "За один upload снижение итоговой цены ограничено `33%`, а изменение скидки - `35 п.п.`; если цель дальше, потребуется следующий подтверждённый запуск.",
                 "Если часть строк изменилась, будут применены только неизменившиеся строки; изменившиеся останутся на новый review.",
@@ -2525,20 +2513,10 @@ def _wb_actions_plan_for_scheme(
     lines.extend(["", "Изменений в WB не выполнял."])
 
     reply_markup: dict[str, Any] = {}
-    if changed_rows and run_id:
+    if changed_rows and run_id and manual:
         reply_markup = {
             "inline_keyboard": [
-                [
-                    {
-                        "text": "Применить скидки" if manual else "✅ Применить WB 70-55-55",
-                        "callback_data": f"wba_apply:{run_id}",
-                    }
-                ],
-                *(
-                    [[{"text": "Отклонить", "callback_data": f"wbam_reject:{run_id}"}]]
-                    if manual
-                    else []
-                ),
+                [{"text": "Отклонить", "callback_data": f"wbam_reject:{run_id}"}],
             ]
         }
     return TelegramCommandResult(
@@ -2714,7 +2692,7 @@ def _ozon_elastic_plan(
     if has_write_rows:
         lines.extend(
             [
-                "Нажатие кнопки ниже является явным подтверждением владельца для этого dry-run.",
+                "В синхронном dry-run write-кнопка не показывается; apply доступен только через runtime approval.",
                 "Перед записью apply сам выполнит fresh preflight, fresh dry-run, partial drift-check и verify.",
                 "Если часть строк изменилась, будут применены только неизменившиеся строки; изменившиеся останутся на новый review.",
             ]
@@ -2733,25 +2711,13 @@ def _ozon_elastic_plan(
             lines.append(f"- CSV: `{artifacts['csv']}`")
     lines.extend(["", "Изменений в Ozon/WB не выполнял."])
 
-    reply_markup: dict[str, Any] = {}
-    if has_write_rows and run_id:
-        reply_markup = {
-            "inline_keyboard": [
-                [
-                    {
-                        "text": "✅ Применить Ozon Elastic",
-                        "callback_data": f"oe_apply:{run_id}",
-                    }
-                ]
-            ]
-        }
     return TelegramCommandResult(
         command="/elastic",
         ok=True,
         mode="dry_run",
         text="\n".join(lines),
         artifacts=artifacts,
-        reply_markup=reply_markup,
+        reply_markup={},
     )
 
 
@@ -2904,7 +2870,7 @@ def _ozon_actions_plan(
     if apply_rows:
         lines.extend(
             [
-                "Нажатие кнопки ниже является явным подтверждением владельца для этого dry-run.",
+                "В синхронном dry-run write-кнопка не показывается; apply доступен только через runtime approval.",
                 "Перед записью apply сам выполнит fresh preflight, fresh dry-run, partial drift-check и verify.",
                 "Если часть строк изменилась, будут применены только неизменившиеся строки; изменившиеся останутся на новый review.",
             ]
@@ -2923,25 +2889,13 @@ def _ozon_actions_plan(
             lines.append(f"- рекомендации CSV: `{artifacts['recommendations_csv']}`")
     lines.extend(["", "Изменений в Ozon/WB не выполнял."])
 
-    reply_markup: dict[str, Any] = {}
-    if apply_rows and run_id:
-        reply_markup = {
-            "inline_keyboard": [
-                [
-                    {
-                        "text": "✅ Применить Ozon все акции",
-                        "callback_data": f"oza_apply:{run_id}",
-                    }
-                ]
-            ]
-        }
     return TelegramCommandResult(
         command="/ozon-actions",
         ok=True,
         mode="dry_run",
         text="\n".join(lines),
         artifacts=artifacts,
-        reply_markup=reply_markup,
+        reply_markup={},
     )
 
 
@@ -2966,11 +2920,11 @@ def _ozon_actions_apply(
         )
 
     try:
-        result = run_ozon_actions_optimizer_apply(
-            credentials=credentials or load_credentials(),
-            data_dir=data_dir,
+        result = _run_plan_apply_job(
+            task_id="ozon-actions-optimizer-apply",
             plan_run_id=plan_run_id,
-            confirmed_by_user=True,
+            data_dir=data_dir,
+            credentials=credentials,
         )
     except Exception as exc:  # noqa: BLE001 - Telegram must return a safe failure.
         return TelegramCommandResult(
@@ -3780,9 +3734,7 @@ def _approvals(*, data_dir: Path, runtime_db: Path = DEFAULT_RUNTIME_DB) -> Tele
 
 
 def _approval_callback_token(approval_id: str) -> str:
-    import hashlib
-
-    return hashlib.sha256(approval_id.encode("utf-8")).hexdigest()[:16]
+    return approval_callback_token(approval_id)
 
 
 def _runs(*, data_dir: Path) -> TelegramCommandResult:
@@ -4067,23 +4019,8 @@ def _run_inbox_apply_job(
     data_dir: Path,
     credentials: AppCredentials | None,
 ) -> dict[str, Any]:
-    service = JobService(
-        data_dir=data_dir,
-        workflow_runner=WorkflowRunner(data_dir=data_dir, credentials=credentials),
-    )
-    job = service.submit(
-        task_id=task_id,
-        params={"source_run_id": source_run_id, "confirmed_by_user": True},
-        actor="telegram_owner",
-        source="telegram_callback",
-    )
-    job_result = service.run(job.job_id)
-    workflow_result = job_result.job.result if isinstance(job_result.job.result, dict) else {}
-    summary = workflow_result.get("summary") if isinstance(workflow_result.get("summary"), dict) else {}
-    if summary:
-        return {**summary, "job_id": job.job_id, "job_status": job_result.job.status}
-    error = job_result.message or job_result.job.error or workflow_result.get("error") or workflow_result.get("blocked_reason")
-    raise RuntimeError(f"job `{job.job_id}` failed: {error or job_result.status}")
+    _ = (task_id, source_run_id, data_dir, credentials)
+    raise RuntimeError("Direct Telegram apply is disabled; use runtime approval and Job Worker.")
 
 
 def _run_plan_apply_job(
@@ -4093,23 +4030,8 @@ def _run_plan_apply_job(
     data_dir: Path,
     credentials: AppCredentials | None,
 ) -> dict[str, Any]:
-    service = JobService(
-        data_dir=data_dir,
-        workflow_runner=WorkflowRunner(data_dir=data_dir, credentials=credentials),
-    )
-    job = service.submit(
-        task_id=task_id,
-        params={"plan_run_id": plan_run_id, "confirmed_by_user": True},
-        actor="telegram_owner",
-        source="telegram_callback",
-    )
-    job_result = service.run(job.job_id)
-    workflow_result = job_result.job.result if isinstance(job_result.job.result, dict) else {}
-    summary = workflow_result.get("summary") if isinstance(workflow_result.get("summary"), dict) else {}
-    if summary:
-        return {**summary, "job_id": job.job_id, "job_status": job_result.job.status}
-    error = job_result.message or job_result.job.error or workflow_result.get("error") or workflow_result.get("blocked_reason")
-    raise RuntimeError(f"job `{job.job_id}` failed: {error or job_result.status}")
+    _ = (task_id, plan_run_id, data_dir, credentials)
+    raise RuntimeError("Direct Telegram apply is disabled; use runtime approval and Job Worker.")
 
 
 def _inbox_apply_result_text(*, command: str, title: str, result: dict[str, Any]) -> TelegramCommandResult:
