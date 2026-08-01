@@ -11,6 +11,8 @@ import uuid
 from typing import Any, Iterator
 
 from seller_agent.core.job_models import (
+    ApprovalEvent,
+    ApprovalManifestReconciliation,
     ApprovalRecord,
     ApprovalStatus,
     CardWorkEvent,
@@ -23,6 +25,7 @@ from seller_agent.core.job_models import (
     ResourceLease,
     TelegramUpdateRecord,
 )
+from seller_agent.safety.approval_package import verify_approval_package_linkage
 
 
 DEFAULT_RUNTIME_DB = Path("runtime/runtime.db")
@@ -40,6 +43,14 @@ class ApprovalCallbackTokenCollisionError(ApprovalLookupAmbiguousError):
 
 class ApprovalSourceJobAmbiguousError(ApprovalLookupAmbiguousError):
     """Raised when a source job has more than one approval."""
+
+
+class ApprovalVerifyIntegrityError(RuntimeError):
+    """Raised when the current signed package cannot authorize a verify link."""
+
+    def __init__(self, issues: tuple[str, ...]) -> None:
+        super().__init__("Approval verify integrity validation failed.")
+        self.issues = issues
 
 
 def approval_callback_token(approval_id: str) -> str:
@@ -104,29 +115,14 @@ class JobStore:
         now = _now()
         params_json = _json_dumps(params or {})
         with self._transaction() as connection:
-            connection.execute(
-                """
-                INSERT INTO jobs (
-                  job_id, task_id, status, actor, params_json, result_json,
-                  error, created_at, updated_at, started_at, finished_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (job_id, task_id, status, actor, params_json, "{}", "", now, now, "", ""),
-            )
-            connection.execute(
-                """
-                INSERT INTO task_requests (request_id, job_id, actor, source, params_json, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (f"{job_id}:request", job_id, actor, source, params_json, now),
-            )
-            self._insert_event(
+            self._insert_job_record(
                 connection,
                 job_id=job_id,
-                event_type="job_created",
-                message=f"Job created for task `{task_id}`.",
-                data={"task_id": task_id, "status": status},
+                task_id=task_id,
+                status=status,
+                actor=actor,
+                params_json=params_json,
+                source=source,
                 created_at=now,
             )
         return self.get_job(job_id) or JobRecord(
@@ -137,6 +133,56 @@ class JobStore:
             params=params or {},
             created_at=now,
             updated_at=now,
+        )
+
+    def _insert_job_record(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        job_id: str,
+        task_id: str,
+        status: JobStatus,
+        actor: str,
+        params_json: str,
+        source: str,
+        created_at: str,
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO jobs (
+              job_id, task_id, status, actor, params_json, result_json,
+              error, created_at, updated_at, started_at, finished_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                job_id,
+                task_id,
+                status,
+                actor,
+                params_json,
+                "{}",
+                "",
+                created_at,
+                created_at,
+                "",
+                "",
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO task_requests (request_id, job_id, actor, source, params_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (f"{job_id}:request", job_id, actor, source, params_json, created_at),
+        )
+        self._insert_event(
+            connection,
+            job_id=job_id,
+            event_type="job_created",
+            message=f"Job created for task `{task_id}`.",
+            data={"task_id": task_id, "status": status},
+            created_at=created_at,
         )
 
     def update_job_status(
@@ -184,6 +230,7 @@ class JobStore:
                 raise KeyError(f"Unknown job: {job_id}")
             if status in TERMINAL_JOB_STATUSES:
                 connection.execute("DELETE FROM job_claims WHERE job_id = ?", (job_id,))
+                self._deactivate_verify_job(connection, job_id=job_id, finished_at=now)
             self._insert_event(
                 connection,
                 job_id=job_id,
@@ -371,6 +418,26 @@ class JobStore:
                 data={"status": "running", "has_error": False},
                 created_at=now,
             )
+            verify_link = connection.execute(
+                """
+                SELECT verify.approval_id, approval.status
+                FROM approval_verify_jobs AS verify
+                JOIN approvals AS approval ON approval.approval_id = verify.approval_id
+                WHERE verify.verify_job_id = ? AND verify.active = 1
+                """,
+                (job_id,),
+            ).fetchone()
+            if verify_link is not None:
+                approval_status = str(verify_link["status"])
+                self._insert_approval_event(
+                    connection,
+                    approval_id=str(verify_link["approval_id"]),
+                    event_type="approval_verify_started",
+                    status_before=approval_status,
+                    status_after=approval_status,
+                    job_id=job_id,
+                    created_at=now,
+                )
             row = connection.execute("SELECT * FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
         return _job_from_row(row) if row is not None else None
 
@@ -384,10 +451,22 @@ class JobStore:
         result: dict[str, Any] | None = None,
         error: str = "",
         message: str = "",
+        approval_id: str = "",
+        approval_action: str = "",
     ) -> JobRecord | None:
         """Atomically finish a running job only for its exact surviving claim."""
         if status not in TERMINAL_JOB_STATUSES:
             raise ValueError("finish_claimed_job() requires a terminal status")
+        if approval_action not in {
+            "",
+            "apply_succeeded",
+            "apply_unknown",
+            "verify_succeeded",
+            "verify_inconclusive",
+        }:
+            raise ValueError("Unknown claimed approval finalization action.")
+        if bool(approval_id) != bool(approval_action):
+            raise ValueError("Approval finalization requires both approval_id and action.")
         now = _now()
         with self._transaction() as connection:
             cursor = connection.execute(
@@ -421,6 +500,14 @@ class JobStore:
             )
             if cursor.rowcount != 1:
                 return None
+            if approval_action:
+                self._finish_claimed_approval(
+                    connection,
+                    approval_id=approval_id,
+                    job_id=job_id,
+                    action=approval_action,
+                    created_at=now,
+                )
             self._insert_event(
                 connection,
                 job_id=job_id,
@@ -429,6 +516,7 @@ class JobStore:
                 data={"status": status, "has_error": bool(error)},
                 created_at=now,
             )
+            self._deactivate_verify_job(connection, job_id=job_id, finished_at=now)
             claim_cursor = connection.execute(
                 """
                 DELETE FROM job_claims
@@ -488,6 +576,14 @@ class JobStore:
                 )
                 if cursor.rowcount != 1:
                     continue
+                applying_approvals = connection.execute(
+                    """
+                    SELECT approval_id
+                    FROM approvals
+                    WHERE owner_job_id = ? AND status = 'applying'
+                    """,
+                    (job_id,),
+                ).fetchall()
                 approval_cursor = connection.execute(
                     """
                     UPDATE approvals
@@ -496,6 +592,17 @@ class JobStore:
                     """,
                     (now, job_id),
                 )
+                for approval in applying_approvals:
+                    self._insert_approval_event(
+                        connection,
+                        approval_id=str(approval["approval_id"]),
+                        event_type="approval_applying_unknown",
+                        status_before="applying",
+                        status_after="applying_unknown",
+                        job_id=job_id,
+                        created_at=now,
+                        data={"reason": "worker_lost"},
+                    )
                 self._insert_event(
                     connection,
                     job_id=job_id,
@@ -509,6 +616,7 @@ class JobStore:
                     },
                     created_at=now,
                 )
+                self._deactivate_verify_job(connection, job_id=job_id, finished_at=now)
                 connection.execute(
                     """
                     DELETE FROM job_claims
@@ -836,6 +944,18 @@ class JobStore:
                 approval_id=approval_id,
                 created_at=now,
             )
+            self._insert_approval_event(
+                connection,
+                approval_id=approval_id,
+                event_type=(
+                    "approval_pending_review_created"
+                    if status == "pending_review"
+                    else "approval_created"
+                ),
+                status_before="",
+                status_after=status,
+                created_at=now,
+            )
         record = self.get_approval(approval_id)
         if record is None:
             raise KeyError(f"Unknown approval after create: {approval_id}")
@@ -852,7 +972,7 @@ class JobStore:
     ) -> ApprovalRecord:
         now = _now()
         with self._transaction() as connection:
-            connection.execute(
+            cursor = connection.execute(
                 """
                 INSERT OR IGNORE INTO approvals (
                   approval_id, source_job_id, status, owner_job_id, checksum,
@@ -867,6 +987,19 @@ class JobStore:
                 approval_id=approval_id,
                 created_at=now,
             )
+            if cursor.rowcount == 1:
+                self._insert_approval_event(
+                    connection,
+                    approval_id=approval_id,
+                    event_type=(
+                        "approval_pending_review_created"
+                        if status == "pending_review"
+                        else "approval_created"
+                    ),
+                    status_before="",
+                    status_after=status,
+                    created_at=now,
+                )
         record = self.get_approval(approval_id)
         if record is None:
             raise KeyError(f"Unknown approval after ensure: {approval_id}")
@@ -896,15 +1029,16 @@ class JobStore:
                 """,
                 values,
             )
-        return cursor.rowcount == 1
-
-    def update_approval_status(self, *, approval_id: str, status: ApprovalStatus) -> bool:
-        now = _now()
-        with self._transaction() as connection:
-            cursor = connection.execute(
-                "UPDATE approvals SET status = ?, updated_at = ? WHERE approval_id = ?",
-                (status, now, approval_id),
-            )
+            if cursor.rowcount == 1:
+                self._insert_approval_event(
+                    connection,
+                    approval_id=approval_id,
+                    event_type="approval_apply_started",
+                    status_before="approved",
+                    status_after="applying",
+                    job_id=owner_job_id,
+                    created_at=now,
+                )
         return cursor.rowcount == 1
 
     def decide_approval(
@@ -923,6 +1057,17 @@ class JobStore:
                 f"UPDATE approvals SET status = ?, updated_at = ? WHERE approval_id = ? AND status IN ({placeholders})",
                 (status, now, approval_id, *expected_statuses),
             )
+            if cursor.rowcount == 1:
+                self._insert_approval_event(
+                    connection,
+                    approval_id=approval_id,
+                    event_type=(
+                        "approval_approved" if status == "approved" else "approval_rejected"
+                    ),
+                    status_before="pending_review",
+                    status_after=status,
+                    created_at=now,
+                )
         return cursor.rowcount == 1
 
     def get_approval(self, approval_id: str) -> ApprovalRecord | None:
@@ -1003,6 +1148,293 @@ class JobStore:
                 tuple(values),
             ).fetchall()
         return [_approval_from_row(row) for row in rows]
+
+    def list_approval_events(self, approval_id: str) -> list[ApprovalEvent]:
+        self.initialize()
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM approval_events
+                WHERE approval_id = ?
+                ORDER BY event_id ASC
+                """,
+                (approval_id,),
+            ).fetchall()
+        return [_approval_event_from_row(row) for row in rows]
+
+    def get_approval_manifest_reconciliation(
+        self,
+        approval_id: str,
+    ) -> ApprovalManifestReconciliation | None:
+        self.initialize()
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM approval_manifest_reconciliations
+                WHERE approval_id = ?
+                """,
+                (approval_id,),
+            ).fetchone()
+        return _approval_manifest_reconciliation_from_row(row) if row is not None else None
+
+    def list_pending_approval_manifest_reconciliations(
+        self,
+        *,
+        limit: int = 50,
+    ) -> list[ApprovalManifestReconciliation]:
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        self.initialize()
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM approval_manifest_reconciliations
+                WHERE status IN ('pending', 'failed')
+                ORDER BY updated_at ASC, approval_id ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [_approval_manifest_reconciliation_from_row(row) for row in rows]
+
+    def mark_approval_manifest_reconciliation(
+        self,
+        *,
+        approval_id: str,
+        succeeded: bool,
+        error_code: str = "",
+    ) -> ApprovalManifestReconciliation:
+        if succeeded:
+            error_code = ""
+        elif error_code not in {"manifest_not_found", "manifest_close_failed"}:
+            error_code = "manifest_close_failed"
+        now = _now()
+        with self._transaction() as connection:
+            row = connection.execute(
+                """
+                SELECT reconciliation.*, approval.status AS approval_status
+                FROM approval_manifest_reconciliations AS reconciliation
+                JOIN approvals AS approval ON approval.approval_id = reconciliation.approval_id
+                WHERE reconciliation.approval_id = ?
+                """,
+                (approval_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError("Unknown approval manifest reconciliation.")
+            if str(row["approval_status"]) != "closed":
+                raise RuntimeError("Approval must close before RunManifest reconciliation.")
+            if str(row["status"]) == "closed":
+                return _approval_manifest_reconciliation_from_row(row)
+            status = "closed" if succeeded else "failed"
+            connection.execute(
+                """
+                UPDATE approval_manifest_reconciliations
+                SET status = ?,
+                    attempt_count = attempt_count + 1,
+                    last_error_code = ?,
+                    updated_at = ?,
+                    completed_at = ?
+                WHERE approval_id = ? AND status IN ('pending', 'failed')
+                """,
+                (status, error_code, now, now if succeeded else "", approval_id),
+            )
+            verify_job_id = str(row["verify_job_id"])
+            if succeeded:
+                job_cursor = connection.execute(
+                    """
+                    UPDATE jobs
+                    SET status = 'success', error = '', updated_at = ?
+                    WHERE job_id = ?
+                      AND status = 'partial_success'
+                      AND error = 'manifest_reconciliation_pending'
+                    """,
+                    (now, verify_job_id),
+                )
+                if job_cursor.rowcount == 1:
+                    self._insert_event(
+                        connection,
+                        job_id=verify_job_id,
+                        event_type="job_manifest_reconciled",
+                        message="RunManifest reconciliation completed.",
+                        data={"status": "success"},
+                        created_at=now,
+                    )
+            else:
+                job_cursor = connection.execute(
+                    """
+                    UPDATE jobs
+                    SET status = 'partial_success',
+                        error = 'manifest_reconciliation_pending',
+                        updated_at = ?
+                    WHERE job_id = ? AND status IN ('success', 'partial_success')
+                    """,
+                    (now, verify_job_id),
+                )
+                if job_cursor.rowcount == 1:
+                    self._insert_event(
+                        connection,
+                        job_id=verify_job_id,
+                        event_type="job_manifest_reconciliation_pending",
+                        message="RunManifest reconciliation requires a safe retry.",
+                        data={"status": "partial_success", "reason": error_code},
+                        created_at=now,
+                    )
+            self._insert_approval_event(
+                connection,
+                approval_id=approval_id,
+                event_type=(
+                    "approval_manifest_closed"
+                    if succeeded
+                    else "approval_manifest_close_failed"
+                ),
+                status_before="closed",
+                status_after="closed",
+                created_at=now,
+                data={"reason": error_code} if error_code else {},
+            )
+            updated = connection.execute(
+                """
+                SELECT * FROM approval_manifest_reconciliations
+                WHERE approval_id = ?
+                """,
+                (approval_id,),
+            ).fetchone()
+        if updated is None:
+            raise KeyError("Unknown approval manifest reconciliation after update.")
+        return _approval_manifest_reconciliation_from_row(updated)
+
+    def create_or_get_active_approval_verify_job(
+        self,
+        *,
+        approval_id: str,
+        task_id: str,
+        params: dict[str, Any],
+        actor: str,
+        source: str,
+        expected_record_checksum: str,
+        expected_apply_task_id: str,
+        expected_source_plan_task: str,
+        expected_verify_task: str,
+        expected_marketplaces: tuple[str, ...],
+    ) -> tuple[JobRecord, bool]:
+        """Atomically keep at most one active verify job per approval."""
+        now = _now()
+        with self._transaction() as connection:
+            approval = connection.execute(
+                "SELECT * FROM approvals WHERE approval_id = ?",
+                (approval_id,),
+            ).fetchone()
+            if approval is None:
+                raise KeyError("Unknown approval.")
+            approval_status = str(approval["status"])
+            if approval_status not in {"applied", "applying_unknown"}:
+                raise RuntimeError("Approval is not available for verification.")
+            package = _json_loads(str(approval["data_json"]))
+            integrity_issues = verify_approval_package_linkage(
+                package,
+                record_approval_id=approval_id,
+                record_checksum=str(approval["checksum"]),
+                task_id=expected_apply_task_id,
+                source_plan_task=expected_source_plan_task,
+                verify_task=expected_verify_task,
+                marketplaces=expected_marketplaces,
+            )
+            if str(approval["checksum"]) != expected_record_checksum:
+                integrity_issues.append("approval_record_checksum_mismatch")
+            if task_id != expected_verify_task:
+                integrity_issues.append("approval_verify_task_mismatch")
+            if str(params.get("approval_id") or "") != approval_id:
+                integrity_issues.append("approval_package_id_mismatch")
+            if integrity_issues:
+                raise ApprovalVerifyIntegrityError(tuple(dict.fromkeys(integrity_issues)))
+            current_package_json = _json_dumps(package)
+
+            active = connection.execute(
+                """
+                SELECT
+                  j.*,
+                  verify.approval_checksum AS verify_approval_checksum,
+                  verify.approval_data_json AS verify_approval_data_json
+                FROM approval_verify_jobs AS verify
+                JOIN jobs AS j ON j.job_id = verify.verify_job_id
+                WHERE verify.approval_id = ? AND verify.active = 1
+                LIMIT 1
+                """,
+                (approval_id,),
+            ).fetchone()
+            if active is not None and str(active["status"]) not in TERMINAL_JOB_STATUSES:
+                if (
+                    str(active["verify_approval_checksum"]) != str(approval["checksum"])
+                    or str(active["verify_approval_data_json"]) != current_package_json
+                ):
+                    raise ApprovalVerifyIntegrityError(
+                        ("approval_package_changed_after_verify_authorization",)
+                    )
+                if str(active["task_id"]) != expected_verify_task:
+                    raise ApprovalVerifyIntegrityError(("approval_verify_task_mismatch",))
+                return _job_from_row(active), False
+            if active is not None:
+                connection.execute(
+                    """
+                    UPDATE approval_verify_jobs
+                    SET active = 0, finished_at = ?
+                    WHERE verify_job_id = ? AND active = 1
+                    """,
+                    (now, str(active["job_id"])),
+                )
+
+            job_id = _new_job_id(task_id)
+            params_json = _json_dumps(params)
+            source_run_id = _approval_source_run_id_from_data(package)
+            applied_by_run_id = _approval_applied_by_run_id(
+                connection,
+                owner_job_id=str(approval["owner_job_id"]),
+            )
+            self._insert_job_record(
+                connection,
+                job_id=job_id,
+                task_id=task_id,
+                status="queued",
+                actor=actor,
+                params_json=params_json,
+                source=source,
+                created_at=now,
+            )
+            connection.execute(
+                """
+                INSERT INTO approval_verify_jobs (
+                  verify_job_id, approval_id, approval_checksum, approval_data_json,
+                  source_run_id, applied_by_run_id,
+                  active, created_at, finished_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, '')
+                """,
+                (
+                    job_id,
+                    approval_id,
+                    str(approval["checksum"]),
+                    current_package_json,
+                    source_run_id,
+                    applied_by_run_id,
+                    now,
+                ),
+            )
+            self._insert_approval_event(
+                connection,
+                approval_id=approval_id,
+                event_type="approval_verify_queued",
+                status_before=approval_status,
+                status_after=approval_status,
+                job_id=job_id,
+                created_at=now,
+            )
+            row = connection.execute(
+                "SELECT * FROM jobs WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError("Unknown verify job after create.")
+        return _job_from_row(row), True
 
     def upsert_card_work_item(
         self,
@@ -1185,6 +1617,197 @@ class JobStore:
         )
         return int(cursor.lastrowid)
 
+    def _insert_approval_event(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        approval_id: str,
+        event_type: str,
+        status_before: str,
+        status_after: str,
+        created_at: str,
+        job_id: str = "",
+        data: dict[str, Any] | None = None,
+    ) -> int:
+        cursor = connection.execute(
+            """
+            INSERT INTO approval_events (
+              approval_id, event_type, status_before, status_after,
+              job_id, data_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                approval_id,
+                event_type,
+                status_before,
+                status_after,
+                job_id,
+                _json_dumps(data or {}),
+                created_at,
+            ),
+        )
+        return int(cursor.lastrowid)
+
+    def _finish_claimed_approval(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        approval_id: str,
+        job_id: str,
+        action: str,
+        created_at: str,
+    ) -> None:
+        if action in {"apply_succeeded", "apply_unknown"}:
+            status_after = "applied" if action == "apply_succeeded" else "applying_unknown"
+            event_type = (
+                "approval_applied"
+                if action == "apply_succeeded"
+                else "approval_applying_unknown"
+            )
+            cursor = connection.execute(
+                """
+                UPDATE approvals
+                SET status = ?, updated_at = ?
+                WHERE approval_id = ? AND status = 'applying' AND owner_job_id = ?
+                """,
+                (status_after, created_at, approval_id, job_id),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("Approval lifecycle changed before claimed apply finish.")
+            self._insert_approval_event(
+                connection,
+                approval_id=approval_id,
+                event_type=event_type,
+                status_before="applying",
+                status_after=status_after,
+                job_id=job_id,
+                created_at=created_at,
+            )
+            return
+
+        verify_link = connection.execute(
+            """
+            SELECT approval_checksum, approval_data_json,
+                   source_run_id, applied_by_run_id
+            FROM approval_verify_jobs
+            WHERE verify_job_id = ? AND approval_id = ? AND active = 1
+            """,
+            (job_id, approval_id),
+        ).fetchone()
+        if verify_link is None:
+            raise RuntimeError("Verify job is not the active job for this approval.")
+        approval = connection.execute(
+            "SELECT status, checksum, data_json FROM approvals WHERE approval_id = ?",
+            (approval_id,),
+        ).fetchone()
+        if approval is None:
+            raise RuntimeError("Approval disappeared before claimed verify finish.")
+        status_before = str(approval["status"])
+        if status_before not in {"applied", "applying_unknown"}:
+            raise RuntimeError("Approval lifecycle changed before claimed verify finish.")
+
+        if action == "verify_inconclusive":
+            self._insert_approval_event(
+                connection,
+                approval_id=approval_id,
+                event_type="approval_verify_inconclusive",
+                status_before=status_before,
+                status_after=status_before,
+                job_id=job_id,
+                created_at=created_at,
+            )
+            return
+
+        if (
+            str(approval["checksum"]) != str(verify_link["approval_checksum"])
+            or str(approval["data_json"]) != str(verify_link["approval_data_json"])
+        ):
+            raise RuntimeError("Approval package changed after verify authorization.")
+
+        verified = connection.execute(
+            """
+            UPDATE approvals
+            SET status = 'verified', updated_at = ?
+            WHERE approval_id = ? AND status IN ('applied', 'applying_unknown')
+            """,
+            (created_at, approval_id),
+        )
+        if verified.rowcount != 1:
+            raise RuntimeError("Approval verification transition lost its lifecycle guard.")
+        self._insert_approval_event(
+            connection,
+            approval_id=approval_id,
+            event_type="approval_verified",
+            status_before=status_before,
+            status_after="verified",
+            job_id=job_id,
+            created_at=created_at,
+        )
+        closed = connection.execute(
+            """
+            UPDATE approvals
+            SET status = 'closed', updated_at = ?
+            WHERE approval_id = ? AND status = 'verified'
+            """,
+            (created_at, approval_id),
+        )
+        if closed.rowcount != 1:
+            raise RuntimeError("Approval close transition lost its lifecycle guard.")
+        self._insert_approval_event(
+            connection,
+            approval_id=approval_id,
+            event_type="approval_closed",
+            status_before="verified",
+            status_after="closed",
+            job_id=job_id,
+            created_at=created_at,
+        )
+        source_run_id = str(verify_link["source_run_id"])
+        applied_by_run_id = str(verify_link["applied_by_run_id"])
+        if source_run_id and applied_by_run_id:
+            reconciliation = connection.execute(
+                """
+                INSERT OR IGNORE INTO approval_manifest_reconciliations (
+                  approval_id, verify_job_id, source_run_id, applied_by_run_id, status,
+                  attempt_count, last_error_code, created_at, updated_at, completed_at
+                ) VALUES (?, ?, ?, ?, 'pending', 0, '', ?, ?, '')
+                """,
+                (
+                    approval_id,
+                    job_id,
+                    source_run_id,
+                    applied_by_run_id,
+                    created_at,
+                    created_at,
+                ),
+            )
+            if reconciliation.rowcount == 1:
+                self._insert_approval_event(
+                    connection,
+                    approval_id=approval_id,
+                    event_type="approval_manifest_close_pending",
+                    status_before="closed",
+                    status_after="closed",
+                    job_id=job_id,
+                    created_at=created_at,
+                )
+
+    def _deactivate_verify_job(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        job_id: str,
+        finished_at: str,
+    ) -> None:
+        connection.execute(
+            """
+            UPDATE approval_verify_jobs
+            SET active = 0, finished_at = ?
+            WHERE verify_job_id = ? AND active = 1
+            """,
+            (finished_at, job_id),
+        )
+
     def _job_exists(self, connection: sqlite3.Connection, job_id: str) -> bool:
         row = connection.execute("SELECT 1 FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
         return row is not None
@@ -1264,6 +1887,51 @@ CREATE TABLE IF NOT EXISTS approvals (
 CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status);
 CREATE INDEX IF NOT EXISTS idx_approvals_source_job_id
   ON approvals(source_job_id) WHERE source_job_id != '';
+
+CREATE TABLE IF NOT EXISTS approval_events (
+  event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  approval_id TEXT NOT NULL REFERENCES approvals(approval_id) ON DELETE CASCADE,
+  event_type TEXT NOT NULL,
+  status_before TEXT NOT NULL DEFAULT '',
+  status_after TEXT NOT NULL DEFAULT '',
+  job_id TEXT NOT NULL DEFAULT '',
+  data_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_approval_events_approval_id
+  ON approval_events(approval_id, event_id);
+
+CREATE TABLE IF NOT EXISTS approval_verify_jobs (
+  verify_job_id TEXT PRIMARY KEY REFERENCES jobs(job_id) ON DELETE CASCADE,
+  approval_id TEXT NOT NULL REFERENCES approvals(approval_id) ON DELETE CASCADE,
+  approval_checksum TEXT NOT NULL,
+  approval_data_json TEXT NOT NULL,
+  source_run_id TEXT NOT NULL DEFAULT '',
+  applied_by_run_id TEXT NOT NULL DEFAULT '',
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  finished_at TEXT NOT NULL DEFAULT ''
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_approval_verify_jobs_one_active
+  ON approval_verify_jobs(approval_id) WHERE active = 1;
+
+CREATE TABLE IF NOT EXISTS approval_manifest_reconciliations (
+  approval_id TEXT PRIMARY KEY REFERENCES approvals(approval_id) ON DELETE CASCADE,
+  verify_job_id TEXT NOT NULL REFERENCES jobs(job_id) ON DELETE CASCADE,
+  source_run_id TEXT NOT NULL,
+  applied_by_run_id TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'pending',
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  last_error_code TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  completed_at TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_approval_manifest_reconciliations_status
+  ON approval_manifest_reconciliations(status, updated_at, approval_id);
 
 CREATE TABLE IF NOT EXISTS approval_callback_tokens (
   approval_id TEXT PRIMARY KEY REFERENCES approvals(approval_id) ON DELETE CASCADE,
@@ -1353,6 +2021,35 @@ def _insert_approval_callback_token(
     )
 
 
+def _approval_source_run_id_from_data(package: dict[str, Any]) -> str:
+    if str(package.get("source_kind") or "") not in {"plan_run_id", "source_run_id"}:
+        return ""
+    value = package.get("source_ref")
+    try:
+        decoded = json.loads(str(value))
+    except (json.JSONDecodeError, TypeError):
+        decoded = value
+    return str(decoded or "").strip()
+
+
+def _approval_applied_by_run_id(
+    connection: sqlite3.Connection,
+    *,
+    owner_job_id: str,
+) -> str:
+    if not owner_job_id:
+        return ""
+    owner = connection.execute(
+        "SELECT result_json FROM jobs WHERE job_id = ?",
+        (owner_job_id,),
+    ).fetchone()
+    if owner is None:
+        return owner_job_id
+    result = _json_loads(str(owner["result_json"]))
+    summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+    return str(summary.get("run_id") or owner_job_id)
+
+
 def _now() -> str:
     return _format_dt(datetime.now(timezone.utc))
 
@@ -1432,6 +2129,36 @@ def _approval_from_row(row: sqlite3.Row) -> ApprovalRecord:
         data=_json_loads(str(row["data_json"])),
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
+    )
+
+
+def _approval_event_from_row(row: sqlite3.Row) -> ApprovalEvent:
+    return ApprovalEvent(
+        event_id=int(row["event_id"]),
+        approval_id=str(row["approval_id"]),
+        event_type=str(row["event_type"]),
+        status_before=str(row["status_before"]),
+        status_after=str(row["status_after"]),
+        job_id=str(row["job_id"]),
+        data=_json_loads(str(row["data_json"])),
+        created_at=str(row["created_at"]),
+    )
+
+
+def _approval_manifest_reconciliation_from_row(
+    row: sqlite3.Row,
+) -> ApprovalManifestReconciliation:
+    return ApprovalManifestReconciliation(
+        approval_id=str(row["approval_id"]),
+        verify_job_id=str(row["verify_job_id"]),
+        source_run_id=str(row["source_run_id"]),
+        applied_by_run_id=str(row["applied_by_run_id"]),
+        status=str(row["status"]),  # type: ignore[arg-type]
+        attempt_count=int(row["attempt_count"]),
+        last_error_code=str(row["last_error_code"]),
+        created_at=str(row["created_at"]),
+        updated_at=str(row["updated_at"]),
+        completed_at=str(row["completed_at"]),
     )
 
 

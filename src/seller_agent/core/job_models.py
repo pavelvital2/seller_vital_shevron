@@ -28,6 +28,8 @@ ApprovalStatus = Literal[
     "rejected",
 ]
 
+ManifestReconciliationStatus = Literal["pending", "failed", "closed"]
+
 CardWorkStatus = Literal[
     "draft",
     "owner_review",
@@ -105,6 +107,32 @@ class ApprovalRecord:
     owner_job_id: str = ""
     checksum: str = ""
     data: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ApprovalEvent:
+    approval_id: str
+    event_type: str
+    status_before: str
+    status_after: str
+    created_at: str
+    job_id: str = ""
+    data: dict[str, Any] = field(default_factory=dict)
+    event_id: int | None = None
+
+
+@dataclass(frozen=True)
+class ApprovalManifestReconciliation:
+    approval_id: str
+    verify_job_id: str
+    source_run_id: str
+    applied_by_run_id: str
+    status: ManifestReconciliationStatus
+    attempt_count: int
+    created_at: str
+    updated_at: str
+    last_error_code: str = ""
+    completed_at: str = ""
 
 
 @dataclass(frozen=True)

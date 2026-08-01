@@ -351,7 +351,10 @@ def test_job_service_blocks_repeated_approved_runtime_apply(tmp_path: Path) -> N
     assert approval.owner_job_id == first.job_id
 
 
-def test_job_service_recovery_runs_safe_verify_job_for_unknown_apply(tmp_path: Path) -> None:
+def test_job_service_recovery_runs_safe_verify_job_for_unknown_apply(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     def apply_handler(task, data_dir, credentials, inputs):  # type: ignore[no-untyped-def]
         return {"run_id": "apply_job_test", "overall_status": "error", "artifacts": {}}
 
@@ -360,8 +363,17 @@ def test_job_service_recovery_runs_safe_verify_job_for_unknown_apply(tmp_path: P
         assert inputs["internal_skus"] == ["sku-1"]
         assert "confirmed_by_user" not in inputs
         assert inputs["runtime_recovery_apply_task"] == "approved-cards-batch-apply"
-        return {"run_id": "verify_job_test", "overall_status": "ok", "artifacts": {}}
+        return {
+            "run_id": "verify_job_test",
+            "overall_status": "ok",
+            "verification_confirmed": True,
+            "artifacts": {},
+        }
 
+    monkeypatch.setattr(
+        "seller_agent.core.job_service.close_run_manifest",
+        lambda **kwargs: True,
+    )
     store = JobStore(tmp_path / "runtime.db")
     approval = _create_runtime_approval(
         store,
@@ -403,14 +415,12 @@ def test_job_service_recovery_does_not_close_approval_on_verify_warning(tmp_path
         return {"run_id": "verify_warning", "overall_status": "warning", "artifacts": {}}
 
     store = JobStore(tmp_path / "runtime.db")
-    store.create_approval(
+    _create_runtime_approval(
+        store,
         approval_id="approval_warning",
-        source_job_id="job_source",
+        task_id="approved-cards-batch-apply",
         status="applying_unknown",
-        data={
-            "task_id": "approved-cards-batch-apply",
-            "apply_params": {"internal_skus": ["sku-1"], "confirmed_by_user": True},
-        },
+        apply_params={"internal_skus": ["sku-1"]},
     )
     service = JobService(
         store=store,
@@ -463,7 +473,7 @@ def test_job_service_recovery_does_not_verify_while_apply_job_is_active(tmp_path
     assert store.get_approval("approval_active_apply").status == "applying"  # type: ignore[union-attr]
 
 
-def test_job_service_recovery_requires_manual_verify_for_disabled_legacy_apply(tmp_path: Path) -> None:
+def test_job_service_recovery_requires_manual_verify_for_invalid_legacy_package(tmp_path: Path) -> None:
     store = JobStore(tmp_path / "runtime.db")
     store.create_approval(
         approval_id="approval_1",
@@ -482,7 +492,8 @@ def test_job_service_recovery_requires_manual_verify_for_disabled_legacy_apply(t
     assert recovery["queued_verify_jobs"] == 0
     assert recovery["manual_verify_required"] == 1
     assert recovery["rows"][0]["action"] == "manual_verify_required"
-    assert recovery["rows"][0]["blocked_reason"] == "apply_task_disabled"
+    assert "approval_package_schema_invalid" in recovery["rows"][0]["blocked_reason"]
+    assert "legacy_actions_1" not in str(recovery)
     assert store.get_approval("approval_1").status == "applying_unknown"  # type: ignore[union-attr]
 
 

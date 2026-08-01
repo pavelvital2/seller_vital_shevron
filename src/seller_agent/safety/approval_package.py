@@ -79,6 +79,36 @@ def verify_approval_package(package: dict[str, Any]) -> list[str]:
     return list(dict.fromkeys(issues))
 
 
+def verify_approval_package_linkage(
+    package: dict[str, Any],
+    *,
+    record_approval_id: str,
+    record_checksum: str,
+    task_id: str,
+    source_plan_task: str,
+    verify_task: str,
+    marketplaces: list[str] | tuple[str, ...],
+) -> list[str]:
+    """Validate immutable package contents and their current registry linkage."""
+    issues = list(verify_approval_package(package))
+    if package.get("approval_id") != record_approval_id:
+        issues.append("approval_package_id_mismatch")
+    if package.get("approval_checksum") != record_checksum:
+        issues.append("approval_record_checksum_mismatch")
+    if package.get("task_id") != task_id:
+        issues.append("approval_task_mismatch")
+    if package.get("source_plan_task") != source_plan_task:
+        issues.append("approval_source_plan_task_mismatch")
+    if package.get("verify_task") != verify_task:
+        issues.append("approval_verify_task_mismatch")
+    package_marketplaces = package.get("marketplaces")
+    if isinstance(package_marketplaces, list) and sorted(package_marketplaces) != sorted(
+        marketplaces
+    ):
+        issues.append("approval_marketplaces_mismatch")
+    return list(dict.fromkeys(issues))
+
+
 def _approval_package_checksum(package: dict[str, Any]) -> str:
     checksum_payload = {
         key: value for key, value in package.items() if key != "approval_checksum"

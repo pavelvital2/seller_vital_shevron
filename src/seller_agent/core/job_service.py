@@ -7,8 +7,17 @@ from pathlib import Path
 import uuid
 from typing import Any
 
-from seller_agent.core.job_models import ApprovalRecord, ApprovalStatus, JobRecord
-from seller_agent.core.job_store import DEFAULT_RUNTIME_DB, JobStore
+from seller_agent.core.job_models import (
+    ApprovalManifestReconciliation,
+    ApprovalRecord,
+    ApprovalStatus,
+    JobRecord,
+)
+from seller_agent.core.job_store import (
+    DEFAULT_RUNTIME_DB,
+    ApprovalVerifyIntegrityError,
+    JobStore,
+)
 from seller_agent.core.workflow_runner import WorkflowRunner
 from seller_agent.core.run_manifest import close_run_manifest
 from seller_agent.tasks.registry import RegisteredTask, TaskRegistry, default_task_registry
@@ -57,6 +66,11 @@ class JobService:
         task = self.registry.get(task_id)
         if not task.enabled:
             raise ValueError(f"Task `{task.name}` is disabled for JobService.")
+        if task.mode == "verify":
+            raise RuntimeError(
+                "Verify jobs require an existing applied approval and "
+                "submit_approval_verify(approval_id)."
+            )
         if task.is_write:
             raise RuntimeError(
                 "Write jobs require an existing approved approval package and "
@@ -198,7 +212,7 @@ class JobService:
             return JobServiceResult(job=failed, ok=False, status="blocked", message=failed.error)
 
         if task.is_write:
-            approval_id = _runtime_approval_id(job.params)
+            approval_id = _approval_id(job.params)
             approval = self.store.get_approval(approval_id) if approval_id else None
             decision = self.safety_guard.validate_apply(task=task, job=job, approval=approval)
             if not decision.allowed:
@@ -262,10 +276,10 @@ class JobService:
                     )
 
             if task.is_write:
-                approval_id = _runtime_approval_id(job.params)
+                approval_id = _approval_id(job.params)
                 if approval_id:
                     approval = self.store.get_approval(approval_id)
-                    expected_checksum = _runtime_approval_checksum(job.params)
+                    expected_checksum = _approval_checksum(job.params)
                     if approval is None:
                         failed = self.store.update_job_status(
                             job_id,
@@ -339,9 +353,26 @@ class JobService:
             allowed_modes = _allowed_modes_for_task(task)
             result = self.workflow_runner.run_task(task.name, inputs=job.params, allowed_modes=allowed_modes)
             result_data = result.to_dict()
+            verify_approval_id = _approval_id(job.params) if task.mode == "verify" else ""
+            verify_succeeded = bool(
+                verify_approval_id
+                and result.ok
+                and result.status == "ok"
+                and _result_verification_confirmed(result_data)
+            )
 
             if result.ok:
                 final_status = "success" if result.status == "ok" else "partial_success"
+                approval_action = ""
+                approval_id_for_finish = ""
+                if reserved_approval_id:
+                    approval_action = "apply_succeeded"
+                    approval_id_for_finish = reserved_approval_id
+                elif verify_approval_id:
+                    approval_action = (
+                        "verify_succeeded" if verify_succeeded else "verify_inconclusive"
+                    )
+                    approval_id_for_finish = verify_approval_id
                 final = self.store.finish_claimed_job(
                     job_id=job_id,
                     claim_token=claim_token,
@@ -349,6 +380,8 @@ class JobService:
                     status=final_status,
                     result=result_data,
                     message=f"Workflow finished with status `{result.status}`.",
+                    approval_id=approval_id_for_finish,
+                    approval_action=approval_action,
                 )
                 if final is None:
                     current = self.store.get_job(job_id) or running
@@ -358,30 +391,27 @@ class JobService:
                         status="claim_lost",
                         message="Late workflow completion ignored because the running claim no longer owns the job.",
                     )
-                if reserved_approval_id:
-                    self.store.update_approval_status(approval_id=reserved_approval_id, status="applied")
-                    if _result_verification_confirmed(result_data):
-                        self.store.update_approval_status(approval_id=reserved_approval_id, status="verified")
-                        self.store.update_approval_status(approval_id=reserved_approval_id, status="closed")
-                        self.store.append_event(job_id=job_id, event_type="job_approval_closed", message="Apply result contained explicit successful verification; approval lifecycle closed.", data={"approval_id": reserved_approval_id})
-                        approval = self.store.get_approval(reserved_approval_id)
-                        source_run_id = _approval_source_run_id(approval) if approval else ""
-                        apply_summary = result_data.get("summary") if isinstance(result_data.get("summary"), dict) else {}
-                        if source_run_id:
-                            close_run_manifest(
-                                data_dir=self.data_dir,
-                                run_id=source_run_id,
-                                applied_by_run_id=str(apply_summary.get("run_id") or job_id),
-                            )
-                elif task.mode == "verify":
-                    recovery_approval_id = _runtime_approval_id(job.params)
-                    if recovery_approval_id and _result_verification_confirmed(result_data):
-                        self.store.update_approval_status(approval_id=recovery_approval_id, status="verified")
-                        self.store.update_approval_status(approval_id=recovery_approval_id, status="closed")
+                if verify_succeeded:
+                    reconciliation = self._reconcile_approval_manifest(verify_approval_id)
+                    if reconciliation is not None and reconciliation.status != "closed":
+                        return JobServiceResult(
+                            job=self.store.get_job(final.job_id) or final,
+                            ok=False,
+                            status="manifest_reconciliation_pending",
+                            message="RunManifest reconciliation is pending a safe retry.",
+                        )
                 elif task.mode == "dry_run":
                     self._register_plan_approval(job=job, task=task, result_data=result_data)
                 return JobServiceResult(job=final, ok=True, status=result.status)
 
+            approval_action = ""
+            approval_id_for_finish = ""
+            if reserved_approval_id:
+                approval_action = "apply_unknown"
+                approval_id_for_finish = reserved_approval_id
+            elif verify_approval_id:
+                approval_action = "verify_inconclusive"
+                approval_id_for_finish = verify_approval_id
             final = self.store.finish_claimed_job(
                 job_id=job_id,
                 claim_token=claim_token,
@@ -390,6 +420,8 @@ class JobService:
                 result=result_data,
                 error=result.error or result.blocked_reason or "workflow_failed",
                 message=f"Workflow failed with status `{result.status}`.",
+                approval_id=approval_id_for_finish,
+                approval_action=approval_action,
             )
             if final is None:
                 current = self.store.get_job(job_id) or running
@@ -399,8 +431,6 @@ class JobService:
                     status="claim_lost",
                     message="Late workflow failure ignored because the running claim no longer owns the job.",
                 )
-            if reserved_approval_id:
-                self.store.update_approval_status(approval_id=reserved_approval_id, status="applying_unknown")
             return JobServiceResult(job=final, ok=False, status=result.status, message=final.error)
         finally:
             if leases_acquired:
@@ -497,15 +527,100 @@ class JobService:
         return task
 
     def submit_approval_verify(self, approval_id: str, *, actor: str = "owner") -> JobRecord:
+        job, _ = self._submit_approval_verify(
+            approval_id,
+            actor=actor,
+            source="runtime_approval_verify",
+        )
+        return job
+
+    def _submit_approval_verify(
+        self,
+        approval_id: str,
+        *,
+        actor: str,
+        source: str,
+    ) -> tuple[JobRecord, bool]:
         approval = self.store.get_approval(approval_id)
         if approval is None:
             raise KeyError(f"Unknown approval: {approval_id}")
         if approval.status not in {"applied", "applying_unknown"}:
             raise RuntimeError(f"Approval `{approval_id}` is `{approval.status}`, verify is not available.")
-        request = self._build_recovery_verify_request(approval)
-        if not request["ok"]:
-            raise RuntimeError(str(request["blocked_reason"]))
-        return self.submit(task_id=request["task_id"], params=request["params"], actor=actor, source="runtime_approval_verify")
+        request = self._validated_approval_verify_request(approval)
+        try:
+            return self.store.create_or_get_active_approval_verify_job(
+                approval_id=approval_id,
+                task_id=str(request["task_id"]),
+                params=dict(request["params"]),
+                actor=actor,
+                source=source,
+                expected_record_checksum=approval.checksum,
+                expected_apply_task_id=str(request["apply_task_id"]),
+                expected_source_plan_task=str(request["source_plan_task"]),
+                expected_verify_task=str(request["task_id"]),
+                expected_marketplaces=tuple(request["marketplaces"]),
+            )
+        except ApprovalVerifyIntegrityError as exc:
+            raise RuntimeError(_sanitized_safety_error(exc.issues)) from exc
+
+    def reconcile_approval_manifest(
+        self,
+        approval_id: str,
+    ) -> ApprovalManifestReconciliation:
+        reconciliation = self._reconcile_approval_manifest(approval_id)
+        if reconciliation is None:
+            raise KeyError("Approval has no RunManifest reconciliation record.")
+        return reconciliation
+
+    def _reconcile_approval_manifest(
+        self,
+        approval_id: str,
+    ) -> ApprovalManifestReconciliation | None:
+        reconciliation = self.store.get_approval_manifest_reconciliation(approval_id)
+        if reconciliation is None or reconciliation.status == "closed":
+            return reconciliation
+        approval = self.store.get_approval(approval_id)
+        if approval is None or approval.status != "closed":
+            raise RuntimeError("Approval must close before RunManifest reconciliation.")
+        try:
+            closed = close_run_manifest(
+                data_dir=self.data_dir,
+                run_id=reconciliation.source_run_id,
+                applied_by_run_id=reconciliation.applied_by_run_id,
+            )
+        except Exception:  # noqa: BLE001 - persist only a constant safe recovery code.
+            return self.store.mark_approval_manifest_reconciliation(
+                approval_id=approval_id,
+                succeeded=False,
+                error_code="manifest_close_failed",
+            )
+        return self.store.mark_approval_manifest_reconciliation(
+            approval_id=approval_id,
+            succeeded=bool(closed),
+            error_code="" if closed else "manifest_not_found",
+        )
+
+    def reconcile_runtime_manifests(self, *, limit: int = 50) -> dict[str, Any]:
+        records = self.store.list_pending_approval_manifest_reconciliations(limit=limit)
+        rows: list[dict[str, Any]] = []
+        for record in records:
+            reconciled = self.reconcile_approval_manifest(record.approval_id)
+            rows.append(
+                {
+                    "approval_id": record.approval_id,
+                    "source_run_id": record.source_run_id,
+                    "status": reconciled.status,
+                    "attempt_count": reconciled.attempt_count,
+                    "last_error_code": reconciled.last_error_code,
+                }
+            )
+        return {
+            "overall_status": (
+                "ok" if all(row["status"] == "closed" for row in rows) else "warning"
+            ),
+            "checked_count": len(records),
+            "rows": rows,
+        }
 
     def _register_plan_approval(
         self,
@@ -547,7 +662,7 @@ class JobService:
     def recover_runtime_approvals(
         self,
         *,
-        statuses: tuple[ApprovalStatus, ...] = ("applying", "applying_unknown"),
+        statuses: tuple[ApprovalStatus, ...] = ("applying", "applying_unknown", "applied"),
         limit: int = 50,
         run_verify: bool = False,
         actor: str = "runtime_recovery",
@@ -578,28 +693,48 @@ class JobService:
                         }
                     )
                     continue
-            request = self._build_recovery_verify_request(approval)
-            if not request["ok"]:
-                rows.append({**row, "action": "manual_verify_required", "blocked_reason": request["blocked_reason"]})
+            if approval.status == "applying":
+                rows.append(
+                    {
+                        **row,
+                        "action": "manual_verify_required",
+                        "blocked_reason": "apply_state_not_reconciled",
+                    }
+                )
                 continue
-
-            verify_job = self.submit(
-                task_id=request["task_id"],
-                params=request["params"],
-                actor=actor,
-                source="runtime_approval_recovery",
-            )
+            try:
+                verify_job, verify_job_created = self._submit_approval_verify(
+                    approval.approval_id,
+                    actor=actor,
+                    source="runtime_approval_recovery",
+                )
+            except (KeyError, RuntimeError) as exc:
+                rows.append(
+                    {
+                        **row,
+                        "action": "manual_verify_required",
+                        "blocked_reason": _sanitized_verify_submission_error(exc),
+                    }
+                )
+                continue
             row.update(
                 {
-                    "action": "verify_job_queued",
+                    "action": (
+                        "verify_job_queued" if verify_job_created else "verify_job_active"
+                    ),
                     "verify_job_id": verify_job.job_id,
+                    "verify_job_created": verify_job_created,
                     "verify_task": verify_job.task_id,
-                    "verify_params": verify_job.params,
                 }
             )
-            if run_verify:
+            if run_verify and verify_job_created:
                 verify_result = self.run(verify_job.job_id)
-                verify_confirmed = verify_result.ok and verify_result.status == "ok"
+                current = self.store.get_approval(approval.approval_id)
+                verify_confirmed = bool(
+                    verify_result.ok
+                    and current is not None
+                    and current.status == "closed"
+                )
                 row.update(
                     {
                         "action": "verify_job_ran",
@@ -608,13 +743,7 @@ class JobService:
                         "verify_ok": verify_confirmed,
                     }
                 )
-                if verify_confirmed:
-                    self.store.update_approval_status(approval_id=approval.approval_id, status="verified")
-                    self.store.update_approval_status(approval_id=approval.approval_id, status="closed")
-                    row["approval_status_after"] = "closed"
-                else:
-                    current = self.store.get_approval(approval.approval_id)
-                    row["approval_status_after"] = current.status if current else approval.status
+                row["approval_status_after"] = current.status if current else approval.status
             rows.append(row)
 
         blocked = [row for row in rows if row.get("action") == "manual_verify_required"]
@@ -622,7 +751,9 @@ class JobService:
         return {
             "overall_status": "warning" if blocked or failed_verify else "ok",
             "checked_count": len(approvals),
-            "queued_verify_jobs": sum(1 for row in rows if row.get("verify_job_id")),
+            "queued_verify_jobs": sum(
+                1 for row in rows if row.get("verify_job_created") is True
+            ),
             "manual_verify_required": len(blocked),
             "failed_verify_jobs": len(failed_verify),
             "run_verify": run_verify,
@@ -630,35 +761,65 @@ class JobService:
         }
 
     def _build_recovery_verify_request(self, approval: ApprovalRecord) -> dict[str, Any]:
+        try:
+            return self._validated_approval_verify_request(approval)
+        except (KeyError, RuntimeError) as exc:
+            return {
+                "ok": False,
+                "blocked_reason": _sanitized_verify_submission_error(exc),
+            }
+
+    def _validated_approval_verify_request(
+        self,
+        approval: ApprovalRecord,
+    ) -> dict[str, Any]:
         task_id = str(approval.data.get("task_id") or "")
         if not task_id:
-            return {"ok": False, "blocked_reason": "approval_missing_task_id"}
+            raise RuntimeError(
+                _sanitized_safety_error(("approval_package_missing_task_id",))
+            )
         try:
             apply_task = self.registry.get(task_id)
-        except KeyError:
-            return {"ok": False, "blocked_reason": "approval_unknown_task_id"}
-        if not apply_task.enabled:
-            return {"ok": False, "blocked_reason": "apply_task_disabled"}
+        except KeyError as exc:
+            raise RuntimeError("approval_unknown_task_id") from exc
+        if not apply_task.is_write or apply_task.mode != "apply":
+            raise RuntimeError("approval_task_not_available")
 
-        verify_task_id = str(approval.data.get("verify_task") or apply_task.verify_task or "")
+        integrity = self.safety_guard.validate_approval_package_integrity(
+            task=apply_task,
+            approval=approval,
+        )
+        if not integrity.allowed:
+            raise RuntimeError(_sanitized_safety_error(integrity.issues))
+
+        verify_task_id = str(apply_task.verify_task or "")
         if not verify_task_id:
-            return {"ok": False, "blocked_reason": "approval_missing_verify_task"}
+            raise RuntimeError("approval_missing_verify_task")
         try:
             verify_task = self.registry.get(verify_task_id)
-        except KeyError:
-            return {"ok": False, "blocked_reason": "approval_unknown_verify_task"}
+        except KeyError as exc:
+            raise RuntimeError("approval_unknown_verify_task") from exc
+        if not verify_task.enabled:
+            raise RuntimeError("verify_task_disabled")
+        if verify_task.mode != "verify":
+            raise RuntimeError("verify_task_mode_not_safe")
         if verify_task.is_write:
-            return {"ok": False, "blocked_reason": "verify_task_is_write"}
-        if verify_task.mode not in {"verify", "read_only", "dry_run"}:
-            return {"ok": False, "blocked_reason": f"verify_task_mode_not_safe:{verify_task.mode}"}
+            raise RuntimeError("verify_task_is_write")
 
         params = _runtime_recovery_verify_params(approval)
         if not params:
-            return {"ok": False, "blocked_reason": "approval_missing_recoverable_params"}
-        params["runtime_recovery_approval_id"] = approval.approval_id
+            raise RuntimeError("approval_missing_recoverable_params")
+        params["approval_id"] = approval.approval_id
         params["runtime_recovery_source_job_id"] = approval.source_job_id
         params["runtime_recovery_apply_task"] = apply_task.name
-        return {"ok": True, "task_id": verify_task.name, "params": params}
+        return {
+            "ok": True,
+            "task_id": verify_task.name,
+            "params": params,
+            "apply_task_id": apply_task.name,
+            "source_plan_task": apply_task.source_plan_task,
+            "marketplaces": tuple(apply_task.marketplaces),
+        }
 
     def get_status(self, job_id: str) -> JobRecord | None:
         return self.store.get_job(job_id)
@@ -703,41 +864,45 @@ def _allowed_modes_for_task(task: RegisteredTask) -> set[str]:
     return {"apply"}
 
 
-def _runtime_approval_id(params: dict[str, Any]) -> str:
-    return str(params.get("approval_id") or params.get("runtime_approval_id") or "").strip()
+def _approval_id(params: dict[str, Any]) -> str:
+    return str(params.get("approval_id") or "").strip()
 
 
-def _runtime_approval_checksum(params: dict[str, Any]) -> str:
-    return str(params.get("approval_checksum") or params.get("runtime_approval_checksum") or "").strip()
+def _approval_checksum(params: dict[str, Any]) -> str:
+    return str(params.get("approval_checksum") or "").strip()
+
+
+_VERIFY_TRANSPORT_ONLY_PARAMS = frozenset(
+    {
+        "approval_id",
+        "approval_checksum",
+        "confirmed_by_user",
+        "runtime_approval_id",
+        "runtime_approval_checksum",
+        "runtime_recovery_approval_id",
+        "runtime_recovery_approval_checksum",
+        "runtime_recovery_source_job_id",
+        "runtime_recovery_apply_task",
+        "run_id",
+    }
+)
+
+
+def _normalize_runtime_verify_params(params: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in sorted(params.items())
+        if key not in _VERIFY_TRANSPORT_ONLY_PARAMS
+    }
 
 
 def _runtime_recovery_verify_params(approval: ApprovalRecord) -> dict[str, Any]:
     raw = approval.data.get("verify_params")
-    if isinstance(raw, dict) and raw:
-        return dict(raw)
-    apply_params = approval.data.get("apply_params")
-    if not isinstance(apply_params, dict):
+    if not isinstance(raw, dict) or not raw:
+        raw = approval.data.get("apply_params")
+    if not isinstance(raw, dict):
         return {}
-    ignored = {
-        "approval_id",
-        "runtime_approval_id",
-        "approval_checksum",
-        "runtime_approval_checksum",
-        "confirmed_by_user",
-        "run_id",
-    }
-    return {key: value for key, value in sorted(apply_params.items()) if key not in ignored}
-
-
-def _approval_source_run_id(approval: ApprovalRecord) -> str:
-    if str(approval.data.get("source_kind") or "") not in {"plan_run_id", "source_run_id"}:
-        return ""
-    value = approval.data.get("source_ref")
-    try:
-        decoded = json.loads(str(value))
-    except (json.JSONDecodeError, TypeError):
-        decoded = value
-    return str(decoded or "").strip()
+    return _normalize_runtime_verify_params(raw)
 
 
 def _canonical_hash(value: Any) -> str:
@@ -754,6 +919,7 @@ _SAFETY_GUARD_ISSUE_CODES = frozenset(
         "approval_id_missing",
         "approval_marketplaces_mismatch",
         "approval_package_apply_params_invalid",
+        "approval_package_changed_after_verify_authorization",
         "approval_package_checksum_invalid",
         "approval_package_created_at_future",
         "approval_package_created_at_invalid",
@@ -800,6 +966,29 @@ def _sanitized_safety_issues(issues: tuple[str, ...] | list[str]) -> tuple[str, 
 
 def _sanitized_safety_error(issues: tuple[str, ...] | list[str]) -> str:
     return "SafetyGuard blocked apply: " + ", ".join(_sanitized_safety_issues(issues))
+
+
+_VERIFY_SUBMISSION_ERROR_CODES = frozenset(
+    {
+        "approval_missing_recoverable_params",
+        "approval_missing_verify_task",
+        "approval_task_not_available",
+        "approval_unknown_task_id",
+        "approval_unknown_verify_task",
+        "verify_task_is_write",
+        "verify_task_disabled",
+        "verify_task_mode_not_safe",
+    }
+)
+
+
+def _sanitized_verify_submission_error(error: Exception) -> str:
+    message = str(error).strip()
+    if message.startswith("SafetyGuard blocked apply: "):
+        return message
+    if message in _VERIFY_SUBMISSION_ERROR_CODES:
+        return message
+    return _sanitized_safety_error(("safety_policy_violation",))
 
 
 def _result_verification_confirmed(result: dict[str, Any]) -> bool:

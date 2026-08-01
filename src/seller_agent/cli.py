@@ -2324,13 +2324,23 @@ def main(argv: list[str] | None = None) -> int:
                 "artifacts": {"runtime_db": str(runtime_db)},
             }
         elif args.action == "recover-approvals":
-            statuses = (args.status,) if args.status else ("applying", "applying_unknown")
+            statuses = (
+                (args.status,)
+                if args.status
+                else ("applying", "applying_unknown", "applied")
+            )
+            manifest_reconciliation = service.reconcile_runtime_manifests(
+                limit=args.limit
+            )
             result = service.recover_runtime_approvals(
                 statuses=statuses,
                 limit=args.limit,
                 run_verify=args.run_verify,
                 actor=args.actor,
             )
+            result["manifest_reconciliation"] = manifest_reconciliation
+            if manifest_reconciliation["overall_status"] != "ok":
+                result["overall_status"] = "warning"
             result["artifacts"] = {"runtime_db": str(runtime_db)}
         else:
             if not args.job_id:
