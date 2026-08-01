@@ -590,6 +590,25 @@ Read-only/dry-run проверка без применения изменени�
 
 Повторный apply по этому же плану без нового dry-run/review не выполнять.
 
+## Apply 2026-08-01 после runtime approval recovery
+
+- approved dry-run: `ozon_elastic_plan_20260801T151707`;
+- первая Job Worker попытка:
+  `job_ozon-elastic-apply_20260801T121718Z_732706a7`;
+- SafetyGuard остановил её до write-window из-за mismatch между плановым
+  approval checksum и legacy callback checksum; Ozon не изменялся;
+- подтверждение владельца доказано Telegram actor и
+  `confirmed_by_user=true`, source plan остался тем же;
+- исправлена canonical-нормализация runtime approval: служебное
+  `confirmed_by_user` не входит в business checksum и проверяется отдельно;
+- recovery Job: `job_ozon-elastic-apply_20260801T122254Z_4e9da4cd`;
+- apply: `ozon_elastic_apply_20260801T152300`;
+- fresh plan: `ozon_elastic_plan_20260801T152300`;
+- drift/skip: `0`;
+- применено `13` строк: `10` новых включений и `3` изменения action price;
+- снято `0`, rejected `0`;
+- verify: `ok`, активных строк `315`, price mismatch `0`.
+
 ## Apply 2026-06-18 с восстановлением после drift-check
 
 Операция 2026-06-18 подтвердила важный recovery-сценарий: Ozon может менять

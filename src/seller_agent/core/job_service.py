@@ -606,7 +606,13 @@ def _has_runtime_source_value(value: Any) -> bool:
 
 
 def _approval_payload(params: dict[str, Any]) -> dict[str, Any]:
-    ignored = {"approval_id", "runtime_approval_id", "approval_checksum", "runtime_approval_checksum"}
+    ignored = {
+        "approval_id",
+        "runtime_approval_id",
+        "approval_checksum",
+        "runtime_approval_checksum",
+        "confirmed_by_user",
+    }
     return {key: value for key, value in sorted(params.items()) if key not in ignored}
 
 

@@ -116,11 +116,49 @@ def test_job_service_auto_attaches_runtime_approval_to_confirmed_apply_submit(tm
     assert approval.source_job_id == job.job_id
     assert approval.checksum == job.params["approval_checksum"]
     assert approval.data["source_kind"] == "plan_run_id"
+    assert approval.data["apply_params"] == {"plan_run_id": "elastic_plan_1"}
     assert [event.event_type for event in store.list_events(job.job_id)] == [
         "job_created",
         "job_runtime_approval_attached",
         "job_queued",
     ]
+
+
+def test_legacy_apply_callback_reuses_plan_generated_pending_approval(tmp_path: Path) -> None:
+    def plan_handler(task, data_dir, credentials, inputs):  # type: ignore[no-untyped-def]
+        return {"run_id": "ozon_elastic_plan_1", "overall_status": "ok", "artifacts": {}}
+
+    store = JobStore(tmp_path / "runtime.db")
+    plan_run_id = "ozon_elastic_plan_1"
+    service = JobService(
+        store=store,
+        workflow_runner=WorkflowRunner(
+            data_dir=tmp_path / "data",
+            lock_dir=tmp_path / "locks",
+            credentials=object(),  # type: ignore[arg-type]
+            handlers={"ozon-elastic-plan": plan_handler},
+        ),
+        data_dir=tmp_path / "data",
+    )
+    plan_job = service.submit(task_id="ozon-elastic-plan")
+    plan_result = service.run(plan_job.job_id)
+    pending = store.list_approvals(statuses=("pending_review",), limit=10)
+
+    job = service.submit(
+        task_id="ozon-elastic-apply",
+        params={"plan_run_id": plan_run_id, "confirmed_by_user": True},
+        actor="telegram_owner",
+        source="telegram_callback",
+    )
+    approval = store.get_approval(job.params["approval_id"])
+
+    assert plan_result.ok is True
+    assert len(pending) == 1
+    assert job.params["approval_id"] == pending[0].approval_id
+    assert job.params["approval_checksum"] == pending[0].checksum
+    assert approval is not None
+    assert approval.status == "approved"
+    assert approval.checksum == pending[0].checksum
 
 
 def test_job_service_reserves_runtime_approval_for_confirmed_apply(tmp_path: Path) -> None:
