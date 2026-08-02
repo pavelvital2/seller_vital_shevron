@@ -123,6 +123,7 @@ def authenticate_telegram_init_data(
         owner_id=str(user_id),
         auth_date=auth_date,
         expires_at=replay_expires,
+        consumed_at=current.isoformat(timespec="seconds").replace("+00:00", "Z"),
     ):
         raise ControlAuthError("init_data_replayed")
     return AuthenticatedTelegramUser(

@@ -34,24 +34,54 @@
           </div>
           <svg class="hero-icon" aria-hidden="true"><use href="/vital-shevron/icons.svg#store"></use></svg>
         </div>
-        <div class="summary-grid">
+        <section id="operations-status" class="status-panel" data-state="loading" aria-live="polite">
+          <svg aria-hidden="true"><use href="/vital-shevron/icons.svg#refresh"></use></svg>
+          <div>
+            <p id="operations-status-title" class="status-title">Проверяю runtime-сводку</p>
+            <p id="operations-status-copy" class="status-copy">Показывается только подтверждённое состояние общей очереди.</p>
+          </div>
+        </section>
+        <div class="operational-grid">
           <article class="summary-card">
-            <svg class="card-icon" aria-hidden="true"><use href="/vital-shevron/icons.svg#shield-check"></use></svg>
-            <p class="card-label">Режим</p>
-            <p class="card-value">Только чтение</p>
-            <p class="card-note">Запись и согласования недоступны на этом этапе.</p>
+            <p class="card-label">Активные задания</p>
+            <p id="active-jobs-count" class="card-value">данные недоступны</p>
+            <p class="card-note">Созданы, ожидают Worker или выполняются.</p>
           </article>
           <article class="summary-card">
-            <svg class="card-icon" aria-hidden="true"><use href="/vital-shevron/icons.svg#clock"></use></svg>
-            <p class="card-label">Свежесть</p>
-            <p id="overview-freshness" class="card-value">данные недоступны</p>
-            <p class="card-note">Появится после первого аналитического запуска.</p>
+            <p class="card-label">Завершённые задания</p>
+            <p id="terminal-jobs-count" class="card-value">данные недоступны</p>
+            <p class="card-note">Только состояния SQLite, не здоровье площадок.</p>
+          </article>
+          <article class="summary-card">
+            <p class="card-label">Ожидают решения</p>
+            <p id="pending-approvals-count" class="card-value">данные недоступны</p>
+            <p class="card-note">Согласования показаны без кнопок изменения.</p>
+          </article>
+          <article class="summary-card">
+            <p class="card-label">Требуют сверки</p>
+            <p id="unknown-approvals-count" class="card-value">данные недоступны</p>
+            <p class="card-note">Неопределённый apply нельзя повторять из Mini App.</p>
           </article>
         </div>
-        <button class="primary-action" type="button" data-open-view="analytics">
-          <svg aria-hidden="true"><use href="/vital-shevron/icons.svg#chart"></use></svg>
-          Открыть аналитику
-        </button>
+        <div class="action-grid">
+          <article class="action-card">
+            <p class="eyebrow">ОБЩАЯ ОЧЕРЕДЬ</p>
+            <h3>Утренний отчёт</h3>
+            <p>Создаётся как read-only job и выполняется единственным штатным Worker.</p>
+            <button id="run-daily-report" class="primary-action" type="button" disabled>
+              <svg aria-hidden="true"><use href="/vital-shevron/icons.svg#refresh"></use></svg>
+              Запустить утренний отчёт
+            </button>
+            <p id="daily-report-status" class="inline-status" data-state="empty" aria-live="polite">Отчёт ещё не запускался.</p>
+          </article>
+          <article class="action-card">
+            <p class="eyebrow">ПОСЛЕДНЕЕ CONTROL-ЗАДАНИЕ</p>
+            <h3 id="last-control-job-title">Запусков пока нет</h3>
+            <p id="last-control-job-copy">После первого запуска появятся безопасный статус и время.</p>
+            <p class="updated-line">Сводка обновлена: <span id="operations-updated">данные недоступны</span></p>
+          </article>
+        </div>
+        <p class="freshness-line">Свежесть аналитики: <span id="overview-freshness">данные недоступны</span></p>
       </section>
 
       <section id="view-analytics" class="view" aria-labelledby="analytics-title" hidden>
@@ -100,21 +130,50 @@
       </section>
 
       <section id="view-jobs" class="view" aria-labelledby="jobs-title" hidden>
-        <div class="coming-card">
-          <svg aria-hidden="true"><use href="/vital-shevron/icons.svg#list-checks"></use></svg>
-          <p class="eyebrow">СЛЕДУЮЩИЙ ЭТАП</p>
-          <h2 id="jobs-title">Задания</h2>
-          <p>На этом этапе доступен только статус отчёта, запущенного из раздела «Аналитика».</p>
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">ИСТОРИЯ ВЛАДЕЛЬЦА</p>
+            <h2 id="jobs-title">Задания control plane</h2>
+          </div>
+          <span class="readonly-badge">только чтение</span>
         </div>
+        <section id="jobs-status" class="status-panel" data-state="loading" aria-live="polite">
+          <svg aria-hidden="true"><use href="/vital-shevron/icons.svg#list-checks"></use></svg>
+          <div>
+            <p id="jobs-status-title" class="status-title">Загружаю задания</p>
+            <p id="jobs-status-copy" class="status-copy">Доступны только jobs, созданные текущим владельцем через Mini App.</p>
+          </div>
+        </section>
+        <div id="jobs-list" class="record-list"></div>
       </section>
 
       <section id="view-approvals" class="view" aria-labelledby="approvals-title" hidden>
-        <div class="coming-card">
-          <svg aria-hidden="true"><use href="/vital-shevron/icons.svg#shield-check"></use></svg>
-          <p class="eyebrow">ТОЛЬКО ЧТЕНИЕ · СЛЕДУЮЩИЙ ЭТАП</p>
-          <h2 id="approvals-title">Согласования</h2>
-          <p>Этапы согласования появятся отдельно. Кнопок записи или изменения статуса сейчас нет.</p>
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">БЕЗ ДЕЙСТВИЙ</p>
+            <h2 id="approvals-title">Согласования</h2>
+          </div>
+          <span class="readonly-badge">только чтение</span>
         </div>
+        <div class="summary-grid compact-grid">
+          <article class="summary-card">
+            <p class="card-label">Ожидают решения</p>
+            <p id="approvals-pending-count" class="card-value">данные недоступны</p>
+          </article>
+          <article class="summary-card">
+            <p class="card-label">Требуют сверки</p>
+            <p id="approvals-unknown-count" class="card-value">данные недоступны</p>
+          </article>
+        </div>
+        <p class="safety-note">Повторный apply недоступен. Для <code>applying_unknown</code> требуется отдельная reconciliation-процедура вне этого интерфейса.</p>
+        <section id="approvals-status" class="status-panel" data-state="loading" aria-live="polite">
+          <svg aria-hidden="true"><use href="/vital-shevron/icons.svg#shield-check"></use></svg>
+          <div>
+            <p id="approvals-status-title" class="status-title">Загружаю безопасную сводку</p>
+            <p id="approvals-status-copy" class="status-copy">Payload, checksum и параметры применения не передаются.</p>
+          </div>
+        </section>
+        <div id="approvals-list" class="record-list"></div>
       </section>
     </main>
 

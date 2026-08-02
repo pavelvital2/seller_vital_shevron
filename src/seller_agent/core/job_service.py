@@ -128,9 +128,12 @@ class JobService:
         if not task.enabled or not task.is_read_only or task.is_write:
             raise ValueError("task_not_allowed")
         effective_params = dict(params)
-        for key, value in (server_params or {}).items():
-            if key in task.parameter_schema:
-                effective_params[key] = value
+        server_values = dict(server_params or {})
+        if set(effective_params).intersection(server_values):
+            raise ValueError("params_invalid")
+        if set(server_values) - set(task.parameter_schema):
+            raise ValueError("params_invalid")
+        effective_params.update(server_values)
         if not _params_match_schema(effective_params, task.parameter_schema):
             raise ValueError("params_invalid")
         if not _valid_idempotency_key(idempotency_key):
@@ -1070,8 +1073,10 @@ def _valid_idempotency_key(value: str) -> bool:
 
 
 def _params_match_schema(params: object, schema: dict[str, Any]) -> bool:
-    if not isinstance(params, dict) or not schema:
+    if not isinstance(params, dict):
         return False
+    if not schema:
+        return not params
     if set(params) - set(schema):
         return False
     for field, contract in schema.items():

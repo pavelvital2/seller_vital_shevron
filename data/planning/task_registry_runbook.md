@@ -95,6 +95,21 @@ runtime-контура. Она не заменяет `RunManifest`: job store х
 job FIFO. Навигация, ввод параметров и команды просмотра/отмены runtime jobs
 не создают вложенные job и остаются синхронными.
 
+## Control-plane allowlist Stage 4A
+
+Mini App не считает весь `TaskRegistry` публичным API. Дополнительный
+server-side реестр `src/seller_agent/control_plane/contracts.py` разрешает
+только exact `store-analytics-overview` и `daily-morning-report`. Каждый
+control contract фиксирует client keys, server-owned keys, registry task ID,
+требования `enabled + read_only` и safe result renderer.
+
+`daily-morning-report` принимает от клиента только `{}` и создаётся через
+`JobService.submit_control_read_only()` как queued job. Control service не
+вызывает `WorkflowRunner`; задачу забирает единственный штатный Job Worker.
+Добавление любого следующего task требует отдельного ТЗ, тестов, result
+projection и review. Наличие read-only задачи в `TaskRegistry` само по себе не
+открывает её в Mini App.
+
 Карточные команды, уже добавленные в `TaskRegistry`:
 
 - `plan-seller-sku-update`;

@@ -28,6 +28,8 @@ body {
   background: var(--bg);
 }
 
+p, h1, h2, h3, li, span, strong { overflow-wrap: anywhere; }
+
 button, input, select { font: inherit; }
 button { -webkit-tap-highlight-color: transparent; }
 
@@ -101,8 +103,8 @@ h2 { margin: 6px 0 8px; font-size: 32px; letter-spacing: 0; line-height: 1.05; }
 
 .hero-icon { width: 64px; height: 64px; color: var(--accent); opacity: 0.82; }
 
-.summary-grid { display: grid; gap: 12px; margin: 14px 0; }
-.summary-card, .control-card, .status-panel, .coming-card, .result-card {
+.summary-grid, .operational-grid { display: grid; gap: 12px; margin: 14px 0; }
+.summary-card, .control-card, .status-panel, .coming-card, .result-card, .action-card, .record-item, .safety-note {
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--surface) 94%, transparent);
@@ -113,6 +115,15 @@ h2 { margin: 6px 0 8px; font-size: 32px; letter-spacing: 0; line-height: 1.05; }
 .card-label { margin: 0 0 5px; color: var(--muted); font-size: 12px; }
 .card-value { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: 0; }
 .card-note { margin: 8px 0 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
+.action-grid { display: grid; gap: 12px; margin: 14px 0; }
+.action-card { min-width: 0; padding: 18px; }
+.action-card h3 { margin: 7px 0 8px; font-size: 19px; }
+.action-card > p:not(.eyebrow, .inline-status, .updated-line) { margin: 0 0 18px; color: var(--muted); line-height: 1.5; }
+.inline-status, .updated-line, .freshness-line { margin: 12px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.inline-status[data-state="error"] { color: var(--danger); }
+.inline-status[data-state="ready"] { color: var(--accent); }
+.inline-status[data-state="stale"] { color: var(--warning); }
+.freshness-line { margin-bottom: 0; text-align: right; }
 
 .primary-action {
   display: flex;
@@ -178,6 +189,20 @@ select {
 .fact-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .fact-list li { padding: 10px 12px; border-radius: 8px; color: var(--muted); background: color-mix(in srgb, var(--text) 4%, transparent); font-size: 12px; }
 
+.record-list { display: grid; gap: 10px; margin-top: 12px; }
+.record-item { min-width: 0; padding: 16px; }
+.record-heading { display: flex; min-width: 0; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.record-heading h3 { min-width: 0; margin: 0; font-size: 15px; }
+.record-state { flex: 0 0 auto; max-width: 48%; padding: 5px 8px; border-radius: 8px; color: var(--muted); background: color-mix(in srgb, var(--text) 5%, transparent); font-size: 10px; text-align: right; }
+.record-state[data-state="success"], .record-state[data-state="partial_success"] { color: var(--accent); background: var(--soft-accent); }
+.record-state[data-state="failed"], .record-state[data-state="timeout"] { color: var(--danger); }
+.record-state[data-state="applying_unknown"] { color: var(--warning); }
+.record-meta { display: grid; gap: 5px; margin-top: 11px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.record-meta p { min-width: 0; margin: 0; }
+.record-warning { margin: 11px 0 0; color: var(--warning); font-size: 12px; line-height: 1.45; }
+.safety-note { margin: 12px 0; padding: 14px 16px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.safety-note code { color: var(--text); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+
 .coming-card { display: grid; min-height: 340px; place-items: center; align-content: center; padding: 34px; text-align: center; }
 .coming-card > svg { width: 42px; height: 42px; margin-bottom: 22px; color: var(--accent); }
 .coming-card h2 { margin: 8px 0; }
@@ -204,7 +229,8 @@ select {
 @media (min-width: 720px) {
   .app-shell { padding: 26px 32px 110px; }
   .topbar { margin-bottom: 38px; }
-  .summary-grid { grid-template-columns: repeat(2, 1fr); }
+  .summary-grid, .operational-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .action-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .hero-card { min-height: 260px; padding: 38px; }
   .control-card { grid-template-columns: repeat(3, 1fr); align-items: end; padding: 24px; }
   .control-card .primary-action { grid-column: 1 / -1; width: min(360px, 100%); justify-self: end; }
@@ -225,6 +251,7 @@ select {
   }
   .nav-item { min-height: 66px; font-size: 9px; }
   .nav-item span { white-space: normal; }
+  .operational-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 
 @media (prefers-reduced-motion: reduce) {

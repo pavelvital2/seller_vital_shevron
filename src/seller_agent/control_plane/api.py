@@ -15,12 +15,13 @@ from seller_agent.control_plane.auth import (
     authenticate_telegram_init_data,
 )
 from seller_agent.control_plane.config import ControlPlaneConfig
+from seller_agent.control_plane.contracts import (
+    CONTROL_TASK_CONTRACTS,
+    ControlTaskContract,
+    control_task_contract,
+)
 from seller_agent.core.job_service import JobService
 from seller_agent.core.job_store import ControlRequestConflictError, JobStore
-from seller_agent.tasks.store_analytics_overview import (
-    DEFAULT_QUERY_PACK_ID,
-    REGIONS_BY_MARKETPLACE,
-)
 
 
 CONTROL_SESSION_COOKIE = "__Host-vs_control_session"
@@ -29,6 +30,11 @@ MAX_JSON_BODY_BYTES = 32_768
 MAX_HEADER_BYTES = 16_384
 MAX_HEADER_COUNT = 64
 _PUBLIC_JOB_ID = re.compile(r"^cpj_[A-Za-z0-9_-]{20,64}$")
+_SAFE_TASK_ID = re.compile(r"^[a-z][a-z0-9-]{0,95}$")
+_SAFE_TIMESTAMP = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$"
+)
+_LIMIT = re.compile(r"^(?:[1-9]|[12][0-9]|30)$")
 _SAFE_ERROR_CODE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _SENSITIVE_KEY = re.compile(
     r"(?:authorization|cookie|init[_-]?data|query[_-]?id|secret|token|password|user)",
@@ -50,6 +56,22 @@ _PUBLIC_JOB_ERROR_CODES = frozenset(
         "workflow_busy",
         "workflow_failed",
     }
+)
+_PUBLIC_JOB_STATUSES = frozenset(
+    {
+        "created",
+        "queued",
+        "running",
+        "waiting_confirmation",
+        "success",
+        "partial_success",
+        "failed",
+        "timeout",
+        "cancelled",
+    }
+)
+_PUBLIC_DAILY_OUTCOMES = frozenset(
+    {"ok", "warning", "partial", "blocked", "error"}
 )
 _CSP = (
     "default-src 'self'; "
@@ -98,6 +120,9 @@ def create_control_app(
     app.router.add_post(f"{API_PREFIX}/auth/telegram", _auth_telegram)
     app.router.add_get(f"{API_PREFIX}/session", _session_status)
     app.router.add_post(f"{API_PREFIX}/jobs", _submit_job)
+    app.router.add_get(f"{API_PREFIX}/operations/summary", _operations_summary)
+    app.router.add_get(f"{API_PREFIX}/jobs", _list_jobs)
+    app.router.add_get(f"{API_PREFIX}/approvals", _list_approvals)
     app.router.add_get(f"{API_PREFIX}/jobs/{{public_job_id}}", _job_status)
 
     asset_root = static_dir or Path(__file__).with_name("static")
@@ -168,9 +193,15 @@ async def _health(request: web.Request) -> web.Response:
 async def _ready(request: web.Request) -> web.Response:
     try:
         request.app[STORE_KEY].initialize()
-        task = request.app[SERVICE_KEY].registry.get("store-analytics-overview")
-        if not task.enabled or not task.is_read_only:
-            raise RuntimeError
+        config: ControlPlaneConfig = request.app[CONFIG_KEY]
+        service: JobService = request.app[SERVICE_KEY]
+        for task_id in config.allowed_task_ids:
+            contract = control_task_contract(task_id)
+            if contract is None:
+                raise RuntimeError
+            task = service.registry.get(contract.registry_task_id)
+            if not contract.accepts_registered_task(task):
+                raise RuntimeError
     except Exception:  # noqa: BLE001 - readiness exposes one stable code.
         return _json_error(503, "service_not_ready")
     return web.json_response({"ok": True, "ready": True})
@@ -236,31 +267,33 @@ async def _submit_job(request: web.Request) -> web.Response:
     if not isinstance(task_id, str) or not isinstance(params, dict):
         raise ApiProblem(400, "request_invalid")
     config: ControlPlaneConfig = request.app[CONFIG_KEY]
-    if task_id in config.allowed_task_ids:
-        if set(params) != {"marketplace", "period_days", "region_id"}:
-            raise ApiProblem(400, "params_invalid")
-        marketplace = params.get("marketplace")
-        region_id = params.get("region_id")
-        if (
-            not isinstance(marketplace, str)
-            or not isinstance(region_id, str)
-            or region_id not in REGIONS_BY_MARKETPLACE.get(marketplace, frozenset())
-        ):
-            raise ApiProblem(400, "params_invalid")
     service: JobService = request.app[SERVICE_KEY]
+    contract = control_task_contract(task_id)
+    if contract is None:
+        raise _task_access_problem(service, task_id)
+    if task_id not in config.allowed_task_ids:
+        raise ApiProblem(403, "task_not_allowed")
+    try:
+        registered_task = service.registry.get(contract.registry_task_id)
+    except KeyError as exc:
+        raise ApiProblem(404, "task_not_registered") from exc
+    if not contract.accepts_registered_task(registered_task):
+        raise ApiProblem(403, "task_not_allowed")
+    if not contract.accepts_client_params(params):
+        raise ApiProblem(400, "params_invalid")
+    try:
+        server_params = contract.server_params(config)
+    except ValueError as exc:
+        raise ApiProblem(500, "control_contract_invalid") from exc
     try:
         submission = service.submit_control_read_only(
-            task_id=task_id,
+            task_id=contract.registry_task_id,
             params=params,
             owner_id=str(session.owner_id),
             chat_id=str(session.owner_id),
             idempotency_key=idempotency_key,
-            allowed_task_ids=config.allowed_task_ids,
-            server_params={
-                "wb_supplier_id": config.wb_supplier_id,
-                "ozon_seller_slug": config.ozon_seller_slug,
-                "query_pack_id": DEFAULT_QUERY_PACK_ID,
-            },
+            allowed_task_ids=frozenset({contract.registry_task_id}),
+            server_params=server_params,
         )
     except ControlRequestConflictError as exc:
         raise ApiProblem(409, "idempotency_conflict") from exc
@@ -278,6 +311,112 @@ async def _submit_job(request: web.Request) -> web.Response:
             "status": submission.job.status,
         },
         status=202 if submission.created else 200,
+    )
+
+
+async def _operations_summary(request: web.Request) -> web.Response:
+    session = _require_session(request)
+    observed_at = _format_public_timestamp(request.app[NOW_KEY]())
+    try:
+        snapshot = request.app[STORE_KEY].get_control_operations_snapshot(
+            owner_id=str(session.owner_id),
+            task_ids=tuple(sorted(CONTROL_TASK_CONTRACTS)),
+        )
+        latest = _project_control_job_row(
+            request.app[SERVICE_KEY],
+            snapshot.get("last_control_job"),
+            include_finished=False,
+        )
+        return web.json_response(
+            {
+                "data_available": True,
+                "observed_at": observed_at,
+                "jobs": {
+                    "active": _safe_count(snapshot.get("jobs"), "active"),
+                    "terminal": _safe_count(snapshot.get("jobs"), "terminal"),
+                },
+                "approvals": {
+                    "pending_review": _safe_count(
+                        snapshot.get("approvals"), "pending_review"
+                    ),
+                    "applying_unknown": _safe_count(
+                        snapshot.get("approvals"), "applying_unknown"
+                    ),
+                },
+                "last_control_job": latest,
+            }
+        )
+    except Exception:  # noqa: BLE001 - unavailable snapshot must stay data-only.
+        return web.json_response(
+            {
+                "data_available": False,
+                "observed_at": observed_at,
+                "jobs": {"active": None, "terminal": None},
+                "approvals": {
+                    "pending_review": None,
+                    "applying_unknown": None,
+                },
+                "last_control_job": None,
+            }
+        )
+
+
+async def _list_jobs(request: web.Request) -> web.Response:
+    session = _require_session(request)
+    limit = _strict_limit_query(request)
+    rows = request.app[STORE_KEY].list_control_jobs_for_owner(
+        owner_id=str(session.owner_id),
+        limit=limit,
+    )
+    jobs = [
+        projected
+        for row in rows
+        if (
+            projected := _project_control_job_row(
+                request.app[SERVICE_KEY],
+                row,
+                include_finished=True,
+            )
+        )
+        is not None
+    ]
+    return web.json_response(
+        {"data_available": True, "jobs": jobs, "limit": limit}
+    )
+
+
+async def _list_approvals(request: web.Request) -> web.Response:
+    _require_session(request)
+    counts, rows = request.app[STORE_KEY].list_unresolved_approval_summaries()
+    service: JobService = request.app[SERVICE_KEY]
+    approvals = []
+    for row in rows:
+        status = str(row.get("status") or "")
+        if status not in {"pending_review", "applying_unknown"}:
+            continue
+        task_id, label = _registered_task_identity(
+            service,
+            str(row.get("task_id") or ""),
+        )
+        approvals.append(
+            {
+                "task_id": task_id,
+                "label": label,
+                "status": status,
+                "created_at": _safe_timestamp(row.get("created_at")),
+                "updated_at": _safe_timestamp(row.get("updated_at")),
+                "requires_reconciliation": status == "applying_unknown",
+            }
+        )
+    return web.json_response(
+        {
+            "data_available": True,
+            "counts": {
+                "pending_review": _safe_count(counts, "pending_review"),
+                "applying_unknown": _safe_count(counts, "applying_unknown"),
+            },
+            "approvals": approvals,
+        }
     )
 
 
@@ -301,8 +440,12 @@ async def _job_status(request: web.Request) -> web.Response:
         "updated_at": job.updated_at,
         "finished_at": job.finished_at,
     }
+    contract = control_task_contract(job.task_id)
+    response["result_type"] = (
+        contract.result_renderer if contract is not None else "status_only_v1"
+    )
     if job.result:
-        response["result"] = _sanitize_public_value(job.result)
+        response["result"] = _project_public_result(contract, job.result)
     if job.error:
         response["error"] = _safe_job_error(job.error)
     return web.json_response(response)
@@ -315,6 +458,122 @@ def _require_session(request: web.Request) -> ControlSession:
         return config.session_signer.verify(cookie, now=request.app[NOW_KEY]())
     except ControlAuthError as exc:
         raise ApiProblem(401, exc.code) from exc
+
+
+def _task_access_problem(service: JobService, task_id: str) -> ApiProblem:
+    try:
+        service.registry.get(task_id)
+    except KeyError:
+        return ApiProblem(404, "task_not_registered")
+    return ApiProblem(403, "task_not_allowed")
+
+
+def _strict_limit_query(request: web.Request) -> int:
+    query = request.rel_url.query
+    if not query:
+        return 20
+    if len(query) != 1 or set(query) != {"limit"}:
+        raise ApiProblem(400, "query_invalid")
+    values = query.getall("limit", [])
+    if len(values) != 1 or not _LIMIT.fullmatch(values[0]):
+        raise ApiProblem(400, "query_invalid")
+    return int(values[0])
+
+
+def _project_control_job_row(
+    service: JobService,
+    row: object,
+    *,
+    include_finished: bool,
+) -> dict[str, Any] | None:
+    if not isinstance(row, dict):
+        return None
+    public_job_id = str(row.get("job_id") or "")
+    if not _PUBLIC_JOB_ID.fullmatch(public_job_id):
+        return None
+    task_id, _ = _registered_task_identity(
+        service,
+        str(row.get("task_id") or ""),
+        control_only=True,
+    )
+    if task_id == "unknown":
+        return None
+    projected: dict[str, Any] = {
+        "job_id": public_job_id,
+        "task_id": task_id,
+        "status": _safe_job_status(row.get("status")),
+        "created_at": _safe_timestamp(row.get("created_at")),
+        "updated_at": _safe_timestamp(row.get("updated_at")),
+    }
+    if include_finished:
+        projected["finished_at"] = _safe_timestamp(row.get("finished_at"))
+    return projected
+
+
+def _registered_task_identity(
+    service: JobService,
+    raw_task_id: str,
+    *,
+    control_only: bool = False,
+) -> tuple[str, str]:
+    if not _SAFE_TASK_ID.fullmatch(raw_task_id):
+        return "unknown", "Неизвестная задача"
+    try:
+        task = service.registry.get(raw_task_id)
+    except KeyError:
+        return "unknown", "Неизвестная задача"
+    if task.name != raw_task_id:
+        return "unknown", "Неизвестная задача"
+    contract = control_task_contract(task.name)
+    if control_only and contract is None:
+        return "unknown", "Неизвестная задача"
+    label = contract.label if contract is not None else str(task.title).strip()[:128]
+    if not label or _SENSITIVE_TEXT.search(label):
+        label = "Зарегистрированная задача"
+    return task.name, label
+
+
+def _safe_job_status(value: object) -> str:
+    normalized = str(value or "")
+    return normalized if normalized in _PUBLIC_JOB_STATUSES else "unknown"
+
+
+def _safe_timestamp(value: object) -> str:
+    normalized = str(value or "")
+    return normalized if _SAFE_TIMESTAMP.fullmatch(normalized) else ""
+
+
+def _format_public_timestamp(value: datetime) -> str:
+    current = value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+    return current.astimezone(timezone.utc).isoformat(timespec="seconds").replace(
+        "+00:00", "Z"
+    )
+
+
+def _safe_count(value: object, key: str) -> int:
+    if not isinstance(value, dict):
+        return 0
+    count = value.get(key)
+    return int(count) if isinstance(count, int) and not isinstance(count, bool) and count >= 0 else 0
+
+
+def _project_public_result(
+    contract: ControlTaskContract | None,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    if contract is None:
+        return {}
+    if contract.result_renderer == "store_analytics_overview_v1":
+        projected = _sanitize_public_value(result)
+        return projected if isinstance(projected, dict) else {}
+    if contract.result_renderer == "daily_report_status_v1":
+        summary = result.get("summary")
+        source = summary if isinstance(summary, dict) else result
+        outcome = str(source.get("overall_status") or "")
+        if outcome not in _PUBLIC_DAILY_OUTCOMES:
+            outcome = "unknown"
+        return {"summary": {"overall_status": outcome}}
+    return {}
 
 
 async def _strict_json_object(request: web.Request, *, fields: set[str]) -> dict[str, Any]:

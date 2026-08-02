@@ -14,6 +14,7 @@ from seller_agent.config import (
     load_wb_credentials,
 )
 from seller_agent.marketplaces.wb.communications_adapter import WbCommunicationsAdapter
+from seller_agent.tasks import reviews_questions
 from seller_agent.tasks.reviews_questions import (
     _approved_actions,
     _build_report,
@@ -203,7 +204,23 @@ def test_legal_usage_question_has_cautious_answer() -> None:
     assert "требования законодательства" in reply
 
 
-def test_question_size_uses_approved_passport_context() -> None:
+def test_question_size_uses_approved_passport_context(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    approved_dir = (
+        tmp_path / "data" / "catalog" / "master_passport" / "approved"
+    )
+    approved_dir.mkdir(parents=True)
+    (approved_dir / "chev_kit2_pz_text0006.json").write_text(
+        json.dumps(
+            {"physical": {"product_size_mm": "125*25 мм; 80*50 мм"}},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(reviews_questions, "PROJECT_ROOT", tmp_path)
+
     reply = draft_question_reply(
         {
             "offer_id": "chev_kit2_pz_text0006",

@@ -64,6 +64,15 @@
   `submit(task_id, params, actor)`, `run(job_id)` через текущий
   `WorkflowRunner`, перевод apply-задач без `confirmed_by_user=true` в
   `waiting_confirmation` и cancel queued.
+- `src/seller_agent/control_plane/` - owner-only localhost `aiohttp` control
+  service и mobile-first Mini App над общей runtime DB и единственным Job
+  Worker. Stage 4A добавляет server-side
+  `control_plane/contracts.py` с exact allowlist
+  `store-analytics-overview`/`daily-morning-report`, безопасные read-only
+  projections `operations/summary`, owner-scoped `jobs` и unresolved
+  `approvals`; frontend не содержит marketplace business logic или write
+  controls. Контракт и rollback:
+  `data/planning/stage4a_readonly_control_runbook.md`.
 - `src/seller_agent/core/job_runner.py` - минимальный runner queued job-ов:
   `run(job_id)` и `run_next()`.
 - `src/seller_agent/core/job_worker.py` - управляемый worker loop поверх

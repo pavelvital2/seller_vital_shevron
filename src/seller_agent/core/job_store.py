@@ -125,9 +125,10 @@ class JobStore:
         owner_id: str,
         auth_date: int,
         expires_at: str,
+        consumed_at: str | None = None,
     ) -> bool:
         """Consume one validated Telegram initData fingerprint exactly once."""
-        now = _now()
+        now = str(consumed_at or _now())
         with self._transaction() as connection:
             connection.execute(
                 "DELETE FROM control_auth_replays WHERE expires_at < ?",
@@ -256,6 +257,153 @@ class JobStore:
                 (owner_id, public_job_id),
             ).fetchone()
         return _job_from_row(row) if row is not None else None
+
+    def list_control_jobs_for_owner(
+        self,
+        *,
+        owner_id: str,
+        limit: int = 20,
+    ) -> list[dict[str, str]]:
+        """Return only public receipt-backed fields for one exact owner."""
+        if not 1 <= int(limit) <= 30:
+            raise ValueError("limit must be between 1 and 30")
+        self.initialize()
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT r.public_job_id, r.task_id, j.status,
+                       j.created_at, j.updated_at, j.finished_at
+                FROM control_request_receipts AS r
+                JOIN jobs AS j ON j.job_id = r.job_id AND j.task_id = r.task_id
+                WHERE r.owner_id = ?
+                ORDER BY j.created_at DESC, r.public_job_id DESC
+                LIMIT ?
+                """,
+                (str(owner_id), int(limit)),
+            ).fetchall()
+        return [
+            {
+                "job_id": str(row["public_job_id"]),
+                "task_id": str(row["task_id"]),
+                "status": str(row["status"]),
+                "created_at": str(row["created_at"]),
+                "updated_at": str(row["updated_at"]),
+                "finished_at": str(row["finished_at"]),
+            }
+            for row in rows
+        ]
+
+    def get_control_operations_snapshot(
+        self,
+        *,
+        owner_id: str,
+        task_ids: tuple[str, ...],
+    ) -> dict[str, Any]:
+        """Read one SQLite-only runtime snapshot without external health claims."""
+        self.initialize()
+        with self._connect() as connection:
+            job_counts = connection.execute(
+                """
+                SELECT
+                  SUM(CASE WHEN status IN (
+                    'created', 'queued', 'running', 'waiting_confirmation'
+                  ) THEN 1 ELSE 0 END) AS active_count,
+                  SUM(CASE WHEN status IN (
+                    'success', 'partial_success', 'failed', 'timeout', 'cancelled'
+                  ) THEN 1 ELSE 0 END) AS terminal_count
+                FROM jobs
+                """
+            ).fetchone()
+            approval_rows = connection.execute(
+                """
+                SELECT status, COUNT(*) AS item_count
+                FROM approvals
+                WHERE status IN ('pending_review', 'applying_unknown')
+                GROUP BY status
+                """
+            ).fetchall()
+            latest = None
+            if task_ids:
+                placeholders = ",".join("?" for _ in task_ids)
+                latest = connection.execute(
+                    f"""
+                    SELECT r.public_job_id, r.task_id, j.status,
+                           j.created_at, j.updated_at
+                    FROM control_request_receipts AS r
+                    JOIN jobs AS j
+                      ON j.job_id = r.job_id AND j.task_id = r.task_id
+                    WHERE r.owner_id = ? AND r.task_id IN ({placeholders})
+                    ORDER BY j.created_at DESC, r.public_job_id DESC
+                    LIMIT 1
+                    """,
+                    (str(owner_id), *task_ids),
+                ).fetchone()
+        approval_counts = {"pending_review": 0, "applying_unknown": 0}
+        for row in approval_rows:
+            status = str(row["status"])
+            if status in approval_counts:
+                approval_counts[status] = int(row["item_count"])
+        latest_job = None
+        if latest is not None:
+            latest_job = {
+                "job_id": str(latest["public_job_id"]),
+                "task_id": str(latest["task_id"]),
+                "status": str(latest["status"]),
+                "created_at": str(latest["created_at"]),
+                "updated_at": str(latest["updated_at"]),
+            }
+        return {
+            "jobs": {
+                "active": int(job_counts["active_count"] or 0),
+                "terminal": int(job_counts["terminal_count"] or 0),
+            },
+            "approvals": approval_counts,
+            "last_control_job": latest_job,
+        }
+
+    def list_unresolved_approval_summaries(
+        self,
+        *,
+        limit: int = 100,
+    ) -> tuple[dict[str, int], list[dict[str, str]]]:
+        """Return unresolved approval metadata without IDs, checksums or payloads."""
+        if not 1 <= int(limit) <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        self.initialize()
+        with self._connect() as connection:
+            count_rows = connection.execute(
+                """
+                SELECT status, COUNT(*) AS item_count
+                FROM approvals
+                WHERE status IN ('pending_review', 'applying_unknown')
+                GROUP BY status
+                """
+            ).fetchall()
+            rows = connection.execute(
+                """
+                SELECT a.status, a.created_at, a.updated_at, j.task_id
+                FROM approvals AS a
+                LEFT JOIN jobs AS j ON j.job_id = a.source_job_id
+                WHERE a.status IN ('pending_review', 'applying_unknown')
+                ORDER BY a.updated_at ASC, a.approval_id ASC
+                LIMIT ?
+                """,
+                (int(limit),),
+            ).fetchall()
+        counts = {"pending_review": 0, "applying_unknown": 0}
+        for row in count_rows:
+            status = str(row["status"])
+            if status in counts:
+                counts[status] = int(row["item_count"])
+        return counts, [
+            {
+                "task_id": str(row["task_id"] or ""),
+                "status": str(row["status"]),
+                "created_at": str(row["created_at"]),
+                "updated_at": str(row["updated_at"]),
+            }
+            for row in rows
+        ]
 
     def get_job_notification_route(self, job_id: str) -> dict[str, Any] | None:
         self.initialize()

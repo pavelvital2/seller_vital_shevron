@@ -6,6 +6,12 @@
 system-level service установлен с полным hardening; временный user-service
 выключен.
 
+Дополнение Stage 4A разрабатывается отдельным additive пакетом и не меняет
+исторический deployment contract Stage 3. Актуальные read-only
+`operations/summary`, owner-scoped `jobs`, unresolved `approvals` и второй
+allowlisted task описаны в
+`data/planning/stage4a_readonly_control_runbook.md`.
+
 ## Итог первого slice
 
 Новый bot и Mini App являются дополнительным owner-only интерфейсом над
@@ -187,8 +193,9 @@ secret storage отсутствуют.
 
 CSP не содержит `unsafe-inline`/`unsafe-eval`. UI mobile-first, учитывает
 Telegram theme/safe-area и показывает состояния загрузки, ошибки, пустого
-результата и устаревших либо недоступных данных. `Задания` и `Согласования`
-честно помечены следующим этапом и не имеют write controls.
+результата и устаревших либо недоступных данных. В исходном Stage 3 `Задания`
+и `Согласования` были placeholders. Stage 4A активирует их только безопасными
+read-only projections; write controls по-прежнему отсутствуют.
 
 Backend задаёт `Cache-Control: no-store` для index и каждого локального asset:
 `app.js`, `app.css`, `icons.svg`. Это исключает использование устаревшего

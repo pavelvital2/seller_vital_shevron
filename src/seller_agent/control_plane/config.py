@@ -22,6 +22,10 @@ DEFAULT_CONTROL_LOCK_FILE = Path(
     ".sessions/telegram/vital_shevron_control_bot.lock"
 )
 CONTROL_ANALYTICS_TASK = "store-analytics-overview"
+CONTROL_DAILY_REPORT_TASK = "daily-morning-report"
+DEFAULT_CONTROL_TASK_IDS = frozenset(
+    {CONTROL_ANALYTICS_TASK, CONTROL_DAILY_REPORT_TASK}
+)
 
 
 @dataclass(frozen=True, repr=False)
@@ -30,7 +34,7 @@ class ControlPlaneConfig:
     allowed_owner_ids: frozenset[int]
     session_signer: SessionSigner = field(repr=False)
     public_app_url: str
-    allowed_task_ids: frozenset[str] = frozenset({CONTROL_ANALYTICS_TASK})
+    allowed_task_ids: frozenset[str] = DEFAULT_CONTROL_TASK_IDS
     wb_supplier_id: str = "4516781"
     ozon_seller_slug: str = "vital-shevron"
     state_file: Path = DEFAULT_CONTROL_STATE_FILE
