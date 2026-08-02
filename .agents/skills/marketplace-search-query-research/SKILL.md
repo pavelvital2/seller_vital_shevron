@@ -37,6 +37,16 @@ description: "Use for Ozon/Wildberries search query research: LK/API popular que
   without the exact phrase is `not_returned_top50`, not zero demand.
 - Parser top-query passes must be checked for latest run, collection time and
   unique query count before analysis.
+- Confirmed 2026-08-02 for Parser Data API regional store comparison: never
+  reuse sales-period dates as SERP snapshot dates. WB comparison must specify
+  the same `previous/current_region_id` and `previous/current_query_pack_id`
+  (`shevron-core`) and may use auto latest pair with `query_scope=intersection`.
+  Ozon requires explicit existing dates and accepts `union|explicit`, not
+  `intersection`. Discover Ozon candidates from bounded `run-quality`, then
+  confirm each candidate with a bounded `query-positions` call carrying exact
+  region and query pack. If only one Ozon snapshot exists, report comparison
+  unavailable; never interpret it as improvement. Live movement counters are
+  returned in `movement` as `*_pairs`, while Ozon may omit `previous/current`.
 - For Vital Shevron card-audit orchestration, do not make fresh card auditors
   collect LK query data. Prepare a reusable `seo_query_pack` first: Ozon/WB
   top-query tables with period, frequency/popularity, source and export

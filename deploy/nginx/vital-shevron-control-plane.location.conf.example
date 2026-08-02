@@ -1,0 +1,32 @@
+# Include inside the existing HTTPS server block only after architect review.
+# API auth is in POST bodies/cookies; access logging is intentionally disabled.
+location = /vital-shevron {
+    return 308 /vital-shevron/;
+}
+
+location ^~ /vital-shevron/ {
+    proxy_pass http://127.0.0.1:8092;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header Authorization "";
+    proxy_set_header Forwarded "";
+    proxy_set_header X-Forwarded-For "";
+    proxy_set_header X-Forwarded-Host "";
+    proxy_set_header X-Forwarded-Port "";
+    proxy_set_header X-Forwarded-Proto "";
+    proxy_set_header X-Real-IP "";
+    proxy_hide_header Server;
+    proxy_read_timeout 65s;
+    client_max_body_size 32k;
+    access_log off;
+    log_subrequest off;
+
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' https://telegram.org; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors https://web.telegram.org https://*.telegram.org" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+
+    limit_except GET POST {
+        deny all;
+    }
+}

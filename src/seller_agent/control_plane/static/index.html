@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="Аналитика магазинов Vital Shevron в режиме только чтения">
+  <title>Vital Shevron — управление</title>
+  <link rel="stylesheet" href="/vital-shevron/app.css">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script src="/vital-shevron/app.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand-mark" aria-hidden="true">VS</div>
+      <div class="brand-copy">
+        <p class="eyebrow">ПАНЕЛЬ ВЛАДЕЛЬЦА</p>
+        <h1>Vital Shevron</h1>
+      </div>
+      <div id="connection-state" class="connection-state" data-state="loading">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span>Подключение</span>
+      </div>
+    </header>
+
+    <main>
+      <section id="view-state" class="view active" aria-labelledby="state-title">
+        <div class="hero-card">
+          <div>
+            <p class="eyebrow">СЕЙЧАС</p>
+            <h2 id="state-title">Состояние магазина</h2>
+            <p class="subtle">Безопасный режим только чтения. Данные площадок не меняются.</p>
+          </div>
+          <svg class="hero-icon" aria-hidden="true"><use href="/vital-shevron/icons.svg#store"></use></svg>
+        </div>
+        <div class="summary-grid">
+          <article class="summary-card">
+            <svg class="card-icon" aria-hidden="true"><use href="/vital-shevron/icons.svg#shield-check"></use></svg>
+            <p class="card-label">Режим</p>
+            <p class="card-value">Только чтение</p>
+            <p class="card-note">Запись и согласования недоступны на этом этапе.</p>
+          </article>
+          <article class="summary-card">
+            <svg class="card-icon" aria-hidden="true"><use href="/vital-shevron/icons.svg#clock"></use></svg>
+            <p class="card-label">Свежесть</p>
+            <p id="overview-freshness" class="card-value">данные недоступны</p>
+            <p class="card-note">Появится после первого аналитического запуска.</p>
+          </article>
+        </div>
+        <button class="primary-action" type="button" data-open-view="analytics">
+          <svg aria-hidden="true"><use href="/vital-shevron/icons.svg#chart"></use></svg>
+          Открыть аналитику
+        </button>
+      </section>
+
+      <section id="view-analytics" class="view" aria-labelledby="analytics-title" hidden>
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">ФАКТЫ И ИСТОЧНИКИ</p>
+            <h2 id="analytics-title">Аналитика</h2>
+          </div>
+          <span class="readonly-badge">только чтение</span>
+        </div>
+
+        <form id="analytics-form" class="control-card">
+          <fieldset>
+            <legend>Площадка</legend>
+            <div class="segmented two">
+              <label><input type="radio" name="marketplace" value="ozon" checked><span>Ozon</span></label>
+              <label><input type="radio" name="marketplace" value="wb"><span>Wildberries</span></label>
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend>Период</legend>
+            <div class="segmented three">
+              <label><input type="radio" name="period" value="7"><span>7 дней</span></label>
+              <label><input type="radio" name="period" value="30" checked><span>30 дней</span></label>
+              <label><input type="radio" name="period" value="90"><span>90 дней</span></label>
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend>Регион поиска</legend>
+            <select id="region-select" name="region" aria-label="Регион поиска"></select>
+          </fieldset>
+          <button id="run-overview" class="primary-action" type="submit" disabled>
+            <svg aria-hidden="true"><use href="/vital-shevron/icons.svg#refresh"></use></svg>
+            Собрать отчёт
+          </button>
+        </form>
+
+        <section id="analytics-status" class="status-panel" data-state="empty" aria-live="polite">
+          <svg aria-hidden="true"><use href="/vital-shevron/icons.svg#chart"></use></svg>
+          <div>
+            <p id="analytics-status-title" class="status-title">Отчёт ещё не запускался</p>
+            <p id="analytics-status-copy" class="status-copy">Выберите площадку, период и регион. Здесь появится результат запуска.</p>
+          </div>
+        </section>
+        <div id="analytics-result" class="result-stack" hidden></div>
+      </section>
+
+      <section id="view-jobs" class="view" aria-labelledby="jobs-title" hidden>
+        <div class="coming-card">
+          <svg aria-hidden="true"><use href="/vital-shevron/icons.svg#list-checks"></use></svg>
+          <p class="eyebrow">СЛЕДУЮЩИЙ ЭТАП</p>
+          <h2 id="jobs-title">Задания</h2>
+          <p>На этом этапе доступен только статус отчёта, запущенного из раздела «Аналитика».</p>
+        </div>
+      </section>
+
+      <section id="view-approvals" class="view" aria-labelledby="approvals-title" hidden>
+        <div class="coming-card">
+          <svg aria-hidden="true"><use href="/vital-shevron/icons.svg#shield-check"></use></svg>
+          <p class="eyebrow">ТОЛЬКО ЧТЕНИЕ · СЛЕДУЮЩИЙ ЭТАП</p>
+          <h2 id="approvals-title">Согласования</h2>
+          <p>Этапы согласования появятся отдельно. Кнопок записи или изменения статуса сейчас нет.</p>
+        </div>
+      </section>
+    </main>
+
+    <nav class="bottom-nav" aria-label="Разделы">
+      <button class="nav-item active" type="button" data-view="state">
+        <svg aria-hidden="true"><use href="/vital-shevron/icons.svg#store"></use></svg>
+        <span>Состояние</span>
+      </button>
+      <button class="nav-item" type="button" data-view="analytics">
+        <svg aria-hidden="true"><use href="/vital-shevron/icons.svg#chart"></use></svg>
+        <span>Аналитика</span>
+      </button>
+      <button class="nav-item" type="button" data-view="jobs">
+        <svg aria-hidden="true"><use href="/vital-shevron/icons.svg#list-checks"></use></svg>
+        <span>Задания</span>
+      </button>
+      <button class="nav-item" type="button" data-view="approvals">
+        <svg aria-hidden="true"><use href="/vital-shevron/icons.svg#shield-check"></use></svg>
+        <span>Согласования</span>
+      </button>
+    </nav>
+  </div>
+</body>
+</html>

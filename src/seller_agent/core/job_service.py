@@ -47,6 +47,13 @@ class JobServiceResult:
     message: str = ""
 
 
+@dataclass(frozen=True)
+class ControlJobSubmission:
+    job: JobRecord
+    public_job_id: str
+    created: bool
+
+
 class JobService:
     """Submits and runs task jobs through the project runtime store."""
 
@@ -92,6 +99,69 @@ class JobService:
             params=params,
             actor=actor,
             source=source,
+        )
+
+    def submit_control_read_only(
+        self,
+        *,
+        task_id: str,
+        params: dict[str, Any],
+        owner_id: str,
+        chat_id: str,
+        idempotency_key: str,
+        allowed_task_ids: set[str] | frozenset[str],
+        server_params: dict[str, Any] | None = None,
+    ) -> ControlJobSubmission:
+        """Create one owner-scoped Mini App job through an atomic receipt."""
+        normalized_task_id = str(task_id).strip()
+        if normalized_task_id not in allowed_task_ids:
+            if normalized_task_id:
+                try:
+                    self.registry.get(normalized_task_id)
+                except KeyError as exc:
+                    raise ValueError("task_not_registered") from exc
+            raise ValueError("task_not_allowed")
+        try:
+            task = self.registry.get(normalized_task_id)
+        except KeyError as exc:
+            raise ValueError("task_not_registered") from exc
+        if not task.enabled or not task.is_read_only or task.is_write:
+            raise ValueError("task_not_allowed")
+        effective_params = dict(params)
+        for key, value in (server_params or {}).items():
+            if key in task.parameter_schema:
+                effective_params[key] = value
+        if not _params_match_schema(effective_params, task.parameter_schema):
+            raise ValueError("params_invalid")
+        if not _valid_idempotency_key(idempotency_key):
+            raise ValueError("idempotency_key_invalid")
+        owner = str(owner_id).strip()
+        chat = str(chat_id).strip()
+        if not owner.isascii() or not owner.isdigit() or chat != owner:
+            raise ValueError("owner_context_invalid")
+        canonical_request = json.dumps(
+            {"params": effective_params, "task_id": task.name},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        request_hash = hashlib.sha256(canonical_request.encode("utf-8")).hexdigest()
+        key_hash = hashlib.sha256(
+            f"seller-agent-control-idempotency/v1\0{idempotency_key}".encode("utf-8")
+        ).hexdigest()
+        job, public_job_id, created = self.store.submit_control_job(
+            owner_id=owner,
+            idempotency_key_hash=key_hash,
+            request_hash=request_hash,
+            task_id=task.name,
+            params=effective_params,
+            actor=f"control_owner:{owner}",
+            chat_id=chat,
+        )
+        return ControlJobSubmission(
+            job=job,
+            public_job_id=public_job_id,
+            created=created,
         )
 
     def _submit_task(
@@ -987,6 +1057,51 @@ def _canonical_hash(value: Any) -> str:
 
 def _canonical_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _valid_idempotency_key(value: str) -> bool:
+    if (
+        not isinstance(value, str)
+        or not value.isascii()
+        or not 8 <= len(value) <= 128
+    ):
+        return False
+    return all(char.isalnum() or char in {"-", "_", ".", ":"} for char in value)
+
+
+def _params_match_schema(params: object, schema: dict[str, Any]) -> bool:
+    if not isinstance(params, dict) or not schema:
+        return False
+    if set(params) - set(schema):
+        return False
+    for field, contract in schema.items():
+        if not isinstance(contract, dict):
+            return False
+        if contract.get("required") is True and field not in params:
+            return False
+        if field not in params:
+            continue
+        value = params[field]
+        expected_type = contract.get("type")
+        if expected_type == "string" and not isinstance(value, str):
+            return False
+        if expected_type == "integer" and (not isinstance(value, int) or isinstance(value, bool)):
+            return False
+        if expected_type == "boolean" and not isinstance(value, bool):
+            return False
+        enum = contract.get("enum")
+        if isinstance(enum, list) and value not in enum:
+            return False
+        if "const" in contract and value != contract["const"]:
+            return False
+        if isinstance(value, str):
+            minimum_length = contract.get("minLength")
+            maximum_length = contract.get("maxLength")
+            if isinstance(minimum_length, int) and len(value) < minimum_length:
+                return False
+            if isinstance(maximum_length, int) and len(value) > maximum_length:
+                return False
+    return True
 
 
 _SAFETY_GUARD_ISSUE_CODES = frozenset(

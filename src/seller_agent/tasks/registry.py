@@ -846,6 +846,55 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         },
     ),
     RegisteredTask(
+        name="store-analytics-overview",
+        command="store-analytics-overview",
+        title="Store analytics overview",
+        description=(
+            "Compose read-only period, stock and Parser warehouse facts for the owner control Mini App."
+        ),
+        mode="read_only",
+        risk="low",
+        marketplaces=("ozon", "wb"),
+        runbook_path="data/planning/stage3_control_plane_runbook.md",
+        requires_credentials=True,
+        parameter_schema={
+            "marketplace": {"type": "string", "enum": ["ozon", "wb"], "required": True},
+            "period_days": {"type": "integer", "enum": [7, 30, 90], "required": True},
+            "region_id": {
+                "type": "string",
+                "enum": ["moscow", "rostov-on-don", "novosibirsk", "kazan"],
+                "required": True,
+            },
+            "wb_supplier_id": {"type": "string", "minLength": 1, "maxLength": 32},
+            "ozon_seller_slug": {"type": "string", "minLength": 1, "maxLength": 128},
+            "query_pack_id": {"type": "string", "const": "shevron-core"},
+        },
+        result_schema={
+            "overall_status": {
+                "type": "string",
+                "enum": ["ok", "warning"],
+                "required": True,
+            },
+            "run_id": {"type": "string", "minLength": 1, "required": True},
+            "marketplace": {
+                "type": "string",
+                "enum": ["ozon", "wb"],
+                "required": True,
+            },
+            "period_days": {
+                "type": "integer",
+                "enum": [7, 30, 90],
+                "required": True,
+            },
+            "region_id": {
+                "type": "string",
+                "enum": ["moscow", "rostov-on-don", "novosibirsk", "kazan"],
+                "required": True,
+            },
+        },
+        timeout_seconds=1200,
+    ),
+    RegisteredTask(
         name="wb-parser-warehouse-analytics",
         command="wb-parser-warehouse-analytics",
         title="WB parser warehouse analytics",

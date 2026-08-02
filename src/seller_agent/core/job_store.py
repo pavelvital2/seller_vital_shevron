@@ -31,6 +31,7 @@ from seller_agent.safety.approval_package import verify_approval_package_linkage
 DEFAULT_RUNTIME_DB = Path("runtime/runtime.db")
 APPROVAL_CALLBACK_TOKEN_HEX_LENGTH = 16
 APPROVAL_CALLBACK_TOKENS_MIGRATION = "approval_callback_tokens_v1"
+CONTROL_PLANE_SCHEMA_MIGRATION = "control_plane_schema_v1"
 
 
 class ApprovalLookupAmbiguousError(RuntimeError):
@@ -53,6 +54,10 @@ class ApprovalVerifyIntegrityError(RuntimeError):
         self.issues = issues
 
 
+class ControlRequestConflictError(RuntimeError):
+    """Raised when one owner reuses an idempotency key for another payload."""
+
+
 def approval_callback_token(approval_id: str) -> str:
     return hashlib.sha256(str(approval_id).encode("utf-8")).hexdigest()[
         :APPROVAL_CALLBACK_TOKEN_HEX_LENGTH
@@ -73,33 +78,212 @@ class JobStore:
                 "SELECT 1 FROM schema_migrations WHERE migration_name = ?",
                 (APPROVAL_CALLBACK_TOKENS_MIGRATION,),
             ).fetchone()
-            if migration is not None:
-                return
-            connection.execute("BEGIN IMMEDIATE")
-            try:
-                migration = connection.execute(
-                    "SELECT 1 FROM schema_migrations WHERE migration_name = ?",
-                    (APPROVAL_CALLBACK_TOKENS_MIGRATION,),
-                ).fetchone()
-                if migration is None:
-                    rows = connection.execute(
-                        "SELECT approval_id, created_at FROM approvals"
-                    ).fetchall()
-                    for row in rows:
-                        _insert_approval_callback_token(
-                            connection,
-                            approval_id=str(row["approval_id"]),
-                            created_at=str(row["created_at"] or _now()),
+            control_migration = connection.execute(
+                "SELECT 1 FROM schema_migrations WHERE migration_name = ?",
+                (CONTROL_PLANE_SCHEMA_MIGRATION,),
+            ).fetchone()
+            if migration is None or control_migration is None:
+                connection.execute("BEGIN IMMEDIATE")
+                try:
+                    migration = connection.execute(
+                        "SELECT 1 FROM schema_migrations WHERE migration_name = ?",
+                        (APPROVAL_CALLBACK_TOKENS_MIGRATION,),
+                    ).fetchone()
+                    if migration is None:
+                        rows = connection.execute(
+                            "SELECT approval_id, created_at FROM approvals"
+                        ).fetchall()
+                        for row in rows:
+                            _insert_approval_callback_token(
+                                connection,
+                                approval_id=str(row["approval_id"]),
+                                created_at=str(row["created_at"] or _now()),
+                            )
+                        connection.execute(
+                            "INSERT INTO schema_migrations (migration_name, applied_at) VALUES (?, ?)",
+                            (APPROVAL_CALLBACK_TOKENS_MIGRATION, _now()),
                         )
-                    connection.execute(
-                        "INSERT INTO schema_migrations (migration_name, applied_at) VALUES (?, ?)",
-                        (APPROVAL_CALLBACK_TOKENS_MIGRATION, _now()),
+                    control_migration = connection.execute(
+                        "SELECT 1 FROM schema_migrations WHERE migration_name = ?",
+                        (CONTROL_PLANE_SCHEMA_MIGRATION,),
+                    ).fetchone()
+                    if control_migration is None:
+                        connection.execute(
+                            "INSERT INTO schema_migrations (migration_name, applied_at) VALUES (?, ?)",
+                            (CONTROL_PLANE_SCHEMA_MIGRATION, _now()),
+                        )
+                except Exception:
+                    connection.rollback()
+                    raise
+                else:
+                    connection.commit()
+
+    def register_control_auth_replay(
+        self,
+        *,
+        init_data_hash: str,
+        owner_id: str,
+        auth_date: int,
+        expires_at: str,
+    ) -> bool:
+        """Consume one validated Telegram initData fingerprint exactly once."""
+        now = _now()
+        with self._transaction() as connection:
+            connection.execute(
+                "DELETE FROM control_auth_replays WHERE expires_at < ?",
+                (now,),
+            )
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO control_auth_replays (
+                      init_data_hash, owner_id, auth_date, consumed_at, expires_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (init_data_hash, owner_id, int(auth_date), now, expires_at),
+                )
+            except sqlite3.IntegrityError:
+                return False
+        return True
+
+    def submit_control_job(
+        self,
+        *,
+        owner_id: str,
+        idempotency_key_hash: str,
+        request_hash: str,
+        task_id: str,
+        params: dict[str, Any],
+        actor: str,
+        chat_id: str,
+        source: str = "control_api",
+    ) -> tuple[JobRecord, str, bool]:
+        """Atomically create or return an owner-scoped idempotent queued job."""
+        now = _now()
+        with self._transaction() as connection:
+            existing = connection.execute(
+                """
+                SELECT request_hash, public_job_id, job_id
+                FROM control_request_receipts
+                WHERE owner_id = ? AND idempotency_key_hash = ?
+                """,
+                (owner_id, idempotency_key_hash),
+            ).fetchone()
+            if existing is not None:
+                if not secrets.compare_digest(str(existing["request_hash"]), request_hash):
+                    raise ControlRequestConflictError(
+                        "Idempotency key is already bound to another request."
                     )
-            except Exception:
-                connection.rollback()
-                raise
-            else:
-                connection.commit()
+                row = connection.execute(
+                    "SELECT * FROM jobs WHERE job_id = ?",
+                    (str(existing["job_id"]),),
+                ).fetchone()
+                if row is None:
+                    raise RuntimeError("Idempotent control job linkage is invalid.")
+                return _job_from_row(row), str(existing["public_job_id"]), False
+
+            job_id = _new_job_id(task_id)
+            public_job_id = f"cpj_{secrets.token_urlsafe(18)}"
+            params_json = _json_dumps(params)
+            self._insert_job_record(
+                connection,
+                job_id=job_id,
+                task_id=task_id,
+                status="queued",
+                actor=actor,
+                params_json=params_json,
+                source=source,
+                created_at=now,
+            )
+            self._insert_event(
+                connection,
+                job_id=job_id,
+                event_type="job_queued",
+                message=f"Job queued for task `{task_id}`.",
+                data={"task_id": task_id, "source": source},
+                created_at=now,
+            )
+            connection.execute(
+                """
+                INSERT INTO control_request_receipts (
+                  owner_id, idempotency_key_hash, request_hash, public_job_id,
+                  job_id, task_id, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    owner_id,
+                    idempotency_key_hash,
+                    request_hash,
+                    public_job_id,
+                    job_id,
+                    task_id,
+                    now,
+                    now,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO job_notification_routes (
+                  job_id, channel, chat_id, public_job_id,
+                  processing_status, created_at, updated_at
+                ) VALUES (?, 'control_bot', ?, ?, 'pending', ?, ?)
+                """,
+                (job_id, chat_id, public_job_id, now, now),
+            )
+            row = connection.execute(
+                "SELECT * FROM jobs WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("Control job disappeared after submit.")
+        return _job_from_row(row), public_job_id, True
+
+    def get_control_job_for_owner(
+        self,
+        *,
+        owner_id: str,
+        public_job_id: str,
+    ) -> JobRecord | None:
+        self.initialize()
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT j.*
+                FROM control_request_receipts AS r
+                JOIN jobs AS j ON j.job_id = r.job_id
+                WHERE r.owner_id = ? AND r.public_job_id = ?
+                """,
+                (owner_id, public_job_id),
+            ).fetchone()
+        return _job_from_row(row) if row is not None else None
+
+    def get_job_notification_route(self, job_id: str) -> dict[str, Any] | None:
+        self.initialize()
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM job_notification_routes WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def update_job_notification_route(
+        self,
+        *,
+        job_id: str,
+        processing_status: str,
+    ) -> bool:
+        if processing_status not in {"pending", "sent", "failed"}:
+            raise ValueError("Invalid notification route status.")
+        with self._transaction() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE job_notification_routes
+                SET processing_status = ?, updated_at = ?
+                WHERE job_id = ?
+                """,
+                (processing_status, _now(), job_id),
+            )
+        return cursor.rowcount == 1
 
     def create_job(
         self,
@@ -1588,11 +1772,20 @@ class JobStore:
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        connection = sqlite3.connect(self.db_path)
+        connection = sqlite3.connect(self.db_path, timeout=30)
         connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA busy_timeout = 30000")
         connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute("PRAGMA journal_mode = WAL")
-        connection.execute("PRAGMA busy_timeout = 5000")
+        try:
+            connection.execute("PRAGMA journal_mode = WAL")
+        except sqlite3.OperationalError as exc:
+            # A concurrent initializer may already hold the schema/journal lock.
+            # The following DDL/BEGIN IMMEDIATE still observes busy_timeout and
+            # provides the required transaction boundary; journal negotiation is
+            # safe to retry on a later connection.
+            if "locked" not in str(exc).lower():
+                connection.close()
+                raise
         try:
             yield connection
         finally:
@@ -1967,6 +2160,45 @@ CREATE TABLE IF NOT EXISTS telegram_updates (
 );
 
 CREATE INDEX IF NOT EXISTS idx_telegram_updates_status ON telegram_updates(processing_status);
+
+CREATE TABLE IF NOT EXISTS control_auth_replays (
+  init_data_hash TEXT PRIMARY KEY,
+  owner_id TEXT NOT NULL,
+  auth_date INTEGER NOT NULL,
+  consumed_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_control_auth_replays_expires_at
+  ON control_auth_replays(expires_at);
+
+CREATE TABLE IF NOT EXISTS control_request_receipts (
+  owner_id TEXT NOT NULL,
+  idempotency_key_hash TEXT NOT NULL,
+  request_hash TEXT NOT NULL,
+  public_job_id TEXT NOT NULL UNIQUE,
+  job_id TEXT NOT NULL UNIQUE REFERENCES jobs(job_id) ON DELETE CASCADE,
+  task_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (owner_id, idempotency_key_hash)
+);
+
+CREATE INDEX IF NOT EXISTS idx_control_request_owner_public_job
+  ON control_request_receipts(owner_id, public_job_id);
+
+CREATE TABLE IF NOT EXISTS job_notification_routes (
+  job_id TEXT PRIMARY KEY REFERENCES jobs(job_id) ON DELETE CASCADE,
+  channel TEXT NOT NULL,
+  chat_id TEXT NOT NULL,
+  public_job_id TEXT NOT NULL DEFAULT '',
+  processing_status TEXT NOT NULL DEFAULT 'pending',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_job_notification_routes_status
+  ON job_notification_routes(channel, processing_status, created_at);
 
 CREATE TABLE IF NOT EXISTS card_work_items (
   internal_sku TEXT PRIMARY KEY,

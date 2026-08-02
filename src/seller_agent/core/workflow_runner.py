@@ -47,6 +47,7 @@ from seller_agent.tasks.reviews_questions import (
 )
 from seller_agent.tasks.seller_sku_update import run_seller_sku_update_verify
 from seller_agent.tasks.status_preflight import run_status_preflight
+from seller_agent.tasks.store_analytics_overview import run_store_analytics_overview
 from seller_agent.tasks.wb_actions_discount_apply import run_wb_actions_discount_apply, run_wb_actions_discount_verify
 from seller_agent.tasks.wb_actions_discount_plan import run_wb_actions_discount_plan
 from seller_agent.tasks.wb_liquidation_stage2_plan import run_wb_liquidation_stage2_plan
@@ -272,6 +273,7 @@ def default_workflow_handlers() -> dict[str, WorkflowHandler]:
         "ozon-lk-state-monitor": _ozon_lk_state_monitor_handler,
         "ozon-min-price-timer-plan": _ozon_min_price_timer_plan_handler,
         "marketplace-period-report": _marketplace_period_report_handler,
+        "store-analytics-overview": _store_analytics_overview_handler,
         "ozon-stock-supply-monitor": _ozon_stock_supply_monitor_handler,
         "ozon-production-work-plan": _ozon_production_work_plan_handler,
         "ozon-pricing-margin": _ozon_pricing_margin_handler,
@@ -456,6 +458,27 @@ def _marketplace_period_report_handler(
         date_from=_optional_str(inputs.get("date_from")) or "",
         date_to=_optional_str(inputs.get("date_to")) or "",
         run_id=_optional_str(inputs.get("run_id")),
+    )
+
+
+def _store_analytics_overview_handler(
+    task: RegisteredTask,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    if credentials is None:
+        raise ValueError(f"Task `{task.name}` requires credentials.")
+    return run_store_analytics_overview(
+        credentials=credentials,
+        data_dir=data_dir,
+        marketplace=_optional_str(inputs.get("marketplace")) or "",
+        period_days=_int_input(inputs, "period_days", 0),
+        run_id=_optional_str(inputs.get("run_id")),
+        wb_supplier_id=_optional_str(inputs.get("wb_supplier_id")) or "4516781",
+        ozon_seller_slug=_optional_str(inputs.get("ozon_seller_slug")) or "vital-shevron",
+        region_id=_optional_str(inputs.get("region_id")) or "",
+        query_pack_id=_optional_str(inputs.get("query_pack_id")) or "",
     )
 
 

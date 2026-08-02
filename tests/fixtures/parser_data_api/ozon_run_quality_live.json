@@ -1,0 +1,20 @@
+{
+  "dataset": "ozon",
+  "limit": 100,
+  "rows": [
+    {
+      "analytical_date": "2026-07-31",
+      "component": "serp",
+      "is_analytics_eligible": true,
+      "is_published": true,
+      "status": "success"
+    },
+    {
+      "analytical_date": "2026-07-30",
+      "component": "serp",
+      "is_analytics_eligible": true,
+      "is_published": true,
+      "status": "success"
+    }
+  ]
+}
