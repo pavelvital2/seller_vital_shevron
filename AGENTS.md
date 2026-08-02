@@ -234,6 +234,10 @@
   аналитических skills/plugins для Ozon/WB аналитики.
 - `data/planning/telegram_bot_management_transition_plan.md` - поэтапный план
   перехода Vital Shevron к управлению Ozon/WB через Telegram-бота.
+- `data/planning/hybrid_transition_stage4a_readonly_control_tz_2026-08-02.md` -
+  утверждённое ТЗ первого Stage 4 read-only operational control.
+- `data/planning/stage4a_readonly_control_runbook.md` - server-side control
+  contracts, read-only API/Mini App, offline verification и rollback Stage 4A.
 - `data/reference/api_docs/README.md` - реестр API-документации Ozon/WB:
   официальные источники, локальные OpenAPI/Swagger-схемы, карточки endpoint-ов,
   даты проверки, ограничения и правила регулярного обновления.
