@@ -577,7 +577,12 @@ def _runtime_approval_markup(approval: ApprovalRecord | None) -> dict[str, Any]:
             ]
         }
     if approval.status == "approved":
-        return {"inline_keyboard": [[{"text": "Применить", "callback_data": f"app:{token}"}]]}
+        return {
+            "inline_keyboard": [[
+                {"text": "Применить", "callback_data": f"app:{token}"},
+                {"text": "Отменить", "callback_data": f"apr:{token}"},
+            ]]
+        }
     if approval.status in {"applied", "applying_unknown"}:
         return {"inline_keyboard": [[{"text": "Проверить", "callback_data": f"apv:{token}"}]]}
     return {}

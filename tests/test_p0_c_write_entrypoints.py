@@ -895,7 +895,7 @@ def test_runtime_job_notifier_generates_only_real_approval_token_callbacks() -> 
     token = approval_callback_token(approval_id)
     cases = {
         "pending_review": {f"apa:{token}", f"apr:{token}"},
-        "approved": {f"app:{token}"},
+        "approved": {f"app:{token}", f"apr:{token}"},
         "applied": {f"apv:{token}"},
         "applying_unknown": {f"apv:{token}"},
     }

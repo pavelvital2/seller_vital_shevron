@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 import csv
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta
@@ -3678,13 +3679,18 @@ def _truncate(value: str, limit: int) -> str:
 def _approvals(*, data_dir: Path, runtime_db: Path = DEFAULT_RUNTIME_DB) -> TelegramCommandResult:
     if runtime_db == DEFAULT_RUNTIME_DB and data_dir != Path("data"):
         runtime_db = data_dir.parent / "runtime" / "runtime.db"
-    status = run_approvals_status(data_dir=data_dir, runtime_db=runtime_db, limit=10)
-    rows = status.get("rows") if isinstance(status.get("rows"), list) else []
-    status_counts = status.get("status_counts") if isinstance(status.get("status_counts"), dict) else {}
+    status = run_approvals_status(data_dir=data_dir, runtime_db=runtime_db, limit=200)
+    all_rows = status.get("rows") if isinstance(status.get("rows"), list) else []
+    actionable_statuses = {"pending_review", "approved"}
+    rows = [row for row in all_rows if row.get("lifecycle_status") in actionable_statuses]
+    unknown_rows = [row for row in all_rows if row.get("lifecycle_status") == "applying_unknown"]
+    status_counts = Counter(str(row.get("lifecycle_status") or "unknown") for row in rows)
+    shown_rows = rows[:10]
     lines = [
         "Согласования",
         "",
-        f"Итог: открытых строк `{status.get('rows_count', 0)}`, показано `{status.get('returned_rows_count', 0)}`.",
+        f"Итог: ожидают решения или применения `{len(rows)}`, показано `{len(shown_rows)}`.",
+        f"Исторический неопределённый хвост: `{len(unknown_rows)}`.",
         "",
         "Режим: read-only. Изменений в магазинах не выполнял.",
         "",
@@ -3699,7 +3705,7 @@ def _approvals(*, data_dir: Path, runtime_db: Path = DEFAULT_RUNTIME_DB) -> Tele
     if not rows:
         lines.append("- нет строк")
     keyboard: list[list[dict[str, str]]] = []
-    for row in rows[:5]:
+    for row in shown_rows[:5]:
         lines.append(
             f"- `{row.get('kind')}` `{row.get('id')}`: `{row.get('lifecycle_status')}`"
         )
@@ -3713,14 +3719,30 @@ def _approvals(*, data_dir: Path, runtime_db: Path = DEFAULT_RUNTIME_DB) -> Tele
                 {"text": "Отклонить", "callback_data": f"apr:{token}"},
             ])
         elif lifecycle == "approved":
-            keyboard.append([{"text": "Применить", "callback_data": f"app:{token}"}])
-        elif lifecycle in {"applied", "applying_unknown"}:
-            keyboard.append([{"text": "Проверить", "callback_data": f"apv:{token}"}])
-    if len(rows) > 5:
-        lines.append(f"- ... еще `{len(rows) - 5}`")
+            keyboard.append([
+                {"text": "Применить", "callback_data": f"app:{token}"},
+                {"text": "Отменить", "callback_data": f"apr:{token}"},
+            ])
+    if len(shown_rows) > 5:
+        lines.append(f"- ... еще `{len(shown_rows) - 5}`")
+    if unknown_rows:
+        lines.extend(
+            [
+                "",
+                "Исторический хвост `applying_unknown`:",
+                *[
+                    f"- `{row.get('kind')}` `{row.get('id')}`: повторный apply заблокирован"
+                    for row in unknown_rows[:5]
+                ],
+            ]
+        )
+        if len(unknown_rows) > 5:
+            lines.append(f"- ... еще `{len(unknown_rows) - 5}`")
     lines.extend(
         [
             "",
+            "Исторические `applied/closed/rejected` в очередь не входят и повторно применены быть не могут.",
+            "`applying_unknown` хранится только для аудита; штатный повторный apply также запрещён.",
             "Runtime-согласования управляются кнопками ниже; apply и verify выполняет только Job Worker.",
         ]
     )

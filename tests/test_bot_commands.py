@@ -25,6 +25,7 @@ from seller_agent.cli import main
 from seller_agent.core.resource_keys import OZON_LK_PROFILE_KEY
 from seller_agent.core.job_store import JobStore
 from seller_agent.core.run_manifest import manifest_from_summary, write_run_manifest
+from seller_agent.safety.approval_package import build_approval_package
 
 
 def test_bot_help_lists_read_only_mvp_commands() -> None:
@@ -768,6 +769,65 @@ def test_bot_approvals_summarizes_open_packages(tmp_path: Path) -> None:
     assert "Согласования" in result.text
     assert "`approved`: `2`" in result.text
     assert "reviews_questions_test_approved" in result.text
+
+
+def test_bot_approvals_excludes_applied_history_from_action_queue(tmp_path: Path) -> None:
+    runtime_db = tmp_path / "runtime.db"
+    store = JobStore(runtime_db)
+    for approval_id, lifecycle in (("approval-pending", "pending_review"), ("approval-history", "applied")):
+        package = build_approval_package(
+            approval_id=approval_id,
+            task_id="ozon-elastic-apply",
+            source_plan_task="ozon-elastic-plan",
+            verify_task="ozon-elastic-verify",
+            source_kind="plan_run_id",
+            source_ref=json.dumps(f"plan-{approval_id}"),
+            apply_params={"plan_run_id": f"plan-{approval_id}"},
+            marketplaces=("ozon",),
+        )
+        store.create_approval(
+            approval_id=approval_id,
+            source_job_id=f"job-{approval_id}",
+            status=lifecycle,
+            checksum=str(package["approval_checksum"]),
+            data=package,
+        )
+
+    result = dispatch_message("/approvals", data_dir=tmp_path / "data", runtime_db=runtime_db)
+
+    assert "ожидают решения или применения `1`" in result.text
+    assert "approval-pending" in result.text
+    assert "approval-history" not in result.text
+    assert "Исторические `applied/closed/rejected`" in result.text
+
+
+def test_bot_approvals_separates_unknown_history_without_action_button(tmp_path: Path) -> None:
+    runtime_db = tmp_path / "runtime.db"
+    store = JobStore(runtime_db)
+    package = build_approval_package(
+        approval_id="approval-unknown-history",
+        task_id="ozon-elastic-apply",
+        source_plan_task="ozon-elastic-plan",
+        verify_task="ozon-elastic-verify",
+        source_kind="plan_run_id",
+        source_ref=json.dumps("plan-unknown-history"),
+        apply_params={"plan_run_id": "plan-unknown-history"},
+        marketplaces=("ozon",),
+    )
+    store.create_approval(
+        approval_id="approval-unknown-history",
+        source_job_id="job-unknown-history",
+        status="applying_unknown",
+        checksum=str(package["approval_checksum"]),
+        data=package,
+    )
+
+    result = dispatch_message("/approvals", data_dir=tmp_path / "data", runtime_db=runtime_db)
+
+    assert "ожидают решения или применения `0`" in result.text
+    assert "Исторический неопределённый хвост: `1`" in result.text
+    assert "approval-unknown-history" in result.text
+    assert result.reply_markup == {}
 
 
 def test_bot_catalog_uses_unified_catalog_manifest(tmp_path: Path) -> None:

@@ -612,7 +612,11 @@ class JobService:
         return self.store.get_approval(approval_id)  # type: ignore[return-value]
 
     def reject(self, approval_id: str) -> ApprovalRecord:
-        if not self.store.decide_approval(approval_id=approval_id, status="rejected"):
+        if not self.store.decide_approval(
+            approval_id=approval_id,
+            status="rejected",
+            expected_statuses=("pending_review", "approved"),
+        ):
             current = self.store.get_approval(approval_id)
             if current is None:
                 raise KeyError(f"Unknown approval: {approval_id}")

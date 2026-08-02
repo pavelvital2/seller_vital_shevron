@@ -892,6 +892,25 @@ def test_pending_review_can_be_rejected_with_distinct_audit_event(tmp_path: Path
     ]
 
 
+def test_approved_can_be_revoked_before_apply_with_exact_audit_event(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "runtime.db")
+    approval = _create_approval(
+        store,
+        approval_id="approval-approved-revoked",
+        status="approved",
+    )
+    service = _service(tmp_path, store)
+
+    rejected = service.reject(approval.approval_id)
+
+    assert rejected.status == "rejected"
+    event = store.list_approval_events(approval.approval_id)[-1]
+    assert event.event_type == "approval_rejected"
+    assert event.status_before == "approved"
+    assert event.status_after == "rejected"
+    assert store.list_jobs(limit=10) == []
+
+
 def test_lifecycle_schema_upgrade_preserves_existing_approval_row(tmp_path: Path) -> None:
     db_path = tmp_path / "runtime.db"
     store = JobStore(db_path)

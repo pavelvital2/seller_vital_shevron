@@ -1385,9 +1385,16 @@ class JobStore:
         placeholders = ",".join("?" for _ in expected_statuses)
         now = _now()
         with self._transaction() as connection:
+            current = connection.execute(
+                f"SELECT status FROM approvals WHERE approval_id = ? AND status IN ({placeholders})",
+                (approval_id, *expected_statuses),
+            ).fetchone()
+            if current is None:
+                return False
+            status_before = str(current["status"])
             cursor = connection.execute(
-                f"UPDATE approvals SET status = ?, updated_at = ? WHERE approval_id = ? AND status IN ({placeholders})",
-                (status, now, approval_id, *expected_statuses),
+                "UPDATE approvals SET status = ?, updated_at = ? WHERE approval_id = ? AND status = ?",
+                (status, now, approval_id, status_before),
             )
             if cursor.rowcount == 1:
                 self._insert_approval_event(
@@ -1396,7 +1403,7 @@ class JobStore:
                     event_type=(
                         "approval_approved" if status == "approved" else "approval_rejected"
                     ),
-                    status_before="pending_review",
+                    status_before=status_before,
                     status_after=status,
                     created_at=now,
                 )
