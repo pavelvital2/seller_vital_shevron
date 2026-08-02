@@ -2,8 +2,9 @@
 
 Дата: 2026-08-02
 
-Статус: implementation checkpoint; установка в production запрещена до
-отдельного architect/deployment gate.
+Статус: функциональный и security production gates завершены. Постоянный
+system-level service установлен с полным hardening; временный user-service
+выключен.
 
 ## Итог первого slice
 
@@ -202,36 +203,65 @@ UI не использует decorative gradients, viewport-scaled font size и�
 `letter-spacing`; радиус карточек, controls и navigation не превышает 8 px.
 Исключение — круглый status dot.
 
-## Deployment examples (не установлены)
+## Deployment artifact и production gate
 
-- `deploy/systemd/user/vital-shevron-control-plane.service.example`;
+- `deploy/systemd/system/vital-shevron-control-plane.service.example`;
 - `deploy/nginx/vital-shevron-control-plane.location.conf.example`;
 - `deploy/env/vital-shevron-control-plane.env.example`.
 
-Unit example использует `ProtectHome=tmpfs` и выборочно bind-mount только
-production project, writable `runtime`/`.sessions/telegram`, два control secret
-files и shared Python `/home/Codex/agent-tools/python`. `.ssh`, `.codex`,
-`.config`, `.local`, старый bot token и marketplace/session secrets явно
-недоступны. Этот namespace contract проверяется статическим offline test;
-фактический `systemd-analyze security`/service start требует отдельного
-production deployment gate и в implementation checkpoint не выполняется.
+Функциональный production gate 2026-08-02 до security cutover подтвердил:
 
-Перед production pilot требуется отдельно:
+- owner URL `https://83328.koara.live/vital-shevron/` доступен;
+- control service вышел в active и восстановился после restart;
+- реальный read-only Ozon Moscow 7-day job завершился `partial_success`;
+- server-created control notification route перешёл в `sent`;
+- старый bot, единственный Job Worker и Ozon keeper остались active;
+- marketplace write не выполнялся.
 
-1. создать independent session secret (`0600`) и env file (`0600`), не
-   печатая значения;
-2. подтвердить owner ID allowlist и реальный HTTPS URL;
-3. установить dependency из `pyproject.toml` (`aiohttp>=3.14,<3.15`);
-4. проверить Nginx config, затем добавить только новый route;
-5. установить только новый unit example;
-6. убедиться, что старый bot и ровно один Job Worker остались active;
-7. выполнить owner-only smoke и restart/reboot recovery.
+Первичный security gate временного user-service выявил, что его MainPID
+разделял общий host mount namespace, поэтому `ProtectHome=tmpfs` и
+`Bind*Paths` фактически не изолировали процесс. Удаление `PrivateDevices`,
+`ProtectClock`, `ProtectKernelLogs` и `ProtectKernelModules` устраняло
+`218/CAPABILITIES` в user manager systemd 255, но являлось только
+диагностическим compatibility workaround и не допускается как постоянный
+hardening contract.
+
+Постоянный system-level unit установлен как
+`/etc/systemd/system/vital-shevron-control-plane.service`. Он запускает процесс
+с `User=pavel` и `Group=pavel`, а system manager создаёт namespace до сброса
+привилегий. Unit сохраняет полный исходный hardening, включая
+`PrivateDevices=true`, `ProtectClock=true`, `ProtectKernelLogs=true`,
+`ProtectKernelModules=true`, `ProtectHome=tmpfs`, `ProtectSystem=strict`,
+selective binds и `NoNewPrivileges=true`. User-level example удалён, чтобы не
+оставлять двусмысленного или ослабленного deployment path.
+
+Фактический env `deploy/env/vital-shevron-control-plane.env` должен иметь mode
+`0600` и exact запись в `.gitignore`; example остаётся tracked без значений
+секретов.
+
+Завершённый system-unit security gate подтвердил:
+
+1. system-level service active и enabled, временный user-service disabled и
+   inactive;
+2. MainPID использует отдельный от host mount namespace, `/home` представлен
+   отдельным `tmpfs`;
+3. project, shared Python и два control secret files доступны только через
+   selective binds; `runtime` и `.sessions/telegram` доступны на запись;
+4. старый bot token и Parser env недоступны, Ozon/WB session directories
+   заменены inaccessible paths с mode `000`;
+5. после cutover реальный read-only WB Moscow 7-day job завершился
+   `partial_success`, а Parser freshness подтверждена как fresh;
+6. server-created control notification route перешёл в `sent`;
+7. system service восстановился после restart, публичный `/ready` вернулся в
+   рабочее состояние;
+8. старый bot, единственный Job Worker и Ozon keeper остались active;
+9. marketplace write не выполнялся.
 
 ## Rollback
 
 Rollback Stage 3 первого slice:
 
-1. stop/disable только `vital-shevron-control-plane.service`;
+1. stop/disable только system-level `vital-shevron-control-plane.service`;
 2. удалить только `/vital-shevron/` Nginx location и reload Nginx после
    config test;
 3. control state/lock можно архивировать; additive SQLite tables можно

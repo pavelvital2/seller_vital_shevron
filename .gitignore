@@ -1,6 +1,7 @@
 .env
 .env.*
 !.env.example
+/deploy/env/vital-shevron-control-plane.env
 
 __pycache__/
 *.py[cod]
