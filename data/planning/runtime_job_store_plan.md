@@ -387,6 +387,19 @@ worker/job runner -> result -> send final report
 - `JobRunner.run_next()` берет самый старый queued job (FIFO);
 - notifier отправляет task-aware сводку, report и следующую inline-кнопку.
 
+С 2026-08-02 transient-конфликт resource lease имеет отдельный worker
+контракт. `resource_locked` не является terminal failure: job остается
+`queued`, claim освобождается, результат помечается как `deferred`, а текущий
+`run-job-loop` после одной такой попытки прекращается и уступает очередь до
+следующего timer tick. Это исключает tight loop с повторным выбором того же
+FIFO job и не ослабляет exact resource lease. Отдельный `not_before` в SQLite
+не используется: durable retry сохраняется статусом `queued`, а bounded
+backoff задается штатной периодичностью worker timer. `after_run` и оба CLI
+entrypoint (`run-job-next`, `run-job-loop`) вызывают Telegram notifier только
+для terminal job. Сам notifier дополнительно fail-closed возвращает
+`job_not_terminal` без отправки и без изменения `telegram_updates`, если ему
+передали nonterminal job напрямую.
+
 С 2026-07-18 по явному решению владельца systemd worker/timer вводится в
 эксплуатацию вместе с `--runtime-jobs` в основном bot unit. Перед включением
 проверяется пустая активная очередь и отсутствие approvals в

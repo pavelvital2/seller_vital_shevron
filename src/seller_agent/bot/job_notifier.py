@@ -19,6 +19,7 @@ from seller_agent.core.job_store import (
     DEFAULT_RUNTIME_DB,
     ApprovalSourceJobAmbiguousError,
     JobStore,
+    TERMINAL_JOB_STATUSES,
     approval_callback_token,
 )
 
@@ -49,6 +50,12 @@ def notify_telegram_job_result(
     job = job_store.get_job(job_id)
     if job is None:
         return JobNotificationResult(ok=False, job_id=job_id, blocked_reason="unknown_job")
+    if job.status not in TERMINAL_JOB_STATUSES:
+        return JobNotificationResult(
+            ok=True,
+            job_id=job_id,
+            blocked_reason="job_not_terminal",
+        )
     update = job_store.get_telegram_update_by_job_id(job_id)
     if update is None:
         return JobNotificationResult(ok=False, job_id=job_id, blocked_reason="missing_telegram_update")

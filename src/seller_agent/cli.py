@@ -21,7 +21,7 @@ from seller_agent.bot.job_notifier import notify_telegram_job_result
 from seller_agent.config import load_credentials
 from seller_agent.core.job_runner import JobRunner
 from seller_agent.core.job_service import JobService
-from seller_agent.core.job_store import DEFAULT_RUNTIME_DB, JobStore
+from seller_agent.core.job_store import DEFAULT_RUNTIME_DB, TERMINAL_JOB_STATUSES, JobStore
 from seller_agent.core.job_worker import JobWorker
 from seller_agent.core.run_manifest import find_run, latest_run, list_runs
 from seller_agent.tasks.approvals import run_approvals_close, run_approvals_status
@@ -2453,7 +2453,10 @@ def main(argv: list[str] | None = None) -> int:
             service = JobService(store=store, data_dir=data_dir, runtime_db=runtime_db)
             runner_result = JobRunner(service).run_next()
             notification = None
-            if runner_result.job is not None:
+            if (
+                runner_result.job is not None
+                and runner_result.job.status in TERMINAL_JOB_STATUSES
+            ):
                 notification = notify_telegram_job_result(
                     token=token,
                     job_id=runner_result.job.job_id,
@@ -2464,6 +2467,7 @@ def main(argv: list[str] | None = None) -> int:
             result = {
                 "ok": runner_result.ok and (notification.ok if notification else True),
                 "ran": runner_result.ran,
+                "deferred": runner_result.deferred,
                 "message": runner_result.message,
                 "job": asdict(runner_result.job) if runner_result.job else None,
                 "notification": asdict(notification) if notification else None,

@@ -22,6 +22,7 @@ from seller_agent.bot.telegram_runner import (
     send_preview_command,
 )
 from seller_agent.cli import main
+from seller_agent.core.resource_keys import OZON_LK_PROFILE_KEY
 from seller_agent.core.job_store import JobStore
 from seller_agent.core.run_manifest import manifest_from_summary, write_run_manifest
 
@@ -2391,6 +2392,119 @@ def test_notify_telegram_job_result_marks_notification_failure(tmp_path: Path) -
     update = store.get_telegram_update(502)
     assert update is not None
     assert update.processing_status == "notification_failed"
+
+
+def test_notify_telegram_job_result_ignores_nonterminal_job_without_state_change(
+    tmp_path: Path,
+) -> None:
+    runtime_db = tmp_path / "runtime.db"
+    store = JobStore(runtime_db)
+    job = store.create_job(
+        task_id="ozon-lk-state-monitor",
+        actor="telegram:123",
+        job_id="job_nonterminal_notify_test",
+        status="queued",
+    )
+    store.register_telegram_update(
+        update_id=503,
+        chat_id="123",
+        command="/ozon-session",
+        job_id=job.job_id,
+        payload={"thread_id": 55, "safe_marker": "unchanged"},
+        processing_status="queued",
+    )
+    before = store.get_telegram_update(503)
+    calls: list[tuple[str, str, dict]] = []
+
+    def forbidden_api(token: str, method: str, payload: dict) -> dict:
+        calls.append((token, method, payload))
+        raise AssertionError("nonterminal job must not notify Telegram")
+
+    result = notify_telegram_job_result(
+        token="test-token",
+        job_id=job.job_id,
+        store=store,
+        data_dir=tmp_path / "data",
+        api_request=forbidden_api,
+    )
+
+    assert result.ok is True
+    assert result.blocked_reason == "job_not_terminal"
+    assert result.sent_messages == []
+    assert result.sent_documents == []
+    assert calls == []
+    assert store.get_telegram_update(503) == before
+
+
+@pytest.mark.parametrize("action", ("run-job-next", "run-job-loop"))
+def test_cli_job_worker_defers_lease_busy_job_without_notification(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    action: str,
+) -> None:
+    from seller_agent import cli
+
+    runtime_db = tmp_path / f"{action}.db"
+    store = JobStore(runtime_db)
+    assert store.acquire_resource_lease(
+        resource_key=OZON_LK_PROFILE_KEY,
+        owner_id="session-refresh",
+        ttl_seconds=60,
+    ) is not None
+    job = store.create_job(
+        task_id="ozon-lk-state-monitor",
+        actor="telegram:123",
+        status="queued",
+    )
+    store.register_telegram_update(
+        update_id=700 if action == "run-job-next" else 701,
+        chat_id="123",
+        command="/ozon-session",
+        job_id=job.job_id,
+        payload={"thread_id": 55},
+        processing_status="queued",
+    )
+    update_before = store.get_telegram_update_by_job_id(job.job_id)
+    token_file = tmp_path / "telegram-token"
+    token_file.write_text("test-token\n", encoding="utf-8")
+
+    def forbidden_notification(**kwargs: object) -> object:
+        raise AssertionError("deferred job must not invoke Telegram notifier")
+
+    monkeypatch.setattr(cli, "notify_telegram_job_result", forbidden_notification)
+    args = [
+        "bot",
+        action,
+        "--token-file",
+        str(token_file),
+        "--runtime-db",
+        str(runtime_db),
+        "--data-dir",
+        str(tmp_path / "data"),
+    ]
+    if action == "run-job-loop":
+        args.extend(["--max-iterations", "13", "--poll-interval", "0"])
+
+    assert main(args) == 0
+    output = json.loads(capsys.readouterr().out)
+
+    assert output["ok"] is True
+    if action == "run-job-next":
+        assert output["deferred"] is True
+        assert output["notification"] is None
+    else:
+        assert output["summary"]["iterations"] == 1
+        assert output["summary"]["ran_jobs"] == 1
+        assert output["summary"]["failed_jobs"] == 0
+        assert output["summary"]["deferred_jobs"] == 1
+        assert output["notifications"] == []
+    assert store.get_job(job.job_id).status == "queued"  # type: ignore[union-attr]
+    assert store.get_job_claim(job.job_id) is None
+    assert store.get_telegram_update_by_job_id(job.job_id) == update_before
+    assert [event.event_type for event in store.list_events(job.job_id)].count(
+        "job_resource_blocked"
+    ) == 1
 
 
 def test_job_result_text_redacts_sensitive_worker_error(tmp_path: Path) -> None:

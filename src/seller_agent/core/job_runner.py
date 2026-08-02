@@ -12,6 +12,7 @@ class JobRunnerResult:
     job: JobRecord | None
     ran: bool
     ok: bool
+    deferred: bool = False
     message: str = ""
 
 
@@ -73,4 +74,11 @@ class JobRunner:
             claim_token=claim.claim_token,
             worker_id=claim.worker_id,
         )
-        return JobRunnerResult(job=result.job, ran=True, ok=result.ok, message=result.message)
+        deferred = result.status == "resource_locked" and result.job.status == "queued"
+        return JobRunnerResult(
+            job=result.job,
+            ran=True,
+            ok=result.ok or deferred,
+            deferred=deferred,
+            message=result.message,
+        )
