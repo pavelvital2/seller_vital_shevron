@@ -1,14 +1,45 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from typing import Any, Callable
+import inspect
+from typing import Any, Callable, Mapping
 
 from seller_agent.core.run_manifest import ManifestMode, ManifestRisk
-from seller_agent.core.resource_keys import task_resource_keys
+from seller_agent.core.resource_keys import (
+    canonical_api_write_key,
+    is_canonical_api_write_key,
+    is_canonical_lk_profile_key,
+    task_resource_keys,
+)
 
 
 TaskHandler = Callable[..., dict[str, Any]]
 TaskExecutor = str
+
+
+def _apply_parameter_schema(
+    source_field: str = "plan_run_id",
+    **business_fields: dict[str, Any],
+) -> dict[str, Any]:
+    schema = {
+        source_field: {"type": "string", "minLength": 1, "required": True},
+        **business_fields,
+        "approval_id": {"type": "string", "minLength": 1, "required": True},
+        "approval_checksum": {"type": "string", "minLength": 1, "required": True},
+        "confirmed_by_user": {"type": "boolean", "const": True, "required": True},
+    }
+    return schema
+
+
+def _apply_result_schema() -> dict[str, Any]:
+    return {
+        "overall_status": {
+            "type": "string",
+            "enum": ["ok", "warning", "partial", "blocked", "error"],
+            "required": True,
+        },
+        "run_id": {"type": "string", "minLength": 1, "required": True},
+    }
 
 
 @dataclass(frozen=True)
@@ -36,8 +67,10 @@ class RegisteredTask:
     lock_keys: tuple[str, ...] = field(default_factory=tuple)
     source_plan_task: str = ""
     verify_task: str = ""
+    approval_source_field: str = ""
     supports_cancel: bool = False
     enabled: bool = True
+    disabled_reason: str = ""
 
     @property
     def is_read_only(self) -> bool:
@@ -59,10 +92,17 @@ class RegisteredTask:
         return data
 
     def policy_issues(self) -> list[str]:
-        if not self.enabled:
-            return []
         issues: list[str] = []
-        if self.mode == "apply":
+        if not self.enabled:
+            if self.is_write:
+                if not self.disabled_reason.strip():
+                    issues.append("disabled_write_missing_reason")
+                if self.telegram_enabled:
+                    issues.append("disabled_write_telegram_exposed")
+            return issues
+        if self.is_write:
+            if self.mode != "apply":
+                issues.append("write_mode_not_apply")
             if not self.requires_confirmation:
                 issues.append("apply_requires_confirmation")
             if not self.source_plan_task:
@@ -71,6 +111,10 @@ class RegisteredTask:
                 issues.append("apply_missing_verify_task")
             if not self.lock_keys:
                 issues.append("apply_missing_lock_keys")
+            if not self.parameter_schema:
+                issues.append("apply_missing_parameter_schema")
+            if not self.result_schema:
+                issues.append("apply_missing_result_schema")
         if self.telegram_enabled and not self.telegram_button_label:
             issues.append("telegram_missing_button_label")
         if self.executor not in {"script", "agent", "hybrid"}:
@@ -130,20 +174,191 @@ class TaskRegistry:
     def to_list(self, **filters: Any) -> list[dict[str, Any]]:
         return [task.to_dict() for task in self.list(**filters)]
 
-    def policy_issues(self) -> list[dict[str, Any]]:
+    def policy_issues(
+        self,
+        *,
+        handlers: Mapping[str, object] | None = None,
+    ) -> list[dict[str, Any]]:
+        if handlers is None:
+            # Lazy import avoids a registry -> runner -> registry import cycle.
+            from seller_agent.core.workflow_runner import default_workflow_handlers
+
+            handlers = default_workflow_handlers()
         issues: list[dict[str, Any]] = []
+
+        def append_issue(task: RegisteredTask, issue: str) -> None:
+            issues.append(
+                {
+                    "task": task.name,
+                    "command": task.command,
+                    "mode": task.mode,
+                    "risk": task.risk,
+                    "issue": issue,
+                }
+            )
+
         for task in self.list():
             for issue in task.policy_issues():
-                issues.append(
-                    {
-                        "task": task.name,
-                        "command": task.command,
-                        "mode": task.mode,
-                        "risk": task.risk,
-                        "issue": issue,
-                    }
-                )
+                append_issue(task, issue)
+            if not task.enabled or not task.is_write:
+                continue
+            if task.name not in handlers:
+                append_issue(task, "apply_missing_runtime_handler")
+            elif not callable(handlers[task.name]):
+                append_issue(task, "apply_runtime_handler_not_callable")
+            elif not _valid_runtime_handler_signature(handlers[task.name]):
+                append_issue(task, "apply_runtime_handler_signature_invalid")
+            if not _valid_apply_parameter_schema(task):
+                append_issue(task, "apply_parameter_schema_invalid")
+            if not _valid_apply_result_schema(task.result_schema):
+                append_issue(task, "apply_result_schema_invalid")
+            for lock_key in task.lock_keys:
+                if not _is_canonical_lock_key(lock_key):
+                    append_issue(task, "apply_invalid_lock_key")
+            expected_api_write_keys = {
+                canonical_api_write_key(marketplace)
+                for marketplace in task.marketplaces
+            }
+            actual_api_write_keys = {
+                lock_key
+                for lock_key in task.lock_keys
+                if is_canonical_api_write_key(lock_key)
+            }
+            if actual_api_write_keys != expected_api_write_keys:
+                append_issue(task, "apply_api_write_locks_mismatch")
+            if task.source_plan_task:
+                source = self._tasks.get(task.source_plan_task)
+                if source is None:
+                    append_issue(task, "apply_source_plan_not_registered")
+                else:
+                    if not source.enabled:
+                        append_issue(task, "apply_source_plan_disabled")
+                    if source.mode != "dry_run" or source.is_write:
+                        append_issue(task, "apply_source_plan_unsafe_mode")
+                    if frozenset(source.marketplaces) != frozenset(task.marketplaces):
+                        append_issue(task, "apply_source_plan_marketplaces_mismatch")
+                    if source.name not in handlers:
+                        append_issue(task, "apply_source_plan_missing_runtime_handler")
+                    elif not callable(handlers[source.name]):
+                        append_issue(task, "apply_source_plan_runtime_handler_not_callable")
+                    elif not _valid_runtime_handler_signature(handlers[source.name]):
+                        append_issue(
+                            task,
+                            "apply_source_plan_runtime_handler_signature_invalid",
+                        )
+            if task.verify_task:
+                verify = self._tasks.get(task.verify_task)
+                if verify is None:
+                    append_issue(task, "apply_verify_not_registered")
+                else:
+                    if not verify.enabled:
+                        append_issue(task, "apply_verify_disabled")
+                    if verify.mode != "verify" or verify.is_write:
+                        append_issue(task, "apply_verify_mode_invalid")
+                    if frozenset(verify.marketplaces) != frozenset(task.marketplaces):
+                        append_issue(task, "apply_verify_marketplaces_mismatch")
+                    if verify.name not in handlers:
+                        append_issue(task, "apply_verify_missing_runtime_handler")
+                    elif not callable(handlers[verify.name]):
+                        append_issue(task, "apply_verify_runtime_handler_not_callable")
+                    elif not _valid_runtime_handler_signature(handlers[verify.name]):
+                        append_issue(
+                            task,
+                            "apply_verify_runtime_handler_signature_invalid",
+                        )
         return issues
+
+
+def _valid_runtime_handler_signature(handler: object) -> bool:
+    try:
+        parameters = tuple(inspect.signature(handler).parameters.values())
+    except (TypeError, ValueError):
+        return False
+    expected_names = ("task", "data_dir", "credentials", "inputs")
+    return bool(
+        len(parameters) == len(expected_names)
+        and tuple(parameter.name for parameter in parameters) == expected_names
+        and all(
+            parameter.kind
+            in {inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD}
+            and parameter.default is inspect.Parameter.empty
+            for parameter in parameters
+        )
+    )
+
+
+def _required_string_field(schema: Mapping[str, Any], field_name: str) -> bool:
+    field_schema = schema.get(field_name)
+    return bool(
+        isinstance(field_schema, Mapping)
+        and field_schema.get("type") == "string"
+        and field_schema.get("required") is True
+        and type(field_schema.get("minLength")) is int
+        and field_schema["minLength"] >= 1
+    )
+
+
+def _valid_apply_parameter_schema(task: RegisteredTask) -> bool:
+    schema = task.parameter_schema
+    source_field = task.approval_source_field
+    if source_field not in {"plan_run_id", "source_run_id"}:
+        return False
+    if not _required_string_field(schema, source_field):
+        return False
+    conflicting_source = (
+        {"plan_run_id", "source_run_id"} - {source_field}
+    ).intersection(schema)
+    if conflicting_source:
+        return False
+    if not _required_string_field(schema, "approval_id"):
+        return False
+    if not _required_string_field(schema, "approval_checksum"):
+        return False
+    confirmation = schema.get("confirmed_by_user")
+    return bool(
+        isinstance(confirmation, Mapping)
+        and confirmation.get("type") == "boolean"
+        and confirmation.get("required") is True
+        and confirmation.get("const") is True
+        and not {
+            "runtime_approval_id",
+            "runtime_recovery_approval_id",
+        }.intersection(schema)
+    )
+
+
+def _valid_apply_result_schema(schema: Mapping[str, Any]) -> bool:
+    overall_status = schema.get("overall_status")
+    if not (
+        isinstance(overall_status, Mapping)
+        and overall_status.get("type") == "string"
+        and overall_status.get("required") is True
+    ):
+        return False
+    allowed_statuses = overall_status.get("enum")
+    expected_statuses = {"ok", "warning", "partial", "blocked", "error"}
+    if not (
+        isinstance(allowed_statuses, list)
+        and len(allowed_statuses) == len(expected_statuses)
+        and all(isinstance(value, str) for value in allowed_statuses)
+        and set(allowed_statuses) == expected_statuses
+    ):
+        return False
+    return _required_string_field(schema, "run_id")
+
+
+def _is_canonical_lock_key(value: str) -> bool:
+    key = str(value or "")
+    if not key or any(character.isspace() for character in key):
+        return False
+    if key.startswith("lk:"):
+        return is_canonical_lk_profile_key(key)
+    if key.startswith("api:"):
+        return is_canonical_api_write_key(key)
+    return not (
+        key.endswith("-lk")
+        or key.startswith("marketplace:")
+    )
 
 
 def default_task_registry() -> TaskRegistry:
@@ -527,6 +742,9 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         runbook_path="data/planning/liquidation_daily_control_runbook.md",
         requires_credentials=True,
         requires_confirmation=True,
+        approval_source_field="plan_run_id",
+        parameter_schema=_apply_parameter_schema(),
+        result_schema=_apply_result_schema(),
         source_plan_task="wb-liquidation-stage2-plan",
         verify_task="wb-liquidation-stage2-verify",
         timeout_seconds=900,
@@ -741,7 +959,11 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         runbook_path="data/planning/ozon_messenger_runbook.md",
         requires_credentials=True,
         requires_confirmation=True,
-        lock_keys=task_resource_keys(lk_marketplaces=("ozon",)),
+        enabled=False,
+        disabled_reason=(
+            "Unsupported combined messenger write workflow has no separated "
+            "plan/apply/verify runtime chain; keep disabled pending a P1 design."
+        ),
     ),
     RegisteredTask(
         name="ozon-inbox",
@@ -769,13 +991,29 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_credentials=True,
         requires_lk=True,
         requires_confirmation=True,
+        approval_source_field="source_run_id",
+        parameter_schema=_apply_parameter_schema("source_run_id"),
+        result_schema=_apply_result_schema(),
         source_plan_task="ozon-inbox",
-        verify_task="ozon-inbox",
+        verify_task="ozon-inbox-verify",
         lock_keys=task_resource_keys(
             api_write_marketplaces=("ozon",),
             lk_marketplaces=("ozon",),
             subject_keys=("ozon-inbox",),
         ),
+    ),
+    RegisteredTask(
+        name="ozon-inbox-verify",
+        command="verify-ozon-inbox",
+        title="Verify Ozon inbox",
+        description=(
+            "Verify the matching Ozon inbox package from durable per-action "
+            "success receipts without repeating replies or mark-read writes."
+        ),
+        mode="verify",
+        risk="low",
+        marketplaces=("ozon",),
+        runbook_path="data/planning/ozon_messenger_runbook.md",
     ),
     RegisteredTask(
         name="wb-inbox",
@@ -802,13 +1040,29 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         runbook_path="data/planning/reviews_questions_runbook.md",
         requires_credentials=True,
         requires_confirmation=True,
+        approval_source_field="source_run_id",
+        parameter_schema=_apply_parameter_schema("source_run_id"),
+        result_schema=_apply_result_schema(),
         source_plan_task="wb-inbox",
-        verify_task="wb-inbox",
+        verify_task="wb-inbox-verify",
         lock_keys=task_resource_keys(
             api_write_marketplaces=("wb",),
             lk_marketplaces=("wb",),
             subject_keys=("wb-inbox",),
         ),
+    ),
+    RegisteredTask(
+        name="wb-inbox-verify",
+        command="verify-wb-inbox",
+        title="Verify WB inbox",
+        description=(
+            "Verify the matching WB inbox package from durable per-action "
+            "success receipts without repeating replies or marketplace writes."
+        ),
+        mode="verify",
+        risk="low",
+        marketplaces=("wb",),
+        runbook_path="data/planning/reviews_questions_runbook.md",
     ),
     RegisteredTask(
         name="sessions",
@@ -883,6 +1137,9 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         runbook_path="data/planning/ozon_actions_optimizer_runbook.md",
         requires_credentials=True,
         requires_confirmation=True,
+        approval_source_field="plan_run_id",
+        parameter_schema=_apply_parameter_schema(),
+        result_schema=_apply_result_schema(),
         source_plan_task="ozon-actions-optimizer-plan",
         verify_task="ozon-actions-optimizer-verify",
         lock_keys=task_resource_keys(
@@ -912,6 +1169,9 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         runbook_path="data/planning/ozon_elastic_runbook.md",
         requires_credentials=True,
         requires_confirmation=True,
+        approval_source_field="plan_run_id",
+        parameter_schema=_apply_parameter_schema(),
+        result_schema=_apply_result_schema(),
         source_plan_task="ozon-elastic-plan",
         verify_task="ozon-elastic-verify",
         lock_keys=task_resource_keys(
@@ -951,6 +1211,11 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         runbook_path="data/planning/ozon_cpc_efficiency_runbook.md",
         requires_credentials=True,
         requires_confirmation=True,
+        approval_source_field="plan_run_id",
+        parameter_schema=_apply_parameter_schema(
+            min_bid={"type": "number", "exclusiveMinimum": 0},
+        ),
+        result_schema=_apply_result_schema(),
         source_plan_task="ozon-cpc-optimization-plan",
         verify_task="ozon-cpc-bids-verify",
         lock_keys=task_resource_keys(
@@ -994,6 +1259,9 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         runbook_path="data/planning/wb_actions_runbook.md",
         requires_credentials=True,
         requires_confirmation=True,
+        approval_source_field="plan_run_id",
+        parameter_schema=_apply_parameter_schema(),
+        result_schema=_apply_result_schema(),
         source_plan_task="wb-actions-discount-plan",
         verify_task="wb-actions-discount-verify",
         lock_keys=task_resource_keys(
@@ -1043,6 +1311,9 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         runbook_path="data/planning/wb_actions_runbook.md",
         requires_credentials=True,
         requires_confirmation=True,
+        approval_source_field="plan_run_id",
+        parameter_schema=_apply_parameter_schema(),
+        result_schema=_apply_result_schema(),
         source_plan_task="wb-best-price-action-plan",
         verify_task="wb-best-price-action-verify",
         timeout_seconds=1800,
@@ -1118,6 +1389,12 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_credentials=True,
         requires_confirmation=True,
         requires_mapping=True,
+        approval_source_field="plan_run_id",
+        parameter_schema=_apply_parameter_schema(
+            wait_seconds={"type": "integer", "minimum": 0},
+            approved_actions={"type": "array", "items": {"type": "string"}},
+        ),
+        result_schema=_apply_result_schema(),
         source_plan_task="wb-promotion-bid-parser-enriched-plan",
         verify_task="wb-promotion-bids-parser-enriched-verify",
         lock_keys=task_resource_keys(
@@ -1148,6 +1425,12 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         runbook_path="data/planning/wb_promotion_runbook.md",
         requires_credentials=True,
         requires_confirmation=True,
+        approval_source_field="plan_run_id",
+        parameter_schema=_apply_parameter_schema(
+            wait_seconds={"type": "integer", "minimum": 0},
+            allowed_actions={"type": "array", "items": {"type": "string"}},
+        ),
+        result_schema=_apply_result_schema(),
         source_plan_task="wb-promotion-bid-plan",
         verify_task="wb-promotion-bids-verify",
         lock_keys=task_resource_keys(
@@ -1178,6 +1461,10 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_credentials=True,
         requires_confirmation=True,
         enabled=False,
+        disabled_reason=(
+            "Legacy combined apply route is orphaned; use a marketplace-specific "
+            "runtime approval plan/apply/verify chain."
+        ),
     ),
     RegisteredTask(
         name="wb-card-create-plan",
@@ -1205,9 +1492,10 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_confirmation=True,
         source_plan_task="wb-card-create-plan",
         verify_task="wb-card-create-verify",
-        lock_keys=task_resource_keys(
-            api_write_marketplaces=("wb",),
-            subject_keys=("cards:wb:create",),
+        enabled=False,
+        disabled_reason=(
+            "Runtime plan/apply handlers are not wired as one tested approval "
+            "chain; keep card creation disabled pending a P1 design."
         ),
     ),
     RegisteredTask(
@@ -1248,9 +1536,10 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_confirmation=True,
         source_plan_task="ozon-card-create-plan",
         verify_task="ozon-card-create-verify",
-        lock_keys=task_resource_keys(
-            api_write_marketplaces=("ozon",),
-            subject_keys=("cards:ozon:create",),
+        enabled=False,
+        disabled_reason=(
+            "Runtime plan/apply handlers are not wired as one tested approval "
+            "chain; keep card creation disabled pending a P1 design."
         ),
     ),
     RegisteredTask(
@@ -1292,9 +1581,10 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_confirmation=True,
         source_plan_task="ozon-product-remove-plan",
         verify_task="ozon-product-remove-verify",
-        lock_keys=task_resource_keys(
-            api_write_marketplaces=("ozon",),
-            subject_keys=("cards:ozon:remove",),
+        enabled=False,
+        disabled_reason=(
+            "Runtime plan/apply handlers are not wired as one tested approval "
+            "chain; keep product removal disabled pending a P1 design."
         ),
     ),
     RegisteredTask(
@@ -1338,9 +1628,10 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_confirmation=True,
         source_plan_task="ozon-partial-approved-diagnose",
         verify_task="ozon-partial-approved-diagnose",
-        lock_keys=task_resource_keys(
-            api_write_marketplaces=("ozon",),
-            subject_keys=("cards:ozon:partial-approved",),
+        enabled=False,
+        disabled_reason=(
+            "The existing diagnose task is not a strict verify handler and no "
+            "complete runtime recovery chain exists; keep disabled pending P1."
         ),
     ),
     RegisteredTask(
@@ -1375,9 +1666,10 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_confirmation=True,
         source_plan_task="seller-sku-update-plan",
         verify_task="seller-sku-update-verify",
-        lock_keys=task_resource_keys(
-            api_write_marketplaces=("ozon", "wb"),
-            subject_keys=("cards:seller-sku",),
+        enabled=False,
+        disabled_reason=(
+            "Runtime plan/apply handlers are not wired as one tested approval "
+            "chain; keep seller SKU mutation disabled pending a P1 design."
         ),
     ),
     RegisteredTask(
@@ -1451,9 +1743,10 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_confirmation=True,
         source_plan_task="card-content-update-plan",
         verify_task="card-content-update-verify",
-        lock_keys=task_resource_keys(
-            api_write_marketplaces=("ozon", "wb"),
-            subject_keys=("cards:content",),
+        enabled=False,
+        disabled_reason=(
+            "Runtime plan/apply handlers are not wired as one tested approval "
+            "chain; keep card content mutation disabled pending a P1 design."
         ),
     ),
     RegisteredTask(
@@ -1488,9 +1781,10 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_confirmation=True,
         source_plan_task="owner-approved-card-html-layer3-passport",
         verify_task="card-content-update-verify",
-        lock_keys=task_resource_keys(
-            api_write_marketplaces=("ozon", "wb"),
-            subject_keys=("cards:approved-card",),
+        enabled=False,
+        disabled_reason=(
+            "The source link is not a registered executable plan task and no "
+            "complete runtime handler exists; keep the fast path disabled pending P1."
         ),
     ),
     RegisteredTask(
@@ -1526,6 +1820,11 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_credentials=True,
         requires_mapping=True,
         requires_confirmation=True,
+        approval_source_field="plan_run_id",
+        parameter_schema=_apply_parameter_schema(
+            internal_skus={"type": "array", "items": {"type": "string"}},
+        ),
+        result_schema=_apply_result_schema(),
         source_plan_task="approved-cards-batch-plan",
         verify_task="card-content-update-verify",
         lock_keys=task_resource_keys(
@@ -1562,10 +1861,11 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_confirmation=True,
         source_plan_task="reviews-questions",
         verify_task="reviews-questions-verify",
-        lock_keys=task_resource_keys(
-            api_write_marketplaces=("ozon", "wb"),
-            lk_marketplaces=("ozon", "wb"),
-            subject_keys=("reviews-questions",),
+        enabled=False,
+        disabled_reason=(
+            "The current runtime plan produces a pending review package while the "
+            "apply handler requires a separately prepared approved_path; keep this "
+            "two-stage legacy bridge disabled pending a complete runtime approval design."
         ),
     ),
     RegisteredTask(

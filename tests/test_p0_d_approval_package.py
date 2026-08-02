@@ -27,6 +27,7 @@ from seller_agent.safety.guard import (
     SafetyDecision,
     SafetyGuard,
 )
+from seller_agent.safety.plan_approval import with_plan_approval_candidate
 from seller_agent.tasks.registry import default_task_registry
 
 
@@ -532,7 +533,11 @@ def test_legacy_approval_migration_preserves_states_and_requires_new_dry_run(
     assert after_initialize == before
 
     def plan_handler(task, data_dir, credentials, inputs):  # type: ignore[no-untyped-def]
-        return {"run_id": "new-safe-plan", "overall_status": "ok", "artifacts": {}}
+        return with_plan_approval_candidate(
+            {"run_id": "new-safe-plan", "overall_status": "ok", "artifacts": {}},
+            action_count=1,
+            source_field="plan_run_id",
+        )
 
     service = JobService(
         store=store,
@@ -587,7 +592,11 @@ def test_rerunning_same_plan_does_not_rejuvenate_existing_approval(
     )
 
     def plan_handler(task, data_dir, credentials, inputs):  # type: ignore[no-untyped-def]
-        return {"run_id": "same-plan-run", "overall_status": "ok", "artifacts": {}}
+        return with_plan_approval_candidate(
+            {"run_id": "same-plan-run", "overall_status": "ok", "artifacts": {}},
+            action_count=1,
+            source_field="plan_run_id",
+        )
 
     store = JobStore(tmp_path / "runtime.db")
     service = JobService(

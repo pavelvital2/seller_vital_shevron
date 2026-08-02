@@ -26,6 +26,17 @@ from seller_agent.safety.approval_package import (
     normalize_business_params,
 )
 from seller_agent.safety.guard import SafetyGuard
+from seller_agent.safety.plan_approval import actionable_plan_source_ref
+from seller_agent.tasks.inbox_workflow import (
+    INBOX_RECEIPT_STATE_ERROR,
+    InboxReceiptStateError,
+    validate_inbox_receipt_state,
+)
+
+
+INBOX_RECEIPT_STATE_TASKS = frozenset(
+    {"ozon-inbox", "wb-inbox", "ozon-inbox-apply", "wb-inbox-apply"}
+)
 
 
 @dataclass(frozen=True)
@@ -129,6 +140,78 @@ class JobService:
             )
 
         task = self.registry.get(job.task_id)
+        if bool(claim_token) != bool(worker_id):
+            return JobServiceResult(
+                job=job,
+                ok=False,
+                status="claim_invalid",
+                message="Both claim_token and worker_id are required to start a claimed job.",
+            )
+        if claim_token and not self.store.job_claim_is_active(
+            job_id=job_id,
+            claim_token=claim_token,
+            worker_id=worker_id,
+        ):
+            current = self.store.get_job(job_id) or job
+            return JobServiceResult(
+                job=current,
+                ok=False,
+                status="claim_invalid",
+                message=f"Claim for queued job `{job_id}` is invalid, expired or owned by another worker.",
+            )
+        if not task.enabled:
+            failed = self.store.update_job_status(
+                job_id,
+                "failed",
+                error="task_disabled",
+                message="Job blocked because its task was disabled before workflow start.",
+            )
+            if claim_token:
+                self.store.release_job_claim(
+                    job_id=job_id,
+                    claim_token=claim_token,
+                    worker_id=worker_id,
+                )
+            self.store.append_event(
+                job_id=job_id,
+                event_type="job_task_disabled",
+                message="Job blocked because its registered task is disabled.",
+                data={"task_id": task.name},
+            )
+            return JobServiceResult(
+                job=failed,
+                ok=False,
+                status="blocked",
+                message="task_disabled",
+            )
+        if task.name in INBOX_RECEIPT_STATE_TASKS:
+            try:
+                validate_inbox_receipt_state(self.data_dir)
+            except InboxReceiptStateError:
+                failed = self.store.update_job_status(
+                    job_id,
+                    "failed",
+                    error=INBOX_RECEIPT_STATE_ERROR,
+                    message="Job blocked by invalid durable inbox receipt state.",
+                )
+                if claim_token:
+                    self.store.release_job_claim(
+                        job_id=job_id,
+                        claim_token=claim_token,
+                        worker_id=worker_id,
+                    )
+                self.store.append_event(
+                    job_id=job_id,
+                    event_type="job_runtime_state_blocked",
+                    message="Job blocked before workflow start by invalid durable runtime state.",
+                    data={"task_id": task.name, "reason_code": INBOX_RECEIPT_STATE_ERROR},
+                )
+                return JobServiceResult(
+                    job=failed,
+                    ok=False,
+                    status="runtime_state_invalid",
+                    message=INBOX_RECEIPT_STATE_ERROR,
+                )
         if job.status == "created":
             job = self.store.update_job_status(
                 job_id,
@@ -149,13 +232,6 @@ class JobService:
                 message="Confirmed job returned to the queue before claim acquisition.",
             )
 
-        if bool(claim_token) != bool(worker_id):
-            return JobServiceResult(
-                job=job,
-                ok=False,
-                status="claim_invalid",
-                message="Both claim_token and worker_id are required to start a claimed job.",
-            )
         if not claim_token:
             direct_worker_id = f"job-service:{uuid.uuid4().hex}"
             claim = self.store.claim_queued_job(
@@ -173,18 +249,6 @@ class JobService:
                 )
             claim_token = claim.claim_token
             worker_id = claim.worker_id
-        elif not self.store.job_claim_is_active(
-            job_id=job_id,
-            claim_token=claim_token,
-            worker_id=worker_id,
-        ):
-            current = self.store.get_job(job_id) or job
-            return JobServiceResult(
-                job=current,
-                ok=False,
-                status="claim_invalid",
-                message=f"Claim for queued job `{job_id}` is invalid, expired or owned by another worker.",
-            )
 
         if task.is_write and not _confirmed(job.params):
             waiting = self.store.update_job_status(
@@ -629,15 +693,27 @@ class JobService:
         task: RegisteredTask,
         result_data: dict[str, Any],
     ) -> ApprovalRecord | None:
-        apply_tasks = [candidate for candidate in self.registry.list() if candidate.is_write and candidate.source_plan_task == task.name]
+        apply_tasks = [
+            candidate
+            for candidate in self.registry.list()
+            if candidate.enabled
+            and candidate.is_write
+            and candidate.mode == "apply"
+            and candidate.source_plan_task == task.name
+        ]
         if len(apply_tasks) != 1:
             return None
-        summary = result_data.get("summary") if isinstance(result_data.get("summary"), dict) else {}
-        source_ref = str(summary.get("run_id") or result_data.get("run_id") or "").strip()
+        apply_task = apply_tasks[0]
+        source_key = apply_task.approval_source_field
+        planner_result = result_data.get("summary")
+        if not isinstance(planner_result, dict):
+            return None
+        source_ref = actionable_plan_source_ref(
+            planner_result,
+            expected_source_field=source_key,
+        )
         if not source_ref:
             return None
-        apply_task = apply_tasks[0]
-        source_key = "source_run_id" if task.name.endswith("inbox") else "plan_run_id"
         apply_params = {source_key: source_ref}
         approval_source = {"kind": source_key, "ref": _canonical_json(source_ref)}
         approval_id = f"runtime:{apply_task.name}:{_canonical_hash({'task_id': apply_task.name, 'source': approval_source})[:24]}"

@@ -159,6 +159,30 @@ def _actual_change_percent(current_bid: Decimal | None, target_bid: Decimal | No
     return ((target_bid - current_bid) / current_bid * Decimal("100")).quantize(Decimal("0.01"))
 
 
+def is_default_wb_promotion_apply_payload_row(
+    row: dict[str, Any],
+    *,
+    min_bid: Decimal,
+) -> bool:
+    current_raw = row.get("current_bid")
+    target_raw = row.get("target_bid")
+    if current_raw in (None, "") or target_raw in (None, ""):
+        return False
+    try:
+        current_bid = Decimal(str(current_raw).replace(" ", "").replace(",", "."))
+        target_bid = Decimal(str(target_raw).replace(" ", "").replace(",", "."))
+    except (InvalidOperation, ValueError):
+        return False
+    return bool(
+        row.get("recommended_action") == "scale_candidate"
+        and row.get("current_bid_source") == "current_bid_api"
+        and target_bid >= min_bid
+        and target_bid != current_bid
+        and str(row.get("current_bid_place") or "").strip()
+        in {"search", "recommendations", "combined"}
+    )
+
+
 def build_wb_promotion_bid_plan_rows(
     product_rows: list[dict[str, Any]],
     *,
@@ -291,6 +315,14 @@ def build_wb_promotion_bid_plan_rows(
         "eligible_rows": len(rows),
         "action_rows": len(action_rows),
         "changed_rows": len(changed_rows),
+        "apply_payload_rows": sum(
+            1
+            for row in rows
+            if is_default_wb_promotion_apply_payload_row(
+                row,
+                min_bid=thresholds.min_bid,
+            )
+        ),
         "current_bids_loaded": len(bid_rows),
         "current_bid_matches": current_bid_matches,
         "current_bid_missing": len(rows) - current_bid_matches,

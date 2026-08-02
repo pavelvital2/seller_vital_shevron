@@ -17,6 +17,7 @@ from seller_agent.core.job_service import JobService
 from seller_agent.core.job_store import JobStore
 from seller_agent.core.workflow_runner import WorkflowRunner
 from seller_agent.safety.approval_package import build_approval_package
+from seller_agent.safety.plan_approval import with_plan_approval_candidate
 from seller_agent.tasks.registry import default_task_registry
 
 
@@ -164,7 +165,11 @@ def test_job_service_confirmed_submit_never_auto_attaches_runtime_approval(tmp_p
 
 def test_confirmed_submit_does_not_promote_plan_generated_pending_approval(tmp_path: Path) -> None:
     def plan_handler(task, data_dir, credentials, inputs):  # type: ignore[no-untyped-def]
-        return {"run_id": "ozon_elastic_plan_1", "overall_status": "ok", "artifacts": {}}
+        return with_plan_approval_candidate(
+            {"run_id": "ozon_elastic_plan_1", "overall_status": "ok", "artifacts": {}},
+            action_count=1,
+            source_field="plan_run_id",
+        )
 
     store = JobStore(tmp_path / "runtime.db")
     plan_run_id = "ozon_elastic_plan_1"

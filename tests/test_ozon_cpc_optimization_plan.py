@@ -54,6 +54,31 @@ def test_cpc_optimization_uses_current_bid_when_available() -> None:
     assert rows[0]["target_bid"] == "1.40"
     assert rows[0]["bid_change_amount"] == "-0.60"
     assert summary["current_bid_matches"] == 1
+    assert summary["apply_payload_rows"] == 1
+
+
+def test_cpc_candidate_excludes_rows_below_default_apply_floor() -> None:
+    rows, summary = build_cpc_optimization_rows(
+        [
+            {
+                "campaign_id": "1",
+                "campaign_title": "CPC",
+                "sku": "sku-low-bid",
+                "title": "Card",
+                "views": "1000",
+                "clicks": "60",
+                "to_cart": "12",
+                "orders": "0",
+                "spend": "60",
+                "orders_money": "0",
+            }
+        ],
+        current_bids={"sku-low-bid": Decimal("0.50")},
+    )
+
+    assert rows[0]["recommended_action"] != "keep_monitor"
+    assert summary["action_rows_with_current_bid"] == 1
+    assert summary["apply_payload_rows"] == 0
 
 
 def test_cpc_optimization_classifies_high_drr_and_scale_candidates() -> None:

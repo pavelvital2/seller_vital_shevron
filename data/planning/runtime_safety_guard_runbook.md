@@ -107,3 +107,86 @@ API write-задачи отдельно используют `api:ozon:vital-she
 эти ключи не получают, поэтому не конфликтуют с write/LK без фактического
 общего mutable resource. Если требуемый lease занят, marketplace workflow не
 начинается и write-window не открывается.
+
+## Execution graph policy
+
+`tasks policy` проверяет фактический runtime graph каждой включенной write-задачи:
+
+- capability имеет строго `mode=apply`, confirmation и семантически полный
+  transport contract: правильный `plan_run_id`/`source_run_id`, непустые
+  `approval_id`/`approval_checksum`, `confirmed_by_user const=true`, а в
+  результате ограниченный `overall_status` и непустой `run_id`;
+- source plan зарегистрирован, включен, имеет строго `dry_run` mode и callable
+  `WorkflowRunner` handler;
+- verify task зарегистрирован, включен, имеет строго `mode=verify` и реальный
+  callable handler;
+- apply handler callable, а набор locks содержит ровно canonical API write
+  key каждой затрагиваемой площадки и только canonical LK keys;
+- disabled write capability не публикуется в Telegram и содержит явную причину.
+
+Для enabled graph source mode обязан быть именно `dry_run`: только успешный
+`dry_run` результат участвует в автоматической регистрации runtime approval.
+Source/apply/verify handlers обязаны иметь единый вызываемый контракт
+`(task, data_dir, credentials, inputs)`. Marketplace-множества source и verify
+должны точно совпадать с apply (порядок незначим), поэтому Ozon apply нельзя
+связать с WB source/verify. До допуска capability к write window `tasks policy`
+проверяет apply `result_schema` как закрытый контракт: обязательные непустые `run_id` и
+`overall_status` только из `ok/warning/partial/blocked/error`; произвольные
+дополнительные статусы fail-closed считаются policy defect.
+
+Policy не содержит allowlist известных дефектов. Plan completion создает
+runtime approval только для единственной включенной apply-задачи и только при
+наличии типизированного `seller.plan_approval_candidate.v1`: planner обязан
+указать свой фактический `action_count`, canonical source field и тот же
+`run_id`. Нулевой, отсутствующий или поврежденный action-set не создает
+`pending_review`. Один `run_id` сам по себе не является доказательством наличия
+write-действий.
+
+`action_count` считается по фактическому default apply payload, а не по размеру
+исходного scope или общему числу рекомендаций. В частности, WB Best Price
+использует `to_change_discount` (`changes_only=true`); bid planners исключают
+строки, которые apply отфильтрует по action, API source, min bid, unchanged bid
+или placement; inbox исключает manual/read-only actions. Поэтому no-op plan и
+plan только с неподдержанными для apply строками не создают ложный approval.
+Inbox отдельно считает только `_approvable_review_actions` и, для Ozon,
+`_approvable_messenger_actions`, после удаления действий с уже сохранённым
+durable receipt по canonical `inbox_action_id`. Manual review, пустой reply и
+полностью receipted хвост остаются в read-only отчёте, но дают
+`apply_actions_count=0` и не создают `pending_review`.
+
+Отсутствующий `state/inbox_action_receipts.json` означает первый запуск и
+валидный пустой verified set. Если файл существует, он обязан целиком
+соответствовать `inbox-action-receipts/v1`: top-level содержит только
+`schema_version` и object `receipts`, каждый canonical 64-hex action ID ведёт
+на полный verified receipt с безопасными идентификаторами и timezone-aware
+`verified_at`. Truncated/malformed JSON, другая schema, неверный тип receipts
+или повреждённая запись дают только постоянный код
+`inbox_receipt_state_invalid`. `JobService` блокирует inbox plan/apply до
+handler, approval reservation и write-window; прямые plan/apply вызовы также
+fail-closed. Повреждённый файл не перезаписывается. Verify остаётся
+`warning/manual_verification_required` с reason code `receipt_state_invalid` и
+не использует повреждённое состояние как evidence.
+
+Повторная проверка `task.enabled` выполняется в `JobService.run` до SafetyGuard,
+resource leases, approval reservation и write-window. Поэтому уже поставленная
+в очередь apply-задача, которую отключили до исполнения, завершается
+`blocked/task_disabled`: approval остается в исходном состоянии, а события
+`job_approval_reserved` и `job_write_window_started` не создаются.
+
+Неподдержанные standalone card create/update/remove, seller SKU recovery,
+Ozon PARTIAL_APPROVED recovery, fast approved-card и combined Ozon Messenger
+write routes отключены до отдельного полного runtime design. Legacy
+`actions-apply` также остается отключенным. `reviews-questions-apply`
+отключен отдельно: текущий read-only plan создает pending package, а handler
+требует отдельный legacy `approved_path`; объявлять такой graph замкнутым до
+безопасного runtime bridge нельзя.
+
+Существующие Ozon/WB inbox apply routes остаются включенными, но их локальные
+receipts используются только как защита от повторного apply и диагностический
+след. В P0-G нет нового независимого marketplace read-back, поэтому inbox
+verify всегда возвращает `warning`, `manual_verification_required=true` и
+`verification_confirmed=false`; approval остается открытым для ручной проверки
+или будущего отдельного read-back. Отсутствующий/поврежденный reviews pending,
+невалидный inbox package и нулевой source action-set также fail-closed дают
+только безопасные reason codes. Локальный receipt никогда не называется
+marketplace verification и verify не повторяет reply/mark-read write.

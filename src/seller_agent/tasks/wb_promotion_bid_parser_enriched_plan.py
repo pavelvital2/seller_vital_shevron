@@ -37,6 +37,30 @@ def _round2(value: Decimal | None) -> str:
     return str(value.quantize(Decimal("0.01")))
 
 
+def is_default_wb_parser_enriched_apply_payload_row(
+    row: dict[str, Any],
+    *,
+    min_bid: Decimal,
+) -> bool:
+    try:
+        current_bid = Decimal(
+            str(row.get("current_bid") or "").replace(" ", "").replace(",", ".")
+        )
+        target_bid = Decimal(
+            str(row.get("final_target_bid") or "").replace(" ", "").replace(",", ".")
+        )
+    except (InvalidOperation, ValueError):
+        return False
+    return bool(
+        row.get("parser_enriched_action") == "apply_ready"
+        and row.get("current_bid_source") == "current_bid_api"
+        and target_bid >= min_bid
+        and target_bid != current_bid
+        and str(row.get("current_bid_place") or "").strip()
+        in {"search", "recommendations", "combined"}
+    )
+
+
 def _first_text(*values: Any) -> str:
     for value in values:
         text = str(value or "").strip()
@@ -353,6 +377,14 @@ def build_wb_promotion_parser_enriched_rows(
         "enriched_rows": len(rows),
         "candidate_rows": len(candidates),
         "apply_ready_rows": action_counts.get("apply_ready", 0),
+        "apply_payload_rows": sum(
+            1
+            for row in rows
+            if is_default_wb_parser_enriched_apply_payload_row(
+                row,
+                min_bid=min_bid,
+            )
+        ),
         "review_only_rows": action_counts.get("review_only", 0),
         "watch_rows": action_counts.get("watch", 0),
         "reduce_or_stop_review_rows": action_counts.get("reduce_or_stop_review", 0),
@@ -388,6 +420,7 @@ def _write_report(path: Path, *, result: dict[str, Any], rows: list[dict[str, An
         "enriched_rows",
         "candidate_rows",
         "apply_ready_rows",
+        "apply_payload_rows",
         "review_only_rows",
         "watch_rows",
         "reduce_or_stop_review_rows",

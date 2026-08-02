@@ -80,6 +80,7 @@ def test_wb_promotion_bid_plan_uses_current_bid_and_min_floor() -> None:
     assert by_nm["3"]["target_adjustment_note"] == "min_bid_floor"
     assert summary["action_rows"] == 3
     assert summary["changed_rows"] == 2
+    assert summary["apply_payload_rows"] == 1
     assert summary["current_bid_matches"] == 3
 
 

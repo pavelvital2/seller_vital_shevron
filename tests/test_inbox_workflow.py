@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 import subprocess
 
+import pytest
+
 from seller_agent.config import AppCredentials, OzonSellerCredentials
 from seller_agent.tasks import inbox_workflow
 from seller_agent.tasks.inbox_workflow import (
@@ -300,6 +302,50 @@ def test_inbox_action_receipts_filter_only_confirmed_actions(tmp_path: Path) -> 
     assert [row["source_id"] for row in _remaining_inbox_actions([answered, pending], receipts=receipts)] == [
         "review-2"
     ]
+
+
+@pytest.mark.parametrize(
+    "state_text",
+    (
+        "{",
+        json.dumps({"schema_version": "wrong", "receipts": {}}),
+        json.dumps(
+            {
+                "schema_version": "inbox-action-receipts/v1",
+                "receipts": [],
+            }
+        ),
+        json.dumps(
+            {
+                "schema_version": "inbox-action-receipts/v1",
+                "receipts": {"a" * 64: {"status": "verified"}},
+            }
+        ),
+    ),
+)
+def test_record_inbox_receipts_never_overwrites_invalid_state(
+    state_text: str,
+    tmp_path: Path,
+) -> None:
+    receipt_path = tmp_path / "state" / "inbox_action_receipts.json"
+    receipt_path.parent.mkdir(parents=True)
+    receipt_path.write_text(state_text, encoding="utf-8")
+    action = {
+        "platform": "wb",
+        "source_type": "review",
+        "source_id": "review-1",
+        "action_type": "public_review_reply",
+        "draft_text": "Approved reply",
+    }
+
+    with pytest.raises(RuntimeError, match="^inbox_receipt_state_invalid$"):
+        _record_inbox_receipts(
+            data_dir=tmp_path,
+            source_run_id="wb_inbox_test",
+            actions=[action],
+        )
+
+    assert receipt_path.read_text(encoding="utf-8") == state_text
 
 
 def test_wb_inbox_apply_closes_already_verified_zero_tail(monkeypatch, tmp_path: Path) -> None:

@@ -38,11 +38,9 @@ PROFILE_CONSUMERS = {
         "status-preflight",
         "daily-morning-report",
         "ozon-lk-state-monitor",
-        "ozon-messenger-workflow",
         "ozon-inbox",
         "ozon-inbox-apply",
         "reviews-questions",
-        "reviews-questions-apply",
         "reviews-questions-verify",
     ),
     "wb": (
@@ -56,7 +54,6 @@ PROFILE_CONSUMERS = {
         "wb-inbox",
         "wb-inbox-apply",
         "reviews-questions",
-        "reviews-questions-apply",
         "reviews-questions-verify",
     ),
 }

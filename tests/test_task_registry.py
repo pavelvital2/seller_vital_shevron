@@ -38,7 +38,7 @@ def test_enabled_apply_tasks_use_registered_non_write_verify_tasks() -> None:
         if not task.enabled:
             continue
         verify = registry.get(task.verify_task)
-        assert verify.mode in {"verify", "read_only", "dry_run"}, task.name
+        assert verify.mode == "verify", task.name
         assert verify.is_write is False, task.name
 
 

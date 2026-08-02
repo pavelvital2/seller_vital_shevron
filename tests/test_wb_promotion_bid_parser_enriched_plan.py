@@ -17,6 +17,8 @@ def test_wb_promotion_parser_enriched_classifies_ready_review_and_blocked() -> N
             "name": "Ready",
             "recommended_action": "scale_candidate",
             "current_bid": "2.00",
+            "current_bid_place": "search",
+            "current_bid_source": "current_bid_api",
             "target_bid": "2.40",
             "requested_bid_change_percent": "20",
             "orders": "4",
@@ -78,6 +80,7 @@ def test_wb_promotion_parser_enriched_classifies_ready_review_and_blocked() -> N
     assert by_nm["3"]["parser_enriched_action"] == "blocked"
     assert "missing_or_zero_stock" in by_nm["3"]["risk_flags"]
     assert summary["apply_ready_rows"] == 1
+    assert summary["apply_payload_rows"] == 1
     assert summary["review_only_rows"] == 1
     assert summary["blocked_rows"] == 1
     assert summary["rows_with_wb_statistics_sales_signal"] == 1
@@ -96,6 +99,8 @@ def test_wb_promotion_parser_enriched_cli_writes_artifacts(tmp_path: Path, capsy
                 "name": "Ready",
                 "recommended_action": "scale_candidate",
                 "current_bid": "2.00",
+                "current_bid_place": "search",
+                "current_bid_source": "current_bid_api",
                 "target_bid": "2.40",
                 "requested_bid_change_percent": "20",
                 "orders": "4",
@@ -131,10 +136,34 @@ def test_wb_promotion_parser_enriched_cli_writes_artifacts(tmp_path: Path, capsy
 
     assert result["run_id"] == "parser_enriched_test"
     assert result["summary"]["apply_ready_rows"] == 1
+    assert result["summary"]["apply_payload_rows"] == 1
     assert result["summary"]["rows_missing_wb_statistics_sales_signal"] == 1
     assert Path(result["artifacts"]["candidates_csv"]).exists()
     assert Path(result["artifacts"]["apply_preview_csv"]).exists()
     assert Path(result["artifacts"]["report"]).exists()
+
+
+def test_wb_promotion_parser_enriched_apply_count_uses_apply_payload_gates() -> None:
+    rows, summary = build_wb_promotion_parser_enriched_rows(
+        [
+            {
+                "advert_id": "101",
+                "nm_id": "1",
+                "recommended_action": "scale_candidate",
+                "current_bid": "2.00",
+                "current_bid_place": "search",
+                "current_bid_source": "missing_current_bid",
+                "target_bid": "2.40",
+                "orders": "4",
+                "spend": "10",
+            }
+        ],
+        [{"wb_nm_id": "1", "wb_stock_total": "9"}],
+    )
+
+    assert rows[0]["parser_enriched_action"] == "apply_ready"
+    assert summary["apply_ready_rows"] == 1
+    assert summary["apply_payload_rows"] == 0
 
 
 def test_task_registry_contains_wb_promotion_parser_enriched_plan() -> None:

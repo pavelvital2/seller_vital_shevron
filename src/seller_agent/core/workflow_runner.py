@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from seller_agent.config import AppCredentials, load_credentials
+from seller_agent.safety.plan_approval import with_plan_approval_candidate
 from seller_agent.tasks.approved_cards_apply import run_apply_approved_cards, run_plan_approved_cards
 from seller_agent.tasks.card_content_update import run_card_content_update_verify
 from seller_agent.tasks.card_audit_prevalidator import run_card_audit_prevalidate
@@ -14,8 +15,10 @@ from seller_agent.tasks.daily_morning_report import run_daily_morning_report
 from seller_agent.tasks.inbox_workflow import (
     run_ozon_inbox_apply,
     run_ozon_inbox_triage,
+    run_ozon_inbox_verify,
     run_wb_inbox_apply,
     run_wb_inbox_triage,
+    run_wb_inbox_verify,
 )
 from seller_agent.tasks.liquidation_daily_control import run_liquidation_daily_control
 from seller_agent.tasks.marketplace_period_report import run_marketplace_period_report
@@ -25,6 +28,7 @@ from seller_agent.tasks.ozon_actions_optimizer_apply import (
 )
 from seller_agent.tasks.ozon_actions_optimizer_plan import run_ozon_actions_optimizer_plan
 from seller_agent.tasks.ozon_cpc_bids_apply import run_ozon_cpc_bids_apply, run_ozon_cpc_bids_verify
+from seller_agent.tasks.ozon_cpc_optimization_plan import run_ozon_cpc_optimization_plan
 from seller_agent.tasks.ozon_card_create_apply import run_ozon_card_create_verify
 from seller_agent.tasks.ozon_elastic_apply import run_ozon_elastic_apply, run_ozon_elastic_verify
 from seller_agent.tasks.ozon_elastic_plan import run_ozon_elastic_plan
@@ -37,7 +41,10 @@ from seller_agent.tasks.ozon_lk_state_monitor import run_ozon_lk_state_monitor
 from seller_agent.tasks.ozon_min_price_timer_plan import run_ozon_min_price_timer_plan
 from seller_agent.tasks.pricing_status import run_pricing_status
 from seller_agent.tasks.registry import RegisteredTask, TaskRegistry, default_task_registry
-from seller_agent.tasks.reviews_questions import run_reviews_questions_apply, run_reviews_questions_verify
+from seller_agent.tasks.reviews_questions import (
+    run_reviews_questions,
+    run_reviews_questions_verify,
+)
 from seller_agent.tasks.seller_sku_update import run_seller_sku_update_verify
 from seller_agent.tasks.status_preflight import run_status_preflight
 from seller_agent.tasks.wb_actions_discount_apply import run_wb_actions_discount_apply, run_wb_actions_discount_verify
@@ -61,7 +68,11 @@ from seller_agent.tasks.wb_promotion_bid_parser_enriched_apply import (
     run_wb_promotion_bid_parser_enriched_apply,
     run_wb_promotion_bid_parser_enriched_verify,
 )
+from seller_agent.tasks.wb_promotion_bid_parser_enriched_plan import (
+    run_wb_promotion_bid_parser_enriched_plan,
+)
 from seller_agent.tasks.wb_promotion_bids_apply import run_wb_promotion_bids_apply, run_wb_promotion_bids_verify
+from seller_agent.tasks.wb_promotion_bid_plan import run_wb_promotion_bid_plan
 from seller_agent.tasks.wb_stock_supply_monitor import run_wb_stock_supply_monitor
 
 
@@ -267,6 +278,8 @@ def default_workflow_handlers() -> dict[str, WorkflowHandler]:
         "wb-pricing-margin": _wb_pricing_margin_handler,
         "ozon-inbox": _ozon_inbox_handler,
         "wb-inbox": _wb_inbox_handler,
+        "ozon-inbox-verify": _ozon_inbox_verify_handler,
+        "wb-inbox-verify": _wb_inbox_verify_handler,
         "ozon-elastic-plan": _ozon_elastic_plan_handler,
         "ozon-actions-optimizer-plan": _ozon_actions_optimizer_plan_handler,
         "wb-actions-discount-plan": _wb_actions_discount_plan_handler,
@@ -286,10 +299,11 @@ def default_workflow_handlers() -> dict[str, WorkflowHandler]:
         "ozon-actions-optimizer-verify": _ozon_actions_optimizer_verify_handler,
         "ozon-cpc-bids-apply": _ozon_cpc_bids_apply_handler,
         "ozon-cpc-bids-verify": _ozon_cpc_bids_verify_handler,
+        "ozon-cpc-optimization-plan": _ozon_cpc_optimization_plan_handler,
         "ozon-elastic-apply": _ozon_elastic_apply_handler,
         "ozon-elastic-verify": _ozon_elastic_verify_handler,
         "ozon-inbox-apply": _ozon_inbox_apply_handler,
-        "reviews-questions-apply": _reviews_questions_apply_handler,
+        "reviews-questions": _reviews_questions_handler,
         "reviews-questions-verify": _reviews_questions_verify_handler,
         "seller-sku-update-verify": _seller_sku_update_verify_handler,
         "wb-actions-discount-apply": _wb_actions_discount_apply_handler,
@@ -300,6 +314,8 @@ def default_workflow_handlers() -> dict[str, WorkflowHandler]:
         "wb-inbox-apply": _wb_inbox_apply_handler,
         "wb-promotion-bids-apply": _wb_promotion_bids_apply_handler,
         "wb-promotion-bids-verify": _wb_promotion_bids_verify_handler,
+        "wb-promotion-bid-plan": _wb_promotion_bid_plan_handler,
+        "wb-promotion-bid-parser-enriched-plan": _wb_promotion_bid_parser_enriched_plan_handler,
         "wb-promotion-bids-parser-enriched-apply": _wb_promotion_bids_parser_enriched_apply_handler,
         "wb-promotion-bids-parser-enriched-verify": _wb_promotion_bids_parser_enriched_verify_handler,
     }
@@ -349,11 +365,16 @@ def _wb_liquidation_stage2_plan_handler(
 ) -> dict[str, Any]:
     if credentials is None:
         raise ValueError(f"Task `{task.name}` requires credentials.")
-    return run_wb_liquidation_stage2_plan(
+    result = run_wb_liquidation_stage2_plan(
         credentials=credentials,
         data_dir=data_dir,
         cohort_path=Path(inputs.get("cohort_path") or "data/runs/2026-07-30/wb_dormant_liquidation_fresh_preapply_20260730T1421/liquidation_plan.csv"),
         run_id=_optional_str(inputs.get("run_id")),
+    )
+    return with_plan_approval_candidate(
+        result,
+        action_count=_plan_action_count(result, "ready_for_owner_review"),
+        source_field="plan_run_id",
     )
 
 
@@ -515,11 +536,16 @@ def _ozon_inbox_handler(
 ) -> dict[str, Any]:
     if credentials is None:
         raise ValueError(f"Task `{task.name}` requires credentials.")
-    return run_ozon_inbox_triage(
+    result = run_ozon_inbox_triage(
         credentials=credentials,
         data_dir=data_dir,
         run_id=_optional_str(inputs.get("run_id")),
         limit=_int_input(inputs, "limit", 300),
+    )
+    return with_plan_approval_candidate(
+        result,
+        action_count=_plan_action_count(result, "apply_actions_count"),
+        source_field="source_run_id",
     )
 
 
@@ -531,11 +557,42 @@ def _wb_inbox_handler(
 ) -> dict[str, Any]:
     if credentials is None:
         raise ValueError(f"Task `{task.name}` requires credentials.")
-    return run_wb_inbox_triage(
+    result = run_wb_inbox_triage(
         credentials=credentials,
         data_dir=data_dir,
         run_id=_optional_str(inputs.get("run_id")),
         limit=_int_input(inputs, "limit", 100),
+    )
+    return with_plan_approval_candidate(
+        result,
+        action_count=_plan_action_count(result, "apply_actions_count"),
+        source_field="source_run_id",
+    )
+
+
+def _ozon_inbox_verify_handler(
+    task: RegisteredTask,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    return run_ozon_inbox_verify(
+        data_dir=data_dir,
+        source_run_id=_required_str(inputs, "source_run_id", task.name),
+        run_id=_optional_str(inputs.get("run_id")),
+    )
+
+
+def _wb_inbox_verify_handler(
+    task: RegisteredTask,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    return run_wb_inbox_verify(
+        data_dir=data_dir,
+        source_run_id=_required_str(inputs, "source_run_id", task.name),
+        run_id=_optional_str(inputs.get("run_id")),
     )
 
 
@@ -547,10 +604,20 @@ def _ozon_elastic_plan_handler(
 ) -> dict[str, Any]:
     if credentials is None:
         raise ValueError(f"Task `{task.name}` requires credentials.")
-    return run_ozon_elastic_plan(
+    result = run_ozon_elastic_plan(
         credentials=credentials,
         data_dir=data_dir,
         run_id=_optional_str(inputs.get("run_id")),
+    )
+    return with_plan_approval_candidate(
+        result,
+        action_count=_plan_action_count(
+            result,
+            "add_to_action",
+            "update_action_price_with_changed_price",
+            "deactivate_from_action",
+        ),
+        source_field="plan_run_id",
     )
 
 
@@ -562,11 +629,21 @@ def _ozon_actions_optimizer_plan_handler(
 ) -> dict[str, Any]:
     if credentials is None:
         raise ValueError(f"Task `{task.name}` requires credentials.")
-    return run_ozon_actions_optimizer_plan(
+    result = run_ozon_actions_optimizer_plan(
         credentials=credentials,
         data_dir=data_dir,
         run_id=_optional_str(inputs.get("run_id")),
         lk_boost_summary_json=_optional_path(inputs.get("lk_boost_summary_json")),
+    )
+    return with_plan_approval_candidate(
+        result,
+        action_count=_plan_action_count(
+            result,
+            "recommended_add",
+            "recommended_update",
+            "recommended_switch_review",
+        ),
+        source_field="plan_run_id",
     )
 
 
@@ -578,13 +655,18 @@ def _wb_actions_discount_plan_handler(
 ) -> dict[str, Any]:
     if credentials is None:
         raise ValueError(f"Task `{task.name}` requires credentials.")
-    return run_wb_actions_discount_plan(
+    result = run_wb_actions_discount_plan(
         credentials=credentials,
         data_dir=data_dir,
         run_id=_optional_str(inputs.get("run_id")),
         scheme_text=_optional_str(inputs.get("scheme_text")) or "70-55-55",
         actions_dir=_optional_path(inputs.get("actions_dir")),
         prices_json=_optional_path(inputs.get("prices_json")),
+    )
+    return with_plan_approval_candidate(
+        result,
+        action_count=_plan_action_count(result, "changed_rows"),
+        source_field="plan_run_id",
     )
 
 
@@ -596,12 +678,17 @@ def _wb_best_price_action_plan_handler(
 ) -> dict[str, Any]:
     if credentials is None:
         raise ValueError(f"Task `{task.name}` requires credentials.")
-    return run_wb_best_price_action_plan(
+    result = run_wb_best_price_action_plan(
         credentials=credentials,
         data_dir=data_dir,
         outside_discount=_int_input(inputs, "outside_discount", 50),
         run_id=_optional_str(inputs.get("run_id")),
         price_plan_path=_optional_path(inputs.get("price_plan_path")),
+    )
+    return with_plan_approval_candidate(
+        result,
+        action_count=_plan_action_count(result, "to_change_discount"),
+        source_field="plan_run_id",
     )
 
 
@@ -758,7 +845,7 @@ def _approved_cards_batch_plan_handler(
         internal_skus = [item.strip() for item in internal_skus.replace(",", " ").split() if item.strip()]
     if not isinstance(internal_skus, list) or not internal_skus:
         raise ValueError("approved-cards-batch-plan requires internal_skus list.")
-    return run_plan_approved_cards(
+    result = run_plan_approved_cards(
         credentials=credentials,
         data_dir=data_dir,
         internal_skus=[str(item) for item in internal_skus],
@@ -766,6 +853,17 @@ def _approved_cards_batch_plan_handler(
         ozon_create_min_price=_optional_str(inputs.get("ozon_create_min_price")) or "",
         ozon_create_allow_manual_review=_bool_input(inputs, "ozon_create_allow_manual_review", False),
         runtime_db=_optional_path(inputs.get("runtime_db")),
+    )
+    return with_plan_approval_candidate(
+        result,
+        action_count=_plan_action_count(
+            result,
+            "seller_sku_ready",
+            "content_ready",
+            "wb_create_ready",
+            "ozon_create_ready",
+        ),
+        source_field="plan_run_id",
     )
 
 
@@ -929,6 +1027,26 @@ def _ozon_elastic_verify_handler(
     )
 
 
+def _ozon_cpc_optimization_plan_handler(
+    task: RegisteredTask,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    result = run_ozon_cpc_optimization_plan(
+        data_dir=data_dir,
+        run_id=_optional_str(inputs.get("run_id")),
+        source_run_id=_optional_str(inputs.get("source_run_id")),
+        rows_csv=_optional_path(inputs.get("rows_csv")),
+        current_bids_json=_optional_path(inputs.get("current_bids_json")),
+    )
+    return with_plan_approval_candidate(
+        result,
+        action_count=_plan_action_count(result, "apply_payload_rows"),
+        source_field="plan_run_id",
+    )
+
+
 def _ozon_cpc_bids_apply_handler(
     task: RegisteredTask,
     data_dir: Path,
@@ -983,7 +1101,7 @@ def _ozon_inbox_apply_handler(
     )
 
 
-def _reviews_questions_apply_handler(
+def _reviews_questions_handler(
     task: RegisteredTask,
     data_dir: Path,
     credentials: AppCredentials | None,
@@ -991,12 +1109,12 @@ def _reviews_questions_apply_handler(
 ) -> dict[str, Any]:
     if credentials is None:
         raise ValueError(f"Task `{task.name}` requires credentials.")
-    return run_reviews_questions_apply(
+    return run_reviews_questions(
         credentials=credentials,
         data_dir=data_dir,
-        approved_path=Path(_required_str(inputs, "approved_path", task.name)),
         run_id=_optional_str(inputs.get("run_id")),
-        confirmed_by_user=_bool_input(inputs, "confirmed_by_user", False),
+        marketplace=_optional_str(inputs.get("marketplace")) or "all",
+        limit=_int_input(inputs, "limit", 100),
     )
 
 
@@ -1102,6 +1220,52 @@ def _wb_inbox_apply_handler(
     )
 
 
+def _wb_promotion_bid_plan_handler(
+    task: RegisteredTask,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    result = run_wb_promotion_bid_plan(
+        data_dir=data_dir,
+        run_id=_optional_str(inputs.get("run_id")),
+        source_run_id=_optional_str(inputs.get("source_run_id")),
+        products_csv=_optional_path(inputs.get("products_csv")),
+        campaigns_json=_optional_path(inputs.get("campaigns_json")),
+        active_cpc_only=_bool_input(inputs, "active_cpc_only", True),
+    )
+    return with_plan_approval_candidate(
+        result,
+        action_count=_plan_action_count(result, "apply_payload_rows"),
+        source_field="plan_run_id",
+    )
+
+
+def _wb_promotion_bid_parser_enriched_plan_handler(
+    task: RegisteredTask,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    result = run_wb_promotion_bid_parser_enriched_plan(
+        data_dir=data_dir,
+        run_id=_optional_str(inputs.get("run_id")),
+        base_plan_run_id=_optional_str(inputs.get("base_plan_run_id")),
+        base_plan_csv=_optional_path(inputs.get("base_plan_csv")),
+        signals_csv=_path_list_input(inputs, "signals_csv"),
+        min_stock=_int_input(inputs, "min_stock", 4),
+        parser_test_increase_percent=Decimal(
+            _optional_str(inputs.get("parser_test_increase_percent")) or "10"
+        ),
+        min_bid=Decimal(_optional_str(inputs.get("min_bid")) or "1.00"),
+    )
+    return with_plan_approval_candidate(
+        result,
+        action_count=_plan_action_count(result, "apply_payload_rows"),
+        source_field="plan_run_id",
+    )
+
+
 def _wb_promotion_bids_apply_handler(
     task: RegisteredTask,
     data_dir: Path,
@@ -1174,6 +1338,26 @@ def _wb_promotion_bids_parser_enriched_verify_handler(
     )
 
 
+def _plan_action_count(result: dict[str, Any], *field_names: str) -> int:
+    summary = result.get("summary")
+    summary_data = summary if isinstance(summary, dict) else {}
+    total = 0
+    for field_name in field_names:
+        value = summary_data.get(field_name, result.get(field_name, 0))
+        if isinstance(value, bool):
+            raise ValueError(f"planner action count `{field_name}` must be an integer")
+        try:
+            count = int(value or 0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"planner action count `{field_name}` must be an integer"
+            ) from exc
+        if count < 0:
+            raise ValueError(f"planner action count `{field_name}` cannot be negative")
+        total += count
+    return total
+
+
 def _safe_artifacts(summary: dict[str, Any]) -> dict[str, str]:
     artifacts = summary.get("artifacts")
     if not isinstance(artifacts, dict):
@@ -1207,6 +1391,17 @@ def _optional_str(value: Any) -> str | None:
 def _optional_path(value: Any) -> Path | None:
     text = _optional_str(value)
     return Path(text) if text else None
+
+
+def _path_list_input(inputs: dict[str, Any], key: str) -> list[Path] | None:
+    value = inputs.get(key)
+    if value in (None, ""):
+        return None
+    if isinstance(value, str):
+        return [Path(item.strip()) for item in value.replace(";", ",").split(",") if item.strip()]
+    if isinstance(value, (list, tuple, set)):
+        return [Path(str(item)) for item in value if str(item).strip()]
+    return None
 
 
 def _required_str(inputs: dict[str, Any], key: str, task_name: str) -> str:

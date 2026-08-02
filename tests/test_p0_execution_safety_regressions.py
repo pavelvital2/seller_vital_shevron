@@ -16,6 +16,7 @@ from seller_agent.core.job_store import JobStore
 from seller_agent.core.workflow_runner import WorkflowRunner
 from seller_agent.safety.approval_package import build_approval_package
 from seller_agent.safety.guard import SafetyGuard
+from seller_agent.safety.plan_approval import with_plan_approval_candidate
 from seller_agent.tasks.registry import RegisteredTask, TaskRegistry, default_task_registry
 
 
@@ -308,7 +309,11 @@ def test_confirmed_flag_does_not_create_or_approve_runtime_approval(tmp_path: Pa
     plan_run_id = "plan-pending-review"
 
     def plan_handler(task, data_dir, credentials, inputs):  # type: ignore[no-untyped-def]
-        return {"run_id": plan_run_id, "overall_status": "ok", "artifacts": {}}
+        return with_plan_approval_candidate(
+            {"run_id": plan_run_id, "overall_status": "ok", "artifacts": {}},
+            action_count=1,
+            source_field="plan_run_id",
+        )
 
     store = JobStore(tmp_path / "runtime.db")
     service = JobService(

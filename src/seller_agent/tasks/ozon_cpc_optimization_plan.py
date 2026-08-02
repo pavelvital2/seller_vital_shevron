@@ -102,6 +102,23 @@ def _target_bid(reference_bid: Decimal | None, change_percent: Decimal | None) -
     return target.quantize(Decimal("0.01"))
 
 
+def is_default_cpc_apply_payload_row(row: dict[str, Any]) -> bool:
+    current_raw = row.get("current_bid")
+    target_raw = row.get("target_bid")
+    if current_raw in (None, "") or target_raw in (None, ""):
+        return False
+    try:
+        current_bid = Decimal(str(current_raw).replace(" ", "").replace(",", "."))
+        target_bid = Decimal(str(target_raw).replace(" ", "").replace(",", "."))
+    except (InvalidOperation, ValueError):
+        return False
+    return bool(
+        row.get("bid_reference_type") == "current_bid_api"
+        and target_bid >= Decimal("1.00")
+        and target_bid != current_bid
+    )
+
+
 def _read_current_bids(path: Path | None) -> dict[str, Decimal]:
     if path is None:
         return {}
@@ -338,6 +355,9 @@ def build_cpc_optimization_rows(
         "action_rows": sum(count for action, count in action_counts.items() if action != "keep_monitor"),
         "action_rows_with_current_bid": sum(
             1 for row in rows if row["recommended_action"] != "keep_monitor" and row["current_bid"]
+        ),
+        "apply_payload_rows": sum(
+            1 for row in rows if is_default_cpc_apply_payload_row(row)
         ),
         "action_counts": action_counts,
         "thresholds": {
