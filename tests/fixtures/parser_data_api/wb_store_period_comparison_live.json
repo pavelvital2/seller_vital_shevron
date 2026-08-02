@@ -1,0 +1,25 @@
+{
+  "complete": true,
+  "current": {
+    "query_product_pairs": 30,
+    "visible_products": 12,
+    "visible_queries": 20
+  },
+  "current_date": "2026-08-02",
+  "movement": {
+    "declined_pairs": 2,
+    "improved_pairs": 4,
+    "lost_pairs": 1,
+    "new_pairs": 3,
+    "unchanged_pairs": 20
+  },
+  "partial": false,
+  "previous": {
+    "query_product_pairs": 25,
+    "visible_products": 10,
+    "visible_queries": 18
+  },
+  "previous_date": "2026-07-30",
+  "query_count": 30,
+  "total_rows": 42
+}

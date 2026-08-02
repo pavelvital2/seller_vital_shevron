@@ -1,0 +1,15 @@
+{
+  "dataset": "ozon",
+  "rows": [
+    {
+      "query_pack_id": "shevron-core",
+      "region_id": "moscow",
+      "run_date": "2026-07-31"
+    },
+    {
+      "query_pack_id": "shevron-core",
+      "region_id": "moscow",
+      "run_date": "2026-07-30"
+    }
+  ]
+}

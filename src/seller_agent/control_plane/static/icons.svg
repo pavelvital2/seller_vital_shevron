@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg">
+  <symbol id="store" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="m2 7 3-4h14l3 4"/><path d="M5 13v8h14v-8"/><path d="M9 21v-6h6v6"/><path d="M2 7h20"/><path d="M6 7v2a2 2 0 0 1-4 0V7"/><path d="M10 7v2a2 2 0 0 1-4 0V7"/><path d="M14 7v2a2 2 0 0 1-4 0V7"/><path d="M18 7v2a2 2 0 0 1-4 0V7"/><path d="M22 7v2a2 2 0 0 1-4 0V7"/>
+  </symbol>
+  <symbol id="chart" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M3 3v18h18"/><path d="m7 16 4-5 4 3 5-7"/>
+  </symbol>
+  <symbol id="list-checks" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="m3 5 2 2 4-4"/><path d="M3 12h.01"/><path d="M3 19h.01"/><path d="M11 6h10"/><path d="M11 12h10"/><path d="M11 18h10"/>
+  </symbol>
+  <symbol id="shield-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3v8Z"/><path d="m9 12 2 2 4-4"/>
+  </symbol>
+  <symbol id="refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M20 6v6h-6"/><path d="M4 18v-6h6"/><path d="M18.5 9a7 7 0 0 0-12-3L4 8"/><path d="M5.5 15a7 7 0 0 0 12 3l2.5-2"/>
+  </symbol>
+  <symbol id="clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>
+  </symbol>
+</svg>

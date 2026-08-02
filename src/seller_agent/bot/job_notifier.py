@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from seller_agent.bot.telegram_runner import (
     ApiRequest,
@@ -14,6 +14,7 @@ from seller_agent.bot.telegram_runner import (
     telegram_api_document_request,
     telegram_api_request,
 )
+from seller_agent.control_plane.config import load_control_bot_token
 from seller_agent.core.job_models import ApprovalRecord, JobRecord, TelegramUpdateRecord
 from seller_agent.core.job_store import (
     DEFAULT_RUNTIME_DB,
@@ -45,6 +46,7 @@ def notify_telegram_job_result(
     data_dir: Path = Path("data"),
     api_request: ApiRequest = telegram_api_request,
     document_api_request: DocumentApiRequest = telegram_api_document_request,
+    control_token_loader: Callable[[], str | None] | None = None,
 ) -> JobNotificationResult:
     job_store = store or JobStore(runtime_db)
     job = job_store.get_job(job_id)
@@ -55,6 +57,17 @@ def notify_telegram_job_result(
             ok=True,
             job_id=job_id,
             blocked_reason="job_not_terminal",
+        )
+    control_route = job_store.get_job_notification_route(job_id)
+    if control_route is not None:
+        return _notify_control_job_result(
+            job=job,
+            route=control_route,
+            job_store=job_store,
+            data_dir=data_dir,
+            api_request=api_request,
+            document_api_request=document_api_request,
+            token_loader=control_token_loader,
         )
     update = job_store.get_telegram_update_by_job_id(job_id)
     if update is None:
@@ -126,6 +139,146 @@ def notify_telegram_job_result(
         sent_documents=document_results,
         error="; ".join(result.error for result in [*text_results, *document_results] if result.error),
     )
+
+
+def _notify_control_job_result(
+    *,
+    job: JobRecord,
+    route: dict[str, Any],
+    job_store: JobStore,
+    data_dir: Path,
+    api_request: ApiRequest,
+    document_api_request: DocumentApiRequest,
+    token_loader: Callable[[], str | None] | None,
+) -> JobNotificationResult:
+    if str(route.get("processing_status") or "") == "sent":
+        return JobNotificationResult(
+            ok=True,
+            job_id=job.job_id,
+            blocked_reason="already_notified",
+        )
+    if str(route.get("channel") or "") != "control_bot":
+        job_store.update_job_notification_route(
+            job_id=job.job_id,
+            processing_status="failed",
+        )
+        return JobNotificationResult(
+            ok=False,
+            job_id=job.job_id,
+            blocked_reason="notification_route_invalid",
+        )
+    chat_id = _int_or_none(route.get("chat_id"))
+    if chat_id is None:
+        job_store.update_job_notification_route(
+            job_id=job.job_id,
+            processing_status="failed",
+        )
+        return JobNotificationResult(
+            ok=False,
+            job_id=job.job_id,
+            blocked_reason="invalid_chat_id",
+        )
+    loader = token_loader or load_control_bot_token
+    try:
+        selected_token = loader() or ""
+    except (OSError, ValueError):
+        selected_token = ""
+    if not selected_token:
+        job_store.update_job_notification_route(
+            job_id=job.job_id,
+            processing_status="failed",
+        )
+        return JobNotificationResult(
+            ok=False,
+            job_id=job.job_id,
+            chat_id=chat_id,
+            blocked_reason="control_token_unavailable",
+        )
+
+    text = _control_job_result_text(
+        job,
+        public_job_id=str(route.get("public_job_id") or ""),
+    )
+    reply_markup: dict[str, Any] = {}
+    text_results = send_telegram_text(
+        token=selected_token,
+        chat_id=chat_id,
+        thread_id=None,
+        text=text,
+        reply_markup=reply_markup,
+        api_request=api_request,
+    )
+    document_results: list[TelegramSendResult] = []
+    for path in safe_report_attachment_paths(
+        artifacts=_job_artifacts(job),
+        data_dir=data_dir,
+    ):
+        document_results.append(
+            send_telegram_document(
+                token=selected_token,
+                chat_id=chat_id,
+                thread_id=None,
+                document_path=path,
+                document_api_request=document_api_request,
+            )
+        )
+    ok = all(result.ok for result in text_results) and all(
+        result.ok for result in document_results
+    )
+    job_store.update_job_notification_route(
+        job_id=job.job_id,
+        processing_status="sent" if ok else "failed",
+    )
+    return JobNotificationResult(
+        ok=ok,
+        job_id=job.job_id,
+        chat_id=chat_id,
+        sent_messages=text_results,
+        sent_documents=document_results,
+        error="; ".join(
+            result.error
+            for result in [*text_results, *document_results]
+            if result.error
+        ),
+    )
+
+
+def _control_job_result_text(job: JobRecord, *, public_job_id: str) -> str:
+    summary = _job_summary(job)
+    status_labels = {
+        "ok": "готово",
+        "success": "готово",
+        "partial_success": "готово частично",
+        "warning": "требует внимания",
+        "failed": "ошибка",
+        "timeout": "превышено время ожидания",
+        "cancelled": "отменено",
+    }
+    marketplace_labels = {"ozon": "Ozon", "wb": "Wildberries"}
+    overall_status = status_labels.get(
+        str(summary.get("overall_status") or job.status),
+        "неизвестно",
+    )
+    marketplace = marketplace_labels.get(str(summary.get("marketplace") or ""), "")
+    period_days = summary.get("period_days")
+    lines = [
+        "Аналитика Vital Shevron готова",
+        "",
+        f"Статус: `{overall_status}`",
+        f"Идентификатор задания: `{public_job_id or 'н/д'}`",
+    ]
+    if marketplace:
+        lines.append(f"Площадка: `{marketplace}`")
+    if isinstance(period_days, int):
+        lines.append(f"Период: `{period_days}` дней")
+    lines.extend(
+        [
+            "",
+            "Откройте приложение в Telegram, чтобы увидеть свежесть, источники и подтверждённые факты.",
+            "Изменения на площадке не выполнялись.",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def build_job_result_text(job: JobRecord) -> str:
