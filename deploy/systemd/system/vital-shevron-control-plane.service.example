@@ -5,6 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+User=pavel
+Group=pavel
 WorkingDirectory=/home/pavel/projects/seller_vital_shevron
 Environment=PYTHONPATH=/home/pavel/projects/seller_vital_shevron/src
 EnvironmentFile=/home/pavel/projects/seller_vital_shevron/deploy/env/vital-shevron-control-plane.env
@@ -45,4 +47,4 @@ InaccessiblePaths=-/home/pavel/.parser-data-api.env
 UnsetEnvironment=OZON_SELLER_CLIENT_ID OZON_SELLER_API_KEY OZON_PERFORMANCE_CLIENT_ID OZON_PERFORMANCE_CLIENT_SECRET WB_API_TOKEN VITAL_SHEVRON_OZON_SELLER_CREDENTIALS_FILE VITAL_SHEVRON_OZON_PERFORMANCE_CREDENTIALS_FILE VITAL_SHEVRON_WB_TOKEN_FILE SELLER_OZON_SELLER_CREDENTIALS_FILE SELLER_OZON_PERFORMANCE_CREDENTIALS_FILE SELLER_WB_TOKEN_FILE PARSER_DATA_API_TOKEN
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target
