@@ -2,8 +2,12 @@
 
 Дата: 2026-08-02
 
-Статус: реализация завершена в isolated worktree и ожидает независимой
-приёмки. Commit, merge, deployment и production smoke не выполнялись.
+Статус: развёрнуто в production 2026-08-02. Проверенный кодовый commit:
+`311ec23c7389640acb04f09c1c4abeba12ddad57`.
+
+Независимая приёмка, controlled fast-forward и production owner smoke
+завершены. Старый Telegram-бот, Nginx, Job Worker, marketplace runtime и
+существующие незакоммиченные карточные/ликвидационные изменения не менялись.
 
 ## Граница этапа
 
@@ -141,11 +145,7 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 
 ## Rollback
 
-До deployment rollback реализации — удалить только изменения ветки или
-удалить worktree после независимой фиксации отчёта. Production при этом не
-затрагивается.
-
-Если Stage 4A будет отдельно разрешён и развернут позднее, rollback должен:
+Rollback production должен:
 
 1. вернуть предыдущий reviewed code bundle control service;
 2. restart только `vital-shevron-control-plane.service`;
@@ -157,9 +157,26 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
 Stage 4A не добавляет SQLite migration, systemd/Nginx/runtime config или
 секреты, поэтому schema rollback не требуется.
 
+Точки восстановления deployment 2026-08-02:
+
+- Git ref: `backup/pre-stage4a-20260802-171142`;
+- SQLite backup:
+  `/home/pavel/backups/vital-shevron-control-plane/20260802_171227-pre-stage4a/runtime.db`.
+
+После deployment проверено:
+
+- focused production suite: `66 passed`;
+- task policy gaps: `0`;
+- `vital-shevron-control-plane.service`: `active` после restart;
+- localhost и public `/ready`: HTTP 200;
+- public TLS: valid;
+- owner auth/session и read-only `operations`, `jobs`, `approvals`: HTTP 200;
+- unauthenticated read-only endpoints: HTTP 401;
+- старый Telegram-бот: `active`, tmux-сессий: `9`;
+- marketplace jobs и write-операции в smoke не запускались.
+
 ## Следующий gate
 
-Независимый архитектор проверяет diff, focused/full tests, security scan и
-Playwright artifacts. Commit, merge, deployment и owner smoke выполняются
-только отдельным контролируемым шагом после успешной приёмки. Следующий этап
-не начинать.
+Следующий пакет Stage 4 не начинать без отдельного ТЗ. Добавление любого
+write/dry-run/apply/approve/verify control требует нового server-side exact
+contract, safety review, owner approval и отдельного production gate.
