@@ -75,8 +75,35 @@ pending_review -> approved -> applying -> applied -> verified -> closed
 может перейти дальше только через безопасную verify-задачу. Успешный recovery
 verify закрывает approval; warning/error его не закрывает.
 
-## WB browser profile
+## Канонические marketplace/profile leases
 
-Общий lease `lk:wb:browser-profile` используется session keepalive и WB
-action plan/apply. Внешний keeper ожидает lease до 120 секунд. Если ресурс
-занят, marketplace workflow не начинается и write-window не открывается.
+Все операции, которые кратковременно изменяют общий browser profile, используют
+точный lease одного фактического профиля:
+
+```text
+lk:ozon:profile:chrome-profile
+lk:wb:profile:browser-profile
+```
+
+Job Worker consumers, Ozon/WB session refresh services и ручные refresh wrappers
+получают ключ через `seller_agent.core.resource_keys`. Внешний refresh ожидает
+lease до 120 секунд и освобождает его сразу после завершения подпроцесса.
+Постоянный Ozon Chrome keeper является только browser host и lease на весь срок
+жизни не удерживает; lease берет короткая mutable CDP refresh/monitor операция.
+
+Прямые maintenance-entrypoints подчиняются тому же контракту. Команды
+`sessions start/stop/restart` атомарно получают ключи всех выбранных профилей,
+а `restore-ozon-session` получает Ozon key до остановки процессов, удаления
+`Singleton*` и interactive login. `install-session-systemd --apply --switch`
+атомарно получает оба profile key до первого switch-side effect. После
+завершения switch manager leases освобождаются, затем обе self-leasing oneshot
+refresh-службы запускаются синхронно и их terminal результаты входят в общий
+status; ошибка любой службы не может быть представлена как успешный switch.
+`sessions status`, dry-run и установка units без `--switch` profile lease не
+берут. Все эти leases ограничены TTL операции и снимаются в `finally`.
+
+API write-задачи отдельно используют `api:ozon:vital-shevron:write` или
+`api:wb:vital-shevron:write` вместе с предметными locks. Read-only API задачи
+эти ключи не получают, поэтому не конфликтуют с write/LK без фактического
+общего mutable resource. Если требуемый lease занят, marketplace workflow не
+начинается и write-window не открывается.

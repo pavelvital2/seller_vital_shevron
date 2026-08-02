@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Callable
 
 from seller_agent.core.run_manifest import ManifestMode, ManifestRisk
+from seller_agent.core.resource_keys import task_resource_keys
 
 
 TaskHandler = Callable[..., dict[str, Any]]
@@ -452,7 +453,7 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
             "period_days": {"type": "integer", "enum": [15, 30], "required": True},
         },
         timeout_seconds=900,
-        lock_keys=("lk:wb:browser-profile",),
+        lock_keys=task_resource_keys(lk_marketplaces=("wb",)),
     ),
     RegisteredTask(
         name="status-preflight",
@@ -466,6 +467,7 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_credentials=True,
         telegram_enabled=True,
         telegram_button_label="/status",
+        lock_keys=task_resource_keys(lk_marketplaces=("ozon", "wb")),
     ),
     RegisteredTask(
         name="daily-morning-report",
@@ -479,6 +481,7 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_credentials=True,
         telegram_enabled=True,
         telegram_button_label="/today",
+        lock_keys=task_resource_keys(lk_marketplaces=("ozon", "wb")),
     ),
     RegisteredTask(
         name="liquidation-daily-control",
@@ -512,7 +515,6 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         telegram_enabled=True,
         telegram_button_label="/wb-liquidation-stage2",
         timeout_seconds=600,
-        lock_keys=("marketplace:wb:prices-read",),
     ),
     RegisteredTask(
         name="wb-liquidation-stage2-apply",
@@ -528,7 +530,10 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         source_plan_task="wb-liquidation-stage2-plan",
         verify_task="wb-liquidation-stage2-verify",
         timeout_seconds=900,
-        lock_keys=("marketplace:wb", "actions:wb:discounts", "lk:wb:browser-profile"),
+        lock_keys=task_resource_keys(
+            api_write_marketplaces=("wb",),
+            subject_keys=("actions:wb:discounts",),
+        ),
     ),
     RegisteredTask(
         name="wb-liquidation-stage2-verify",
@@ -587,7 +592,7 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         telegram_enabled=True,
         telegram_button_label="/ozon-lk-state",
         timeout_seconds=300,
-        lock_keys=("lk:ozon:session-check",),
+        lock_keys=task_resource_keys(lk_marketplaces=("ozon",)),
     ),
     RegisteredTask(
         name="ozon-min-price-timer-plan",
@@ -602,7 +607,6 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         telegram_enabled=True,
         telegram_button_label="/ozon-min-price-timer",
         timeout_seconds=600,
-        lock_keys=("marketplace:ozon:prices-read",),
     ),
     RegisteredTask(
         name="marketplace-period-report",
@@ -737,6 +741,7 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         runbook_path="data/planning/ozon_messenger_runbook.md",
         requires_credentials=True,
         requires_confirmation=True,
+        lock_keys=task_resource_keys(lk_marketplaces=("ozon",)),
     ),
     RegisteredTask(
         name="ozon-inbox",
@@ -750,6 +755,7 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_credentials=True,
         telegram_enabled=True,
         telegram_button_label="/ozon-inbox",
+        lock_keys=task_resource_keys(lk_marketplaces=("ozon",)),
     ),
     RegisteredTask(
         name="ozon-inbox-apply",
@@ -765,7 +771,11 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_confirmation=True,
         source_plan_task="ozon-inbox",
         verify_task="ozon-inbox",
-        lock_keys=("ozon-inbox", "ozon-lk"),
+        lock_keys=task_resource_keys(
+            api_write_marketplaces=("ozon",),
+            lk_marketplaces=("ozon",),
+            subject_keys=("ozon-inbox",),
+        ),
     ),
     RegisteredTask(
         name="wb-inbox",
@@ -779,6 +789,7 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_credentials=True,
         telegram_enabled=True,
         telegram_button_label="/wb-inbox",
+        lock_keys=task_resource_keys(lk_marketplaces=("wb",)),
     ),
     RegisteredTask(
         name="wb-inbox-apply",
@@ -793,7 +804,11 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_confirmation=True,
         source_plan_task="wb-inbox",
         verify_task="wb-inbox",
-        lock_keys=("wb-inbox",),
+        lock_keys=task_resource_keys(
+            api_write_marketplaces=("wb",),
+            lk_marketplaces=("wb",),
+            subject_keys=("wb-inbox",),
+        ),
     ),
     RegisteredTask(
         name="sessions",
@@ -870,7 +885,10 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_confirmation=True,
         source_plan_task="ozon-actions-optimizer-plan",
         verify_task="ozon-actions-optimizer-verify",
-        lock_keys=("marketplace:ozon", "actions:ozon"),
+        lock_keys=task_resource_keys(
+            api_write_marketplaces=("ozon",),
+            subject_keys=("actions:ozon",),
+        ),
     ),
     RegisteredTask(
         name="ozon-actions-optimizer-verify",
@@ -896,7 +914,10 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_confirmation=True,
         source_plan_task="ozon-elastic-plan",
         verify_task="ozon-elastic-verify",
-        lock_keys=("marketplace:ozon", "actions:ozon:elastic"),
+        lock_keys=task_resource_keys(
+            api_write_marketplaces=("ozon",),
+            subject_keys=("actions:ozon:elastic",),
+        ),
     ),
     RegisteredTask(
         name="ozon-elastic-verify",
@@ -932,7 +953,10 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_confirmation=True,
         source_plan_task="ozon-cpc-optimization-plan",
         verify_task="ozon-cpc-bids-verify",
-        lock_keys=("marketplace:ozon", "ads:ozon:cpc"),
+        lock_keys=task_resource_keys(
+            api_write_marketplaces=("ozon",),
+            subject_keys=("ads:ozon:cpc",),
+        ),
     ),
     RegisteredTask(
         name="ozon-cpc-bids-verify",
@@ -957,7 +981,7 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_credentials=True,
         telegram_enabled=True,
         telegram_button_label="/wb-actions",
-        lock_keys=("lk:wb:browser-profile",),
+        lock_keys=task_resource_keys(lk_marketplaces=("wb",)),
     ),
     RegisteredTask(
         name="wb-actions-discount-apply",
@@ -972,7 +996,11 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_confirmation=True,
         source_plan_task="wb-actions-discount-plan",
         verify_task="wb-actions-discount-verify",
-        lock_keys=("marketplace:wb", "actions:wb:discounts", "lk:wb:browser-profile"),
+        lock_keys=task_resource_keys(
+            api_write_marketplaces=("wb",),
+            lk_marketplaces=("wb",),
+            subject_keys=("actions:wb:discounts",),
+        ),
     ),
     RegisteredTask(
         name="wb-actions-discount-verify",
@@ -1000,7 +1028,7 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         telegram_enabled=True,
         telegram_button_label="/wb-actions-min-price",
         timeout_seconds=900,
-        lock_keys=("lk:wb:browser-profile",),
+        lock_keys=task_resource_keys(lk_marketplaces=("wb",)),
     ),
     RegisteredTask(
         name="wb-best-price-action-apply",
@@ -1018,7 +1046,11 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         source_plan_task="wb-best-price-action-plan",
         verify_task="wb-best-price-action-verify",
         timeout_seconds=1800,
-        lock_keys=("marketplace:wb", "actions:wb:discounts", "lk:wb:browser-profile"),
+        lock_keys=task_resource_keys(
+            api_write_marketplaces=("wb",),
+            lk_marketplaces=("wb",),
+            subject_keys=("actions:wb:discounts",),
+        ),
     ),
     RegisteredTask(
         name="wb-best-price-action-verify",
@@ -1088,7 +1120,10 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_mapping=True,
         source_plan_task="wb-promotion-bid-parser-enriched-plan",
         verify_task="wb-promotion-bids-parser-enriched-verify",
-        lock_keys=("marketplace:wb", "ads:wb:promotion-bids"),
+        lock_keys=task_resource_keys(
+            api_write_marketplaces=("wb",),
+            subject_keys=("ads:wb:promotion-bids",),
+        ),
     ),
     RegisteredTask(
         name="wb-promotion-bids-parser-enriched-verify",
@@ -1115,7 +1150,10 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_confirmation=True,
         source_plan_task="wb-promotion-bid-plan",
         verify_task="wb-promotion-bids-verify",
-        lock_keys=("marketplace:wb", "ads:wb:promotion-bids"),
+        lock_keys=task_resource_keys(
+            api_write_marketplaces=("wb",),
+            subject_keys=("ads:wb:promotion-bids",),
+        ),
     ),
     RegisteredTask(
         name="wb-promotion-bids-verify",
@@ -1167,7 +1205,10 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_confirmation=True,
         source_plan_task="wb-card-create-plan",
         verify_task="wb-card-create-verify",
-        lock_keys=("marketplace:wb", "cards:wb:create"),
+        lock_keys=task_resource_keys(
+            api_write_marketplaces=("wb",),
+            subject_keys=("cards:wb:create",),
+        ),
     ),
     RegisteredTask(
         name="wb-card-create-verify",
@@ -1207,7 +1248,10 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_confirmation=True,
         source_plan_task="ozon-card-create-plan",
         verify_task="ozon-card-create-verify",
-        lock_keys=("marketplace:ozon", "cards:ozon:create"),
+        lock_keys=task_resource_keys(
+            api_write_marketplaces=("ozon",),
+            subject_keys=("cards:ozon:create",),
+        ),
     ),
     RegisteredTask(
         name="ozon-card-create-verify",
@@ -1248,7 +1292,10 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_confirmation=True,
         source_plan_task="ozon-product-remove-plan",
         verify_task="ozon-product-remove-verify",
-        lock_keys=("marketplace:ozon", "cards:ozon:remove"),
+        lock_keys=task_resource_keys(
+            api_write_marketplaces=("ozon",),
+            subject_keys=("cards:ozon:remove",),
+        ),
     ),
     RegisteredTask(
         name="ozon-product-remove-verify",
@@ -1291,7 +1338,10 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_confirmation=True,
         source_plan_task="ozon-partial-approved-diagnose",
         verify_task="ozon-partial-approved-diagnose",
-        lock_keys=("marketplace:ozon", "cards:ozon:partial-approved"),
+        lock_keys=task_resource_keys(
+            api_write_marketplaces=("ozon",),
+            subject_keys=("cards:ozon:partial-approved",),
+        ),
     ),
     RegisteredTask(
         name="seller-sku-update-plan",
@@ -1325,7 +1375,10 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_confirmation=True,
         source_plan_task="seller-sku-update-plan",
         verify_task="seller-sku-update-verify",
-        lock_keys=("marketplace:ozon", "marketplace:wb", "cards:seller-sku"),
+        lock_keys=task_resource_keys(
+            api_write_marketplaces=("ozon", "wb"),
+            subject_keys=("cards:seller-sku",),
+        ),
     ),
     RegisteredTask(
         name="seller-sku-update-verify",
@@ -1398,7 +1451,10 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_confirmation=True,
         source_plan_task="card-content-update-plan",
         verify_task="card-content-update-verify",
-        lock_keys=("marketplace:ozon", "marketplace:wb", "cards:content"),
+        lock_keys=task_resource_keys(
+            api_write_marketplaces=("ozon", "wb"),
+            subject_keys=("cards:content",),
+        ),
     ),
     RegisteredTask(
         name="card-content-update-verify",
@@ -1432,7 +1488,10 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_confirmation=True,
         source_plan_task="owner-approved-card-html-layer3-passport",
         verify_task="card-content-update-verify",
-        lock_keys=("marketplace:ozon", "marketplace:wb", "cards:approved-card"),
+        lock_keys=task_resource_keys(
+            api_write_marketplaces=("ozon", "wb"),
+            subject_keys=("cards:approved-card",),
+        ),
     ),
     RegisteredTask(
         name="approved-cards-batch-plan",
@@ -1449,7 +1508,7 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_credentials=True,
         requires_mapping=True,
         verify_task="card-content-update-verify",
-        lock_keys=("marketplace:ozon", "marketplace:wb", "cards:batch-plan"),
+        lock_keys=task_resource_keys(subject_keys=("cards:batch-plan",)),
     ),
     RegisteredTask(
         name="approved-cards-batch-apply",
@@ -1469,7 +1528,10 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_confirmation=True,
         source_plan_task="approved-cards-batch-plan",
         verify_task="card-content-update-verify",
-        lock_keys=("marketplace:ozon", "marketplace:wb", "cards:batch-apply"),
+        lock_keys=task_resource_keys(
+            api_write_marketplaces=("ozon", "wb"),
+            subject_keys=("cards:batch-apply",),
+        ),
     ),
     RegisteredTask(
         name="reviews-questions",
@@ -1484,6 +1546,7 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_lk=True,
         telegram_enabled=True,
         telegram_button_label="/reviews",
+        lock_keys=task_resource_keys(lk_marketplaces=("ozon", "wb")),
     ),
     RegisteredTask(
         name="reviews-questions-apply",
@@ -1499,7 +1562,11 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         requires_confirmation=True,
         source_plan_task="reviews-questions",
         verify_task="reviews-questions-verify",
-        lock_keys=("marketplace:ozon", "marketplace:wb", "reviews-questions"),
+        lock_keys=task_resource_keys(
+            api_write_marketplaces=("ozon", "wb"),
+            lk_marketplaces=("ozon", "wb"),
+            subject_keys=("reviews-questions",),
+        ),
     ),
     RegisteredTask(
         name="reviews-questions-verify",
@@ -1512,6 +1579,7 @@ DEFAULT_TASKS: tuple[RegisteredTask, ...] = (
         runbook_path="data/planning/reviews_questions_runbook.md",
         requires_credentials=True,
         requires_lk=True,
+        lock_keys=task_resource_keys(lk_marketplaces=("ozon", "wb")),
     ),
     RegisteredTask(
         name="reviews-questions-prepare-approved",

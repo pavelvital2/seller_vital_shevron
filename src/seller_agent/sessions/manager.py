@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager, nullcontext
 from datetime import datetime
 import json
 import os
@@ -8,8 +9,11 @@ import shutil
 import signal
 import subprocess
 import time
-from typing import Any
+from typing import Any, Iterator
+import uuid
 
+from seller_agent.core.job_store import DEFAULT_RUNTIME_DB, JobStore
+from seller_agent.core.resource_keys import canonical_lk_profile_key
 from seller_agent.reports.writer import ensure_dir, write_json
 from seller_agent.safety.locks import file_lock
 from seller_agent.sessions.state import PROJECT_ROOT, combined_session_status, systemd_user_env
@@ -26,6 +30,10 @@ SYSTEMD_UNITS = [
     "vital-shevron-wb-session-refresh.service",
     "vital-shevron-wb-session-refresh.timer",
 ]
+SESSION_OPERATION_LEASE_TTL_SECONDS = 1500
+RESTORE_OPERATION_LEASE_TTL_SECONDS = 3600
+SYSTEMD_SWITCH_LEASE_TTL_SECONDS = 1800
+PROFILE_LEASE_HELD_ENV = "SELLER_PROFILE_LEASE_HELD"
 
 
 SESSION_SCRIPTS = {
@@ -38,6 +46,45 @@ SESSION_SCRIPTS = {
         "stop": ["stop_wb_session_watchdog.sh"],
     },
 }
+
+
+class ProfileLeaseBusyError(RuntimeError):
+    def __init__(self, resource_keys: tuple[str, ...]) -> None:
+        super().__init__("profile resource lease is busy")
+        self.resource_keys = resource_keys
+
+
+@contextmanager
+def _profile_operation_leases(
+    marketplaces: list[str] | tuple[str, ...],
+    *,
+    runtime_db: Path,
+    operation: str,
+    ttl_seconds: int,
+) -> Iterator[tuple[str, ...]]:
+    resource_keys = tuple(canonical_lk_profile_key(item) for item in marketplaces)
+    owner_id = f"session-manager:{operation}:{os.getpid()}:{uuid.uuid4().hex}"
+    store = JobStore(runtime_db)
+    leases = store.acquire_resource_leases(
+        resource_keys=resource_keys,
+        owner_id=owner_id,
+        ttl_seconds=ttl_seconds,
+        data={"kind": "session_profile_operation", "operation": operation},
+    )
+    if leases is None:
+        raise ProfileLeaseBusyError(resource_keys)
+    try:
+        yield resource_keys
+    finally:
+        store.release_resource_leases(resource_keys=resource_keys, owner_id=owner_id)
+
+
+def _lease_held_env(extra: dict[str, str] | None = None) -> dict[str, str]:
+    env = dict(os.environ)
+    if extra:
+        env.update(extra)
+    env[PROFILE_LEASE_HELD_ENV] = "1"
+    return env
 
 
 def _public_args(args: list[str]) -> list[str]:
@@ -80,7 +127,12 @@ def _run_session_scripts(marketplace: str, action: str) -> list[dict[str, Any]]:
     scripts = SESSION_SCRIPTS[marketplace][action]
     results = []
     for script in scripts:
-        results.append(_run_command(["bash", str(SCRIPT_DIR / script)]))
+        results.append(
+            _run_command(
+                ["bash", str(SCRIPT_DIR / script)],
+                env=_lease_held_env(),
+            )
+        )
     return results
 
 
@@ -195,26 +247,53 @@ def run_session_manager(
     marketplace: str = "all",
     data_dir: Path = Path("data"),
     run_id: str | None = None,
+    runtime_db: Path = DEFAULT_RUNTIME_DB,
 ) -> dict[str, Any]:
     started_at = datetime.now()
     run_id = run_id or f"sessions_{action}_{started_at.strftime('%Y%m%dT%H%M%S')}"
     run_dir = ensure_dir(data_dir / "runs" / started_at.strftime("%Y-%m-%d") / run_id)
     selected = _selected_marketplaces(marketplace)
 
-    operations: dict[str, Any] = {}
     if action == "status":
         operations = {}
-    elif action in {"start", "stop"}:
-        for item in selected:
-            operations[item] = _run_session_scripts(item, action)
-    elif action == "restart":
-        for item in selected:
-            operations[item] = {
-                "stop": _run_session_scripts(item, "stop"),
-                "start": _run_session_scripts(item, "start"),
-            }
     else:
-        raise ValueError(f"unknown session action: {action}")
+        if action not in {"start", "stop", "restart"}:
+            raise ValueError(f"unknown session action: {action}")
+        operations = {}
+        try:
+            with _profile_operation_leases(
+                selected,
+                runtime_db=runtime_db,
+                operation=f"sessions:{action}",
+                ttl_seconds=SESSION_OPERATION_LEASE_TTL_SECONDS,
+            ):
+                if action in {"start", "stop"}:
+                    for item in selected:
+                        operations[item] = _run_session_scripts(item, action)
+                else:
+                    for item in selected:
+                        operations[item] = {
+                            "stop": _run_session_scripts(item, "stop"),
+                            "start": _run_session_scripts(item, "start"),
+                        }
+        except ProfileLeaseBusyError as exc:
+            result = {
+                "run_id": run_id,
+                "started_at": started_at.isoformat(timespec="seconds"),
+                "action": action,
+                "marketplace": marketplace,
+                "overall_status": "blocked",
+                "blocked_reason": "resource_lease_busy",
+                "resource_keys": list(exc.resource_keys),
+                "operations": {},
+                "sessions": {},
+                "artifacts": {
+                    "run_dir": str(run_dir),
+                    "summary": str(run_dir / "summary.json"),
+                },
+            }
+            write_json(run_dir / "summary.json", result)
+            return result
 
     status = combined_session_status(selected)
     result = {
@@ -242,6 +321,7 @@ def restore_ozon_session(
     dry_run: bool = False,
     data_dir: Path = Path("data"),
     run_id: str | None = None,
+    runtime_db: Path = DEFAULT_RUNTIME_DB,
 ) -> dict[str, Any]:
     started_at = datetime.now()
     run_id = run_id or f"restore_ozon_session_{started_at.strftime('%Y%m%dT%H%M%S')}"
@@ -267,62 +347,99 @@ def restore_ozon_session(
 
     operations: dict[str, Any] = {}
     login_returncode: int | None = None
-    systemd_available = systemd_user_available()
-    with file_lock("ozon-session-restore"):
-        if systemd_available:
-            operations["stop_systemd"] = _run_systemd_commands(
-                [
-                    ["stop", "vital-shevron-ozon-session-refresh.timer"],
-                    ["stop", "vital-shevron-ozon-session-refresh.service"],
-                    ["stop", "vital-shevron-ozon-keeper.service"],
-                ],
-                timeout=90,
-            )
-        operations["stop_watchdog"] = _run_command(["bash", str(SCRIPT_DIR / "stop_ozon_session_watchdog.sh")])
-        operations["stop_keeper"] = _run_command(["bash", str(SCRIPT_DIR / "stop_ozon_keeper.sh")])
-        operations["cleanup_profile_processes"] = _cleanup_ozon_profile_processes()
+    try:
+        with _profile_operation_leases(
+            ["ozon"],
+            runtime_db=runtime_db,
+            operation="restore-ozon-session",
+            ttl_seconds=RESTORE_OPERATION_LEASE_TTL_SECONDS,
+        ):
+            systemd_available = systemd_user_available()
+            with file_lock("ozon-session-restore"):
+                if systemd_available:
+                    operations["stop_systemd"] = _run_systemd_commands(
+                        [
+                            ["stop", "vital-shevron-ozon-session-refresh.timer"],
+                            ["stop", "vital-shevron-ozon-session-refresh.service"],
+                            ["stop", "vital-shevron-ozon-keeper.service"],
+                        ],
+                        timeout=90,
+                    )
+                operations["stop_watchdog"] = _run_command(
+                    ["bash", str(SCRIPT_DIR / "stop_ozon_session_watchdog.sh")],
+                    env=_lease_held_env(),
+                )
+                operations["stop_keeper"] = _run_command(
+                    ["bash", str(SCRIPT_DIR / "stop_ozon_keeper.sh")],
+                    env=_lease_held_env(),
+                )
+                operations["cleanup_profile_processes"] = _cleanup_ozon_profile_processes()
 
-        env = dict(os.environ)
-        env["OZON_EXPECTED_STORE"] = expected_store
-        env["OZON_MAX_CODES"] = str(max_codes)
-        if email:
-            env["OZON_SELLER_EMAIL"] = email
-        login_args = [
-            "node",
-            str(SCRIPT_DIR / "ozon_seller_interactive_login.js"),
-            "--expected-store",
-            expected_store,
-            "--max-codes",
-            str(max_codes),
-            "--precheck-dashboard",
-        ]
-        if email:
-            login_args.extend(["--email", email])
-        operations["interactive_login"] = _run_command(
-            _with_xvfb_when_needed(login_args),
-            env=env,
-            timeout=1800,
-            capture=False,
-        )
-        login_returncode = operations["interactive_login"].get("returncode")
+                env = _lease_held_env(
+                    {
+                        "OZON_EXPECTED_STORE": expected_store,
+                        "OZON_MAX_CODES": str(max_codes),
+                    }
+                )
+                if email:
+                    env["OZON_SELLER_EMAIL"] = email
+                login_args = [
+                    "node",
+                    str(SCRIPT_DIR / "ozon_seller_interactive_login.js"),
+                    "--expected-store",
+                    expected_store,
+                    "--max-codes",
+                    str(max_codes),
+                    "--precheck-dashboard",
+                ]
+                if email:
+                    login_args.extend(["--email", email])
+                operations["interactive_login"] = _run_command(
+                    _with_xvfb_when_needed(login_args),
+                    env=env,
+                    timeout=1800,
+                    capture=False,
+                )
+                login_returncode = operations["interactive_login"].get("returncode")
 
-        if systemd_available and login_returncode == 0:
-            operations["start_systemd"] = _run_systemd_commands(
-                [
-                    ["restart", "vital-shevron-ozon-keeper.service"],
-                    ["restart", "vital-shevron-ozon-session-refresh.timer"],
-                    ["start", "vital-shevron-ozon-session-refresh.service"],
-                ],
-                timeout=180,
-            )
-        elif not systemd_available and login_returncode == 0:
-            operations["start_keeper"] = _run_command(["bash", str(SCRIPT_DIR / "start_ozon_keeper.sh")])
-            operations["start_watchdog"] = _run_command(["bash", str(SCRIPT_DIR / "start_ozon_session_watchdog.sh")])
-        else:
-            operations["start_after_login"] = {
-                "status": "skipped",
-                "reason": "interactive login did not complete successfully",
-            }
+                if systemd_available and login_returncode == 0:
+                    operations["start_systemd"] = _run_systemd_commands(
+                        [
+                            ["restart", "vital-shevron-ozon-keeper.service"],
+                            ["restart", "vital-shevron-ozon-session-refresh.timer"],
+                            ["--no-block", "start", "vital-shevron-ozon-session-refresh.service"],
+                        ],
+                        timeout=180,
+                    )
+                elif not systemd_available and login_returncode == 0:
+                    operations["start_keeper"] = _run_command(
+                        ["bash", str(SCRIPT_DIR / "start_ozon_keeper.sh")],
+                        env=_lease_held_env(),
+                    )
+                    operations["start_watchdog"] = _run_command(
+                        ["bash", str(SCRIPT_DIR / "start_ozon_session_watchdog.sh")],
+                        env=_lease_held_env(),
+                    )
+                else:
+                    operations["start_after_login"] = {
+                        "status": "skipped",
+                        "reason": "interactive login did not complete successfully",
+                    }
+    except ProfileLeaseBusyError as exc:
+        result = {
+            "run_id": run_id,
+            "started_at": started_at.isoformat(timespec="seconds"),
+            "mode": "apply",
+            "overall_status": "blocked",
+            "blocked_reason": "resource_lease_busy",
+            "resource_keys": list(exc.resource_keys),
+            "steps": steps,
+            "operations": {},
+            "sessions": {},
+            "artifacts": {"run_dir": str(run_dir), "summary": str(run_dir / "summary.json")},
+        }
+        write_json(run_dir / "summary.json", result)
+        return result
 
     status = combined_session_status(["ozon"])
     result_status = "ok" if login_returncode == 0 and status["overall_status"] == "ok" else "warning"
@@ -345,7 +462,12 @@ def systemd_user_available() -> bool:
     return result["status"] == "ok"
 
 
-def install_systemd_units(*, switch: bool = False, dry_run: bool = True) -> dict[str, Any]:
+def install_systemd_units(
+    *,
+    switch: bool = False,
+    dry_run: bool = True,
+    runtime_db: Path = DEFAULT_RUNTIME_DB,
+) -> dict[str, Any]:
     plan = {
         "source_dir": str(SYSTEMD_SOURCE_DIR),
         "target_dir": str(SYSTEMD_TARGET_DIR),
@@ -355,33 +477,133 @@ def install_systemd_units(*, switch: bool = False, dry_run: bool = True) -> dict
     }
     if dry_run:
         return {"overall_status": "ok", "plan": plan, "operations": []}
-    if not systemd_user_available():
-        return {"overall_status": "error", "plan": plan, "operations": [{"status": "error", "error": "systemd --user is not available"}]}
+    lease_context = (
+        _profile_operation_leases(
+            ["ozon", "wb"],
+            runtime_db=runtime_db,
+            operation="install-session-systemd:switch",
+            ttl_seconds=SYSTEMD_SWITCH_LEASE_TTL_SECONDS,
+        )
+        if switch
+        else nullcontext()
+    )
+    try:
+        with lease_context:
+            if not systemd_user_available():
+                return {
+                    "overall_status": "error",
+                    "plan": plan,
+                    "operations": [
+                        {"status": "error", "error": "systemd --user is not available"}
+                    ],
+                }
 
-    ensure_dir(SYSTEMD_TARGET_DIR)
-    operations: list[dict[str, Any]] = []
-    for unit in SYSTEMD_UNITS:
-        source = SYSTEMD_SOURCE_DIR / unit
-        target = SYSTEMD_TARGET_DIR / unit
-        shutil.copy2(source, target)
-        operations.append({"status": "ok", "operation": "copy", "source": str(source), "target": str(target)})
+            ensure_dir(SYSTEMD_TARGET_DIR)
+            operations: list[dict[str, Any]] = []
+            for unit in SYSTEMD_UNITS:
+                source = SYSTEMD_SOURCE_DIR / unit
+                target = SYSTEMD_TARGET_DIR / unit
+                shutil.copy2(source, target)
+                operations.append(
+                    {
+                        "status": "ok",
+                        "operation": "copy",
+                        "source": str(source),
+                        "target": str(target),
+                    }
+                )
 
-    operations.append(_run_command(["systemctl", "--user", "daemon-reload"], env=systemd_user_env(), timeout=60))
+            operations.append(
+                _run_command(
+                    ["systemctl", "--user", "daemon-reload"],
+                    env=systemd_user_env(),
+                    timeout=60,
+                )
+            )
+            if switch:
+                lease_env = _lease_held_env()
+                operations.append(
+                    _run_command(
+                        ["bash", str(SCRIPT_DIR / "stop_ozon_session_watchdog.sh")],
+                        env=lease_env,
+                    )
+                )
+                operations.append(
+                    _run_command(
+                        ["bash", str(SCRIPT_DIR / "stop_wb_session_watchdog.sh")],
+                        env=lease_env,
+                    )
+                )
+                operations.append(
+                    _run_command(
+                        ["bash", str(SCRIPT_DIR / "stop_ozon_keeper.sh")],
+                        env=lease_env,
+                    )
+                )
+                for command in (
+                    ["enable", "vital-shevron-ozon-keeper.service"],
+                    ["restart", "vital-shevron-ozon-keeper.service"],
+                    ["enable", "vital-shevron-ozon-session-refresh.timer"],
+                    ["restart", "vital-shevron-ozon-session-refresh.timer"],
+                    ["enable", "vital-shevron-wb-session-refresh.timer"],
+                    ["restart", "vital-shevron-wb-session-refresh.timer"],
+                ):
+                    operations.append(
+                        _run_command(
+                            ["systemctl", "--user", *command],
+                            env=systemd_user_env(),
+                            timeout=60,
+                        )
+                    )
+            else:
+                operations.append(
+                    _run_command(
+                        [
+                            "systemctl",
+                            "--user",
+                            "enable",
+                            "vital-shevron-ozon-session-refresh.timer",
+                        ],
+                        env=systemd_user_env(),
+                        timeout=60,
+                    )
+                )
+                operations.append(
+                    _run_command(
+                        [
+                            "systemctl",
+                            "--user",
+                            "enable",
+                            "vital-shevron-wb-session-refresh.timer",
+                        ],
+                        env=systemd_user_env(),
+                        timeout=60,
+                    )
+                )
+    except ProfileLeaseBusyError as exc:
+        return {
+            "overall_status": "blocked",
+            "blocked_reason": "resource_lease_busy",
+            "resource_keys": list(exc.resource_keys),
+            "plan": plan,
+            "operations": [],
+        }
+
     if switch:
-        operations.append(_run_command(["bash", str(SCRIPT_DIR / "stop_ozon_session_watchdog.sh")]))
-        operations.append(_run_command(["bash", str(SCRIPT_DIR / "stop_wb_session_watchdog.sh")]))
-        operations.append(_run_command(["bash", str(SCRIPT_DIR / "stop_ozon_keeper.sh")]))
-        operations.append(_run_command(["systemctl", "--user", "enable", "vital-shevron-ozon-keeper.service"], env=systemd_user_env(), timeout=60))
-        operations.append(_run_command(["systemctl", "--user", "restart", "vital-shevron-ozon-keeper.service"], env=systemd_user_env(), timeout=60))
-        operations.append(_run_command(["systemctl", "--user", "enable", "vital-shevron-ozon-session-refresh.timer"], env=systemd_user_env(), timeout=60))
-        operations.append(_run_command(["systemctl", "--user", "restart", "vital-shevron-ozon-session-refresh.timer"], env=systemd_user_env(), timeout=60))
-        operations.append(_run_command(["systemctl", "--user", "enable", "vital-shevron-wb-session-refresh.timer"], env=systemd_user_env(), timeout=60))
-        operations.append(_run_command(["systemctl", "--user", "restart", "vital-shevron-wb-session-refresh.timer"], env=systemd_user_env(), timeout=60))
-        operations.append(_run_command(["systemctl", "--user", "start", "vital-shevron-ozon-session-refresh.service"], env=systemd_user_env(), timeout=180))
-        operations.append(_run_command(["systemctl", "--user", "start", "vital-shevron-wb-session-refresh.service"], env=systemd_user_env(), timeout=240))
-    else:
-        operations.append(_run_command(["systemctl", "--user", "enable", "vital-shevron-ozon-session-refresh.timer"], env=systemd_user_env(), timeout=60))
-        operations.append(_run_command(["systemctl", "--user", "enable", "vital-shevron-wb-session-refresh.timer"], env=systemd_user_env(), timeout=60))
+        # The manager's atomic two-profile lease has been released. Each oneshot
+        # now takes its own canonical profile lease, and systemctl waits for its
+        # terminal result so a failed refresh makes the switch result fail.
+        for service, timeout in (
+            ("vital-shevron-ozon-session-refresh.service", 180),
+            ("vital-shevron-wb-session-refresh.service", 240),
+        ):
+            operations.append(
+                _run_command(
+                    ["systemctl", "--user", "start", service],
+                    env=systemd_user_env(),
+                    timeout=timeout,
+                )
+            )
 
     overall_status = "error" if any(item.get("status") == "error" for item in operations) else "ok"
     return {"overall_status": overall_status, "plan": plan, "operations": operations}

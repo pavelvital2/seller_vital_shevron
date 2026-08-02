@@ -12,6 +12,17 @@ EOF
 fi
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+if [[ "${SELLER_PROFILE_LEASE_HELD:-0}" != "1" ]]; then
+  export PYTHONPATH="$PROJECT_ROOT/src:$PROJECT_ROOT${PYTHONPATH:+:$PYTHONPATH}"
+  exec /usr/bin/env SELLER_PROFILE_LEASE_HELD=1 \
+    /home/Codex/agent-tools/python/bin/python \
+    "$PROJECT_ROOT/scripts/systemd/with_resource_lease.py" \
+    --lk-profile wb \
+    --runtime-db "$PROJECT_ROOT/runtime/runtime.db" \
+    --wait-seconds 120 \
+    --ttl-seconds 1800 \
+    -- /usr/bin/env bash "$PROJECT_ROOT/scripts/sessions/wb_daily_session_refresh.sh" "$@"
+fi
 LOG_DIR="$PROJECT_ROOT/.sessions/wb/session_refresh_logs"
 LOCK_FILE="$PROJECT_ROOT/.sessions/wb/wb-session-refresh.lock"
 NODE_SCRIPT="$PROJECT_ROOT/scripts/sessions/wb_persistent_session.js"

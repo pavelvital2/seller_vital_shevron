@@ -2,6 +2,17 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+if [[ "${SELLER_PROFILE_LEASE_HELD:-0}" != "1" ]]; then
+  export PYTHONPATH="$ROOT_DIR/src:$ROOT_DIR${PYTHONPATH:+:$PYTHONPATH}"
+  exec /usr/bin/env SELLER_PROFILE_LEASE_HELD=1 \
+    /home/Codex/agent-tools/python/bin/python \
+    "$ROOT_DIR/scripts/systemd/with_resource_lease.py" \
+    --lk-profile ozon \
+    --runtime-db "$ROOT_DIR/runtime/runtime.db" \
+    --wait-seconds 120 \
+    --ttl-seconds 1800 \
+    -- /usr/bin/env bash "$ROOT_DIR/scripts/sessions/ozon_session_refresh.sh" "$@"
+fi
 SESSION_DIR="$ROOT_DIR/.sessions/ozon"
 LOG_DIR="$SESSION_DIR/session_refresh_logs"
 LOCK_DIR="$SESSION_DIR/ozon_session_refresh.lock"

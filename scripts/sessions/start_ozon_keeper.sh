@@ -2,6 +2,17 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+if [[ "${SELLER_PROFILE_LEASE_HELD:-0}" != "1" ]]; then
+  export PYTHONPATH="$ROOT_DIR/src:$ROOT_DIR${PYTHONPATH:+:$PYTHONPATH}"
+  exec /usr/bin/env SELLER_PROFILE_LEASE_HELD=1 \
+    /home/Codex/agent-tools/python/bin/python \
+    "$ROOT_DIR/scripts/systemd/with_resource_lease.py" \
+    --lk-profile ozon \
+    --runtime-db "$ROOT_DIR/runtime/runtime.db" \
+    --wait-seconds 0 \
+    --ttl-seconds 900 \
+    -- /usr/bin/env bash "$ROOT_DIR/scripts/sessions/start_ozon_keeper.sh" "$@"
+fi
 SESSION_DIR="$ROOT_DIR/.sessions/ozon"
 LOG_DIR="$SESSION_DIR/session_refresh_logs"
 PID_FILE="$SESSION_DIR/ozon_keeper.pid"
@@ -38,7 +49,7 @@ fi
   echo "port=$PORT"
 } >>"$LOG_FILE"
 
-nohup setsid env OZON_REMOTE_DEBUGGING_PORT="$PORT" \
+nohup setsid env -u SELLER_PROFILE_LEASE_HELD OZON_REMOTE_DEBUGGING_PORT="$PORT" \
   node "$ROOT_DIR/scripts/sessions/ozon_keep_dashboard_open.js" >>"$LOG_FILE" 2>&1 < /dev/null &
 
 PID="$!"

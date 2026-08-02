@@ -9,5 +9,6 @@ WorkingDirectory=/home/pavel/projects/seller_vital_shevron
 Environment=OZON_REMOTE_DEBUGGING_PORT=9544
 Environment="OZON_EXPECTED_STORE=Vital Shevron"
 Environment=OZON_CDP_URL=http://127.0.0.1:9544
+Environment=PYTHONPATH=/home/pavel/projects/seller_vital_shevron/src:/home/pavel/projects/seller_vital_shevron
 ExecStartPre=/usr/bin/env bash -lc 'for i in $(seq 1 45); do ss -ltn 2>/dev/null | grep -Eq "127\\.0\\.0\\.1:9544\\b|0\\.0\\.0\\.0:9544\\b|\\*:9544\\b|\\[::\\]:9544\\b" && exit 0; sleep 1; done; exit 1'
-ExecStart=/usr/bin/env node /home/pavel/projects/seller_vital_shevron/scripts/sessions/ozon_session_keepalive_cdp.js
+ExecStart=/home/Codex/agent-tools/python/bin/python /home/pavel/projects/seller_vital_shevron/scripts/systemd/with_resource_lease.py --lk-profile ozon --runtime-db /home/pavel/projects/seller_vital_shevron/runtime/runtime.db --wait-seconds 120 --ttl-seconds 1800 -- /usr/bin/env node /home/pavel/projects/seller_vital_shevron/scripts/sessions/ozon_session_keepalive_cdp.js

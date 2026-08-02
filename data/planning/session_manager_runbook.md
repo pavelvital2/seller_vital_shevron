@@ -38,6 +38,24 @@ vital-shevron-wb-session-refresh.timer
 - Ozon refresh: 30 минут.
 - WB refresh: 60 минут.
 
+Обе oneshot refresh-службы захватывают только на время операции канонический
+runtime lease через `scripts/systemd/with_resource_lease.py --lk-profile ...`:
+
+```text
+Ozon: lk:ozon:profile:chrome-profile
+WB:   lk:wb:profile:browser-profile
+```
+
+Те же ключи используют Job Worker consumers соответствующего профиля. Ozon
+keeper остается постоянно работающим browser host и не оборачивается в lease:
+иначе все короткие CDP operations были бы заблокированы на весь срок жизни
+Chrome. Ручные `ozon_session_refresh.sh` и `wb_daily_session_refresh.sh` сами
+используют тот же короткий wrapper. Изменение unit-файлов в репозитории не
+означает deployment; установка и перезапуск выполняются отдельным этапом.
+Raw `*_keepalive*.js` остаются внутренней реализацией и напрямую не
+запускаются: для ручной операции использовать только lease-aware shell
+wrapper или зарегистрированную Job Worker задачу.
+
 ## Ozon Keeper
 
 Keeper Ozon запускает отдельный CDP на `127.0.0.1:9544` и перед открытием ЛК
@@ -49,7 +67,7 @@ keeper-процессу, а не только разовому Playwright-кон
 Проверка после запуска:
 
 ```bash
-node scripts/sessions/ozon_session_keepalive_cdp.js
+scripts/sessions/ozon_session_refresh.sh
 PYTHONPATH=src python3 -m seller_agent.cli sessions status --marketplace ozon
 ```
 
@@ -84,7 +102,7 @@ PYTHONPATH=src python3 -m seller_agent.cli restore-ozon-session
 
 ```bash
 PYTHONPATH=src python3 -m seller_agent.cli sessions start --marketplace ozon
-node scripts/sessions/ozon_session_keepalive_cdp.js
+scripts/sessions/ozon_session_refresh.sh
 PYTHONPATH=src python3 -m seller_agent.cli sessions status --marketplace ozon
 ```
 
@@ -179,7 +197,7 @@ PYTHONPATH=src python3 -m seller_agent.cli sessions status --marketplace ozon
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   -m seller_agent.cli sessions start --marketplace ozon
 
-node scripts/sessions/ozon_session_keepalive_cdp.js
+scripts/sessions/ozon_session_refresh.sh
 
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   -m seller_agent.cli sessions status --marketplace ozon
@@ -272,7 +290,7 @@ DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
   systemctl --user start vital-shevron-ozon-keeper.service \
   vital-shevron-ozon-session-refresh.timer
 
-node scripts/sessions/ozon_session_keepalive_cdp.js
+scripts/sessions/ozon_session_refresh.sh
 PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
   -m seller_agent.cli sessions status --marketplace ozon
 ```
@@ -337,7 +355,7 @@ PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
    ```bash
    PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
      -m seller_agent.cli restore-ozon-session --email <email>
-   node scripts/sessions/ozon_session_keepalive_cdp.js
+   scripts/sessions/ozon_session_refresh.sh
    PYTHONPATH=src /home/Codex/agent-tools/python/bin/python \
      -m seller_agent.cli sessions status --marketplace ozon
    ```
@@ -461,6 +479,34 @@ WB watchdog запускается через:
 scripts/sessions/start_wb_session_watchdog.sh
 ```
 
+Все прямые mutable session-команды используют те же canonical profile leases,
+что и Job Worker:
+
+```text
+lk:ozon:profile:chrome-profile
+lk:wb:profile:browser-profile
+```
+
+- `sessions start/stop/restart --marketplace all` получает оба ключа одной
+  SQLite-транзакцией до запуска любого script;
+- `restore-ozon-session` получает Ozon key до `systemctl`, остановки keeper,
+  очистки процессов/`Singleton*` и interactive login;
+- `install-session-systemd --apply --switch` получает оба ключа атомарно до
+  switch и освобождает их после короткой операции; только после освобождения
+  обе refresh-службы синхронно запускаются со своими exact leases, а ошибка
+  любой службы переводит итог установки в `error`;
+- прямой вызов start/stop/watchdog/refresh shell scripts также проходит через
+  canonical wrapper;
+- фоновые keeper/watchdog процессы не наследуют признак уже взятого lease:
+  постоянный browser host не удерживает lease, а каждый refresh берет его
+  заново;
+- `sessions status`, dry-run restore/install и install без `--switch` не
+  получают profile lease и не создают ложный конфликт.
+
+При занятом exact key maintenance-команда возвращает
+`blocked_reason=resource_lease_busy` до изменения профиля. Обход через другой
+legacy key (`lk:wb:browser-profile`, `lk:ozon:session-check`) запрещен.
+
 Он вызывает `scripts/sessions/wb_daily_session_refresh.sh` с интервалом `3600`
 секунд. Refresh-скрипт должен работать внутри текущего проекта, а не содержать
 hardcoded путь к другому контуру.
@@ -472,7 +518,7 @@ hardcoded путь к другому контуру.
 Проверка:
 
 ```bash
-node scripts/sessions/wb_session_keepalive.js
+scripts/sessions/wb_daily_session_refresh.sh
 PYTHONPATH=src python3 -m seller_agent.cli sessions status --marketplace wb
 ```
 
@@ -512,7 +558,7 @@ PYTHONPATH=src python3 -m seller_agent.cli sessions status --marketplace wb
 4. Запустить:
 
    ```bash
-   node scripts/sessions/wb_session_keepalive.js
+   scripts/sessions/wb_daily_session_refresh.sh
    scripts/sessions/start_wb_session_watchdog.sh
    PYTHONPATH=src python3 -m seller_agent.cli sessions status --marketplace wb
    PYTHONPATH=src python3 -m seller_agent.cli status-preflight
@@ -520,7 +566,7 @@ PYTHONPATH=src python3 -m seller_agent.cli sessions status --marketplace wb
 
 Проверка результата:
 
-- `node scripts/sessions/wb_session_keepalive.js`: `ok: true`,
+- `wb_daily_session_refresh.sh` (внутренний keepalive): `ok: true`,
   `stateExported: true`, `valuesPrinted: false`;
 - `sessions status --marketplace wb`: `overall_status: ok`;
 - полный `status-preflight`: `overall_status: ok`;

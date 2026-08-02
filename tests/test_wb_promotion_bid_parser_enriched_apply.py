@@ -3,6 +3,7 @@ from decimal import Decimal
 import pytest
 
 from seller_agent.config import AppCredentials
+from seller_agent.core.resource_keys import WB_API_WRITE_KEY
 from seller_agent.tasks.registry import get_task_definition
 from seller_agent.tasks.wb_promotion_bid_parser_enriched_apply import (
     _enriched_apply_signature,
@@ -114,7 +115,7 @@ def test_task_registry_contains_wb_promotion_parser_enriched_apply() -> None:
     assert task["requires_mapping"] is True
     assert task["source_plan_task"] == "wb-promotion-bid-parser-enriched-plan"
     assert task["verify_task"] == "wb-promotion-bids-parser-enriched-verify"
-    assert task["lock_keys"] == ["marketplace:wb", "ads:wb:promotion-bids"]
+    assert task["lock_keys"] == [WB_API_WRITE_KEY, "ads:wb:promotion-bids"]
 
 
 def _row(

@@ -8,6 +8,11 @@ import pytest
 
 from seller_agent.cli import main
 from seller_agent.core.job_runner import JobRunner
+from seller_agent.core.resource_keys import (
+    OZON_API_WRITE_KEY,
+    WB_API_WRITE_KEY,
+    WB_LK_PROFILE_KEY,
+)
 from seller_agent.core.job_service import JobService
 from seller_agent.core.job_store import JobStore
 from seller_agent.core.workflow_runner import WorkflowRunner
@@ -125,7 +130,16 @@ def test_job_service_runs_confirmed_apply_workflow(tmp_path: Path) -> None:
     assert result.ok is True
     assert result.job.status == "success"
     assert result.job.result["summary"]["run_id"] == "apply_job_test"
-    assert store.acquire_resource_lease(resource_key="marketplace:ozon", owner_id="job_after", ttl_seconds=60) is not None
+    assert store.acquire_resource_lease(
+        resource_key=OZON_API_WRITE_KEY,
+        owner_id="job_after_ozon",
+        ttl_seconds=60,
+    ) is not None
+    assert store.acquire_resource_lease(
+        resource_key=WB_API_WRITE_KEY,
+        owner_id="job_after_wb",
+        ttl_seconds=60,
+    ) is not None
     approval = store.get_approval(job.params["approval_id"])
     assert approval is not None
     assert approval.status == "applied"
@@ -268,7 +282,11 @@ def test_job_service_blocks_confirmed_apply_when_resource_lease_is_busy(tmp_path
         raise AssertionError("workflow must not start while resource lease is busy")
 
     store = JobStore(tmp_path / "runtime.db")
-    assert store.acquire_resource_lease(resource_key="marketplace:ozon", owner_id="other_job", ttl_seconds=60) is not None
+    assert store.acquire_resource_lease(
+        resource_key=OZON_API_WRITE_KEY,
+        owner_id="other_job",
+        ttl_seconds=60,
+    ) is not None
     approval = _create_runtime_approval(
         store,
         approval_id="approval-resource-busy",
@@ -303,11 +321,11 @@ def test_job_service_blocks_confirmed_apply_when_resource_lease_is_busy(tmp_path
 def test_job_service_blocks_read_only_task_when_resource_lease_is_busy(tmp_path: Path) -> None:
     from seller_agent.tasks.registry import RegisteredTask, TaskRegistry
 
-    task = RegisteredTask(name="leased-read", command="leased-read", title="Leased read", description="test", mode="read_only", risk="low", lock_keys=("lk:wb:browser-profile",))
+    task = RegisteredTask(name="leased-read", command="leased-read", title="Leased read", description="test", mode="read_only", risk="low", lock_keys=(WB_LK_PROFILE_KEY,))
     registry = TaskRegistry()
     registry.register(task)
     store = JobStore(tmp_path / "runtime.db")
-    assert store.acquire_resource_lease(resource_key="lk:wb:browser-profile", owner_id="keeper", ttl_seconds=60) is not None
+    assert store.acquire_resource_lease(resource_key=WB_LK_PROFILE_KEY, owner_id="keeper", ttl_seconds=60) is not None
     service = JobService(store=store, registry=registry, workflow_runner=WorkflowRunner(registry=registry, data_dir=tmp_path / "data", lock_dir=tmp_path / "locks", handlers={"leased-read": lambda *args: (_ for _ in ()).throw(AssertionError("must not start"))}), data_dir=tmp_path / "data")
     job = service.submit(task_id="leased-read")
 

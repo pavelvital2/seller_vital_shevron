@@ -1059,6 +1059,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional stable run id.",
     )
+    sessions.add_argument(
+        "--runtime-db",
+        default=str(DEFAULT_RUNTIME_DB),
+        help="SQLite runtime DB used for canonical profile leases.",
+    )
 
     restore_ozon = subparsers.add_parser(
         "restore-ozon-session",
@@ -1070,6 +1075,11 @@ def build_parser() -> argparse.ArgumentParser:
     restore_ozon.add_argument("--dry-run", action="store_true", help="Show planned restore steps without login.")
     restore_ozon.add_argument("--data-dir", default="data", help="Project data directory.")
     restore_ozon.add_argument("--run-id", default=None, help="Optional stable run id.")
+    restore_ozon.add_argument(
+        "--runtime-db",
+        default=str(DEFAULT_RUNTIME_DB),
+        help="SQLite runtime DB used for the canonical Ozon profile lease.",
+    )
 
     install_systemd = subparsers.add_parser(
         "install-session-systemd",
@@ -1084,6 +1094,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--switch",
         action="store_true",
         help="Stop current bash-loop watchdogs and start systemd keeper/timers.",
+    )
+    install_systemd.add_argument(
+        "--runtime-db",
+        default=str(DEFAULT_RUNTIME_DB),
+        help="SQLite runtime DB used for atomic profile leases during --switch.",
     )
 
     ozon_elastic = subparsers.add_parser(
@@ -2880,6 +2895,7 @@ def main(argv: list[str] | None = None) -> int:
             marketplace=args.marketplace,
             data_dir=Path(args.data_dir),
             run_id=args.run_id,
+            runtime_db=Path(args.runtime_db),
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["overall_status"] in {"ok", "warning"} else 2
@@ -2892,12 +2908,17 @@ def main(argv: list[str] | None = None) -> int:
             dry_run=args.dry_run,
             data_dir=Path(args.data_dir),
             run_id=args.run_id,
+            runtime_db=Path(args.runtime_db),
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["overall_status"] in {"ok", "warning"} else 2
 
     if args.command == "install-session-systemd":
-        result = install_systemd_units(switch=args.switch, dry_run=not args.apply)
+        result = install_systemd_units(
+            switch=args.switch,
+            dry_run=not args.apply,
+            runtime_db=Path(args.runtime_db),
+        )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["overall_status"] in {"ok", "warning"} else 2
 
