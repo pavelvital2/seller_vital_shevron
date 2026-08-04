@@ -31,6 +31,7 @@ from scripts.actions.wb_best_price_action_plan import (
     build_plan,
     generate_plan_artifacts,
     json_ready,
+    price_plan_with_fresh_minimums,
     read_json,
     read_promo_rows,
 )
@@ -54,6 +55,7 @@ def run_wb_best_price_action_plan(
     run_dir = ensure_dir(data_dir / "runs" / started.strftime("%Y-%m-%d") / resolved_run_id)
     raw_dir = ensure_dir(run_dir / "raw")
     prices_dir = ensure_dir(run_dir / "prices")
+    minimum_dir = ensure_dir(raw_dir / "minimum")
     source_plan = (
         _resolve_project_path(price_plan_path)
         if price_plan_path is not None
@@ -73,13 +75,27 @@ def run_wb_best_price_action_plan(
                 str(prices_dir),
             ]
         )
+        _run_command(
+            [
+                "node",
+                "scripts/pricing/wb_autoaction_min_price_apply.js",
+                "--mode",
+                "download",
+                "--out-dir",
+                str(minimum_dir),
+            ]
+        )
 
     snapshot_path = raw_dir / "cabinet-actions-snapshot.json"
     prices_path = _fresh_prices_path(prices_dir)
+    minimum_workbook_path = minimum_dir / "fresh_source.xlsx"
+    if not minimum_workbook_path.exists():
+        raise RuntimeError("fresh WB minimum-price workbook was not created")
     report = generate_plan_artifacts(
         snapshot_path=snapshot_path,
         prices_path=prices_path,
         price_plan_path=source_plan,
+        minimum_workbook_path=minimum_workbook_path,
         run_dir=run_dir,
         outside_discount=discount,
     )
@@ -196,13 +212,18 @@ def run_wb_best_price_action_verify(
     ensure_dir(run_dir / "raw")
     ensure_dir(run_dir / "processed")
 
-    minimum = fresh_minimum_verify(
-        run_dir=run_dir,
-        price_plan_path=source_plan_path,
-        price_plan_hash=source_plan_hash,
+    minimum = fresh_minimum_verify(run_dir=run_dir, expected_products=approved["products"])
+    price_plan, minimum_snapshot = price_plan_with_fresh_minimums(
+        price_plan,
+        Path(str(minimum["source_xlsx"])),
     )
+    write_json(run_dir / "processed" / "effective_price_plan.json", json_ready(price_plan))
+    write_json(run_dir / "processed" / "minimum_snapshot.json", minimum_snapshot)
     snapshot_path, snapshot = download_action_snapshot(run_dir, "verify")
-    _, promo_rows = read_promo_rows(snapshot_path)
+    _, promo_rows = read_promo_rows(
+        snapshot_path,
+        scope_nm_ids={int(row["nm_id"]) for row in price_plan.get("rows", [])},
+    )
     fresh_products, _, fresh_summary = build_plan(
         snapshot=snapshot,
         prices=snapshot["prices"],

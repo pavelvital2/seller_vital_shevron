@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import html
 import json
 import re
+import sys
 from collections import Counter, defaultdict
 from datetime import datetime
 from decimal import Decimal, ROUND_CEILING
@@ -16,6 +18,16 @@ from typing import Any
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from scripts.pricing.wb_price_grid import (  # noqa: E402
+    minimum_is_active,
+    minimum_number,
+    parse_minimum_xlsx,
+)
 
 
 WB_MAX_DISCOUNT_STEP_PERCENTAGE_POINTS = 35
@@ -27,6 +39,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--snapshot", type=Path, required=True)
     parser.add_argument("--prices", type=Path, required=True)
     parser.add_argument("--price-plan", type=Path, required=True)
+    parser.add_argument("--minimum-workbook", type=Path, required=True)
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--outside-discount", type=int, default=50)
     return parser.parse_args()
@@ -34,6 +47,105 @@ def parse_args() -> argparse.Namespace:
 
 def read_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def price_plan_with_fresh_minimums(
+    reference_plan: dict[str, Any],
+    minimum_workbook_path: Path,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    parsed_rows = parse_minimum_xlsx(minimum_workbook_path)
+    rows_by_nm: dict[int, dict[str, str]] = {}
+    duplicates: set[int] = set()
+    for row in parsed_rows:
+        raw_nm_id = str(row.get("Артикул WB") or "").strip()
+        if not raw_nm_id:
+            continue
+        nm_id = int(raw_nm_id)
+        if nm_id in rows_by_nm:
+            duplicates.add(nm_id)
+        rows_by_nm[nm_id] = row
+
+    effective_rows: list[dict[str, Any]] = []
+    issues: list[dict[str, Any]] = []
+    distribution: Counter[int] = Counter()
+    changed_from_reference = 0
+    for source in reference_plan.get("rows", []):
+        nm_id = int(source["nm_id"])
+        current = rows_by_nm.get(nm_id)
+        if current is None:
+            issues.append({"nm_id": nm_id, "reason": "missing"})
+            continue
+        if nm_id in duplicates:
+            issues.append({"nm_id": nm_id, "reason": "duplicate"})
+            continue
+        current_text = current.get(
+            "Текущая минимальная цена для применения скидки по автоакции",
+            "",
+        )
+        try:
+            current_minimum = minimum_number(current_text)
+            active = minimum_is_active(current_text)
+        except ValueError:
+            issues.append(
+                {
+                    "nm_id": nm_id,
+                    "reason": "invalid_minimum",
+                    "actual": current_text,
+                }
+            )
+            continue
+        if not active:
+            issues.append(
+                {
+                    "nm_id": nm_id,
+                    "reason": "minimum_not_active",
+                    "actual": current_text,
+                }
+            )
+            continue
+
+        reference_minimum = int(source["target_minimum"])
+        effective = dict(source)
+        effective["reference_minimum"] = reference_minimum
+        effective["target_minimum"] = current_minimum
+        effective_rows.append(effective)
+        distribution[current_minimum] += 1
+        changed_from_reference += int(current_minimum != reference_minimum)
+
+    snapshot = {
+        "status": "ok" if not issues else "blocked",
+        "workbook": str(minimum_workbook_path),
+        "workbook_sha256": file_sha256(minimum_workbook_path),
+        "reference_rows": len(reference_plan.get("rows", [])),
+        "verified_active_rows": len(effective_rows),
+        "changed_from_reference": changed_from_reference,
+        "minimum_distribution": {
+            str(value): count for value, count in sorted(distribution.items())
+        },
+        "issues": issues,
+    }
+    if issues:
+        raise RuntimeError(
+            "fresh WB minimum-price workbook is incomplete for action scope: "
+            f"{len(issues)} rows"
+        )
+
+    effective_plan = dict(reference_plan)
+    effective_plan["rows"] = effective_rows
+    effective_plan["minimum_source"] = {
+        "kind": "fresh_wb_minimum_workbook",
+        "workbook": str(minimum_workbook_path),
+        "workbook_sha256": snapshot["workbook_sha256"],
+    }
+    return effective_plan, snapshot
 
 
 def clean_header(value: Any) -> str:
@@ -62,6 +174,17 @@ def actual_price(base_price: Decimal, discount: int) -> Decimal:
     )
 
 
+def optional_discount(value: Any) -> int | None:
+    try:
+        discount = decimal_value(value)
+    except (ArithmeticError, TypeError, ValueError):
+        return None
+    if discount != discount.to_integral_value():
+        return None
+    result = int(discount)
+    return result if 0 <= result <= 99 else None
+
+
 def promo_id_from_filename(path: Path) -> int:
     match = re.search(r"promo-(\d+)-", path.name)
     if not match:
@@ -71,6 +194,8 @@ def promo_id_from_filename(path: Path) -> int:
 
 def read_promo_rows(
     snapshot_path: Path,
+    *,
+    scope_nm_ids: set[int] | None = None,
 ) -> tuple[dict[int, dict[str, Any]], dict[int, list[dict[str, Any]]]]:
     snapshot = read_json(snapshot_path)
     promos = {int(item["actionID"]): item for item in snapshot.get("promos", [])}
@@ -106,29 +231,63 @@ def read_promo_rows(
             if raw_nm in (None, ""):
                 continue
             nm_id = int(raw_nm)
+            if scope_nm_ids is not None and nm_id not in scope_nm_ids:
+                continue
             base = decimal_value(row[idx["Текущая розничная цена"]])
             plan = decimal_value(row[idx["Плановая цена для акции"]])
-            upload = int(decimal_value(row[idx["Загружаемая скидка для участия в акции"]]))
             calculated = required_discount(base, plan)
-            if upload != calculated:
-                raise ValueError(
-                    f"{path.name}: nmID {nm_id}, upload discount {upload} != calculated {calculated}"
-                )
+            upload_raw = row[idx["Загружаемая скидка для участия в акции"]]
+            upload = optional_discount(upload_raw)
+            current_discount = optional_discount(row[idx["Текущая скидка на сайте, %"]])
+            participates = clean_header(row[idx["Товар уже участвует в акции"]]).lower() == "да"
+            status = clean_header(row[idx["Статус"]])
+
+            available = True
+            unavailable_reason = ""
+            discount_source = "wb_upload_discount"
+            target_discount: int | None = upload
+            if participates:
+                observed_discount = upload if upload is not None else current_discount
+                if observed_discount is None or observed_discount < calculated:
+                    available = False
+                    unavailable_reason = "WB сообщает об участии, но текущая скидка не подтверждает плановую цену"
+                    target_discount = None
+                else:
+                    # For participating goods WB echoes the current discount in the
+                    # upload column. The smallest qualifying discount is calculated
+                    # from the action plan price so the plan can choose the highest
+                    # buyer price that still keeps the product in the action.
+                    target_discount = calculated
+                    discount_source = "calculated_from_plan_price_active"
+            elif upload is None:
+                available = False
+                unavailable_reason = status or "WB не предоставил числовую скидку для вступления в акцию"
+                target_discount = None
+            elif upload < calculated:
+                available = False
+                unavailable_reason = "Скидка WB не обеспечивает указанную плановую цену акции"
+                target_discount = None
+
             rows_by_nm[nm_id].append(
                 {
                     "action_id": action_id,
                     "action_name": promo["name"],
                     "action_start": promo.get("startDate", ""),
                     "action_end": promo.get("endDate", ""),
-                    "currently_participates": clean_header(
-                        row[idx["Товар уже участвует в акции"]]
-                    ).lower()
-                    == "да",
-                    "status": clean_header(row[idx["Статус"]]),
+                    "currently_participates": participates,
+                    "status": status,
                     "vendor_code": clean_header(row[idx["Артикул поставщика"]]),
                     "plan_price": plan,
-                    "required_discount": upload,
-                    "actual_price": actual_price(base, upload),
+                    "required_discount": target_discount,
+                    "reported_upload_discount": upload,
+                    "discount_source": discount_source,
+                    "actual_price": (
+                        actual_price(base, target_discount)
+                        if target_discount is not None
+                        else None
+                    ),
+                    "available": available,
+                    "unavailable_reason": unavailable_reason,
                 }
             )
         workbook.close()
@@ -153,6 +312,7 @@ def build_plan(
         "not_offered": 0,
         "eligible_any_action": 0,
         "offered_but_below_minimum": 0,
+        "offered_but_unavailable": 0,
         "selected_multiple_choice": 0,
         "outside_action": 0,
         "to_change_discount": 0,
@@ -162,6 +322,7 @@ def build_plan(
         "selected_discount_distribution": Counter(),
         "selected_pack_distribution": Counter(),
         "rejected_candidate_reasons": Counter(),
+        "unavailable_action_offers": 0,
         "plan_price_false_positives": 0,
         "target_below_minimum": 0,
         "unsafe_single_upload": 0,
@@ -180,8 +341,25 @@ def build_plan(
         offers = promo_rows_by_nm.get(nm_id, [])
         eligible: list[dict[str, Any]] = []
         current_participation = any(item["currently_participates"] for item in offers)
+        available_offers = [item for item in offers if item.get("available", True)]
 
         for offer in offers:
+            if not offer.get("available", True):
+                row = {
+                    "nm_id": nm_id,
+                    "vendor_code": current.get("vendorCode") or source.get("vendor_code", ""),
+                    "title": current.get("title") or "",
+                    "pack_qty": pack_qty,
+                    "minimum": minimum,
+                    **offer,
+                    "eligible": False,
+                    "selected": False,
+                    "reason": f"исключено: {offer.get('unavailable_reason') or 'предложение акции недоступно'}",
+                }
+                candidate_rows.append(row)
+                summary["unavailable_action_offers"] += 1
+                summary["rejected_candidate_reasons"]["акция не предоставила числовую скидку"] += 1
+                continue
             is_eligible = offer["actual_price"] >= minimum
             plan_only_passes = offer["plan_price"] >= minimum and not is_eligible
             reason = (
@@ -295,8 +473,10 @@ def build_plan(
             summary["selected_pack_distribution"][str(pack_qty)] += 1
             if len(eligible) > 1:
                 summary["selected_multiple_choice"] += 1
-        elif offers:
+        elif available_offers:
             summary["offered_but_below_minimum"] += 1
+        elif offers:
+            summary["offered_but_unavailable"] += 1
         else:
             summary["outside_action"] += 1
         if delta:
@@ -374,6 +554,7 @@ def write_xlsx(
         ["Не предложены активными акциями", summary["not_offered"]],
         ["Проходят минимум хотя бы в одной акции", summary["eligible_any_action"]],
         ["Доступны акциям, но цена ниже минимума", summary["offered_but_below_minimum"]],
+        ["Предложений акций без числовой скидки", summary["unavailable_action_offers"]],
         [f"Будут вне акций со скидкой {outside_discount}%", summary["outside_action"]],
         ["Нужно изменить скидку", summary["to_change_discount"]],
         ["Скидка без изменения", summary["no_change_discount"]],
@@ -456,8 +637,8 @@ def write_xlsx(
                 row["action_id"],
                 row["action_name"],
                 float(row["plan_price"]),
-                row["required_discount"],
-                float(row["actual_price"]),
+                row["required_discount"] if row["required_discount"] is not None else "",
+                float(row["actual_price"]) if row["actual_price"] is not None else "",
                 "Да" if row["eligible"] else "Нет",
                 "Да" if row["selected"] else "Нет",
                 row["reason"],
@@ -584,6 +765,9 @@ def write_html(
     <span class="ok">{summary['eligible_any_action']} можно включить</span> в активные акции
     без нарушения минимальной цены. Остальные <strong>{summary['outside_action']}</strong>
     остаются вне акций с ручной скидкой {outside_discount}%.
+    Минимумы взяты из свежей выгрузки WB; у
+    <strong>{summary['current_minimum_changed_from_reference']}</strong> товаров они
+    отличаются от исторической основной сетки.
     <span class="{safety_class}">{safety_text}</span> Изменений в WB не выполнялось.</div>
   <section>
     <h2>Сейчас</h2>
@@ -610,6 +794,8 @@ def write_html(
         <span>акции доступны, но итоговая цена ниже минимума</span></div>
       <div class="metric"><strong>{summary['not_offered']}</strong>
         <span>нет ни в одной активной акции</span></div>
+      <div class="metric"><strong>{summary['unavailable_action_offers']}</strong>
+        <span>предложений, где WB требует сначала изменить базовую цену</span></div>
       <div class="metric"><strong>{summary['selected_multiple_choice']}</strong>
         <span>подошли обе акции; выбрана более высокая цена</span></div>
       <div class="metric"><strong>{summary['to_change_discount']}</strong>
@@ -675,6 +861,8 @@ def write_markdown(
         f"- Свежий срез WB: `{snapshot['checkedAt']}`.",
         f"- Товаров в расчете: `{summary['scope_total']}`.",
         f"- Фактически участвуют сейчас: `{summary['currently_participating']}`.",
+        f"- Минимумы из свежей выгрузки WB отличаются от основной исторической "
+        f"сетки у `{summary['current_minimum_changed_from_reference']}` товаров.",
         f"- Можно включить в активные акции без нарушения минимума: `{summary['eligible_any_action']}`.",
         f"- Останутся вне акций с ручной скидкой `{outside_discount}%`: "
         f"`{summary['outside_action']}`.",
@@ -688,6 +876,7 @@ def write_markdown(
         "",
         f"- Доступны хотя бы одной активной акции: `{summary['offered_any_action']}`.",
         f"- Доступны акциям, но все цены ниже минимума: `{summary['offered_but_below_minimum']}`.",
+        f"- Предложений акций без числовой скидки: `{summary['unavailable_action_offers']}`.",
         f"- Не предложены ни одной активной акцией: `{summary['not_offered']}`.",
         f"- Подошли обе акции, выбрана более высокая цена: `{summary['selected_multiple_choice']}`.",
         "",
@@ -736,6 +925,7 @@ def generate_plan_artifacts(
     snapshot_path: Path,
     prices_path: Path,
     price_plan_path: Path,
+    minimum_workbook_path: Path,
     run_dir: Path,
     outside_discount: int,
 ) -> dict[str, Any]:
@@ -745,8 +935,16 @@ def generate_plan_artifacts(
 
     snapshot = read_json(snapshot_path)
     prices = read_json(prices_path)
-    price_plan = read_json(price_plan_path)
-    promos, promo_rows_by_nm = read_promo_rows(snapshot_path)
+    reference_price_plan = read_json(price_plan_path)
+    price_plan, minimum_snapshot = price_plan_with_fresh_minimums(
+        reference_price_plan,
+        minimum_workbook_path,
+    )
+    scope_nm_ids = {int(row["nm_id"]) for row in price_plan.get("rows", [])}
+    promos, promo_rows_by_nm = read_promo_rows(
+        snapshot_path,
+        scope_nm_ids=scope_nm_ids,
+    )
     product_rows, candidate_rows, summary = build_plan(
         snapshot=snapshot,
         prices=prices,
@@ -754,10 +952,16 @@ def generate_plan_artifacts(
         promo_rows_by_nm=promo_rows_by_nm,
         outside_discount=outside_discount,
     )
+    summary["current_minimum_changed_from_reference"] = minimum_snapshot[
+        "changed_from_reference"
+    ]
+    summary["current_minimum_distribution"] = minimum_snapshot[
+        "minimum_distribution"
+    ]
     run_id = run_dir.name
     generated_at = datetime.now().astimezone().isoformat()
     report_data = {
-        "schema": "wb_best_price_action_plan.v1",
+        "schema": "wb_best_price_action_plan.v2",
         "run_id": run_id,
         "generated_at": generated_at,
         "mode": "dry_run",
@@ -768,7 +972,10 @@ def generate_plan_artifacts(
             "snapshot": str(snapshot_path),
             "prices": str(prices_path),
             "price_plan": str(price_plan_path),
+            "minimum_workbook": str(minimum_workbook_path),
+            "minimum_workbook_sha256": minimum_snapshot["workbook_sha256"],
         },
+        "minimum_snapshot": minimum_snapshot,
         "summary": summary,
         "active_promos": list(promos.values()),
         "future_promos": snapshot.get("futurePromos", []),
@@ -777,6 +984,16 @@ def generate_plan_artifacts(
     }
     (run_dir / "report.json").write_text(
         json.dumps(json_ready(report_data), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    processed_dir = run_dir / "processed"
+    processed_dir.mkdir(parents=True, exist_ok=True)
+    (processed_dir / "effective_price_plan.json").write_text(
+        json.dumps(json_ready(price_plan), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    (processed_dir / "minimum_snapshot.json").write_text(
+        json.dumps(json_ready(minimum_snapshot), ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
     write_xlsx(
@@ -819,6 +1036,7 @@ def generate_plan_artifacts(
             "outside_action_discount": outside_discount,
             "scope": price_plan.get("category", ""),
             "target_rows": len(price_plan.get("rows", [])),
+            "minimum_workbook_sha256": minimum_snapshot["workbook_sha256"],
         },
         "artifacts": {
             "run_dir": str(run_dir),
@@ -826,6 +1044,8 @@ def generate_plan_artifacts(
             "report_markdown": str(run_dir / "report.md"),
             "report_xlsx": str(run_dir / "report.xlsx"),
             "report_json": str(run_dir / "report.json"),
+            "minimum_snapshot": str(processed_dir / "minimum_snapshot.json"),
+            "effective_price_plan": str(processed_dir / "effective_price_plan.json"),
         },
         "source_run_ids": [price_plan_path.parent.name],
         "pending_id": f"{run_id}_pending",
@@ -846,6 +1066,7 @@ def main() -> None:
         snapshot_path=args.snapshot,
         prices_path=args.prices,
         price_plan_path=args.price_plan,
+        minimum_workbook_path=args.minimum_workbook,
         run_dir=args.run_dir,
         outside_discount=args.outside_discount,
     )

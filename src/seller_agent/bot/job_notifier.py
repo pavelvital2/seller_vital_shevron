@@ -780,6 +780,8 @@ def _wb_best_price_action_plan_result(
         "",
         "Сейчас:",
         f"- товаров в расчёте: `{_int(summary.get('scope_total'))}`;",
+        f"- актуальные минимумы отличаются от основной сетки: "
+        f"`{_int(summary.get('current_minimum_changed_from_reference'))}` товаров;",
         f"- участвуют в активных акциях: `{_int(summary.get('currently_participating'))}`;",
         f"- предложены хотя бы одной акцией: `{_int(summary.get('offered_any_action'))}`;",
         f"- не предложены активным акциям: `{_int(summary.get('not_offered'))}`.",

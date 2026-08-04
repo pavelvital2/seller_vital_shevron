@@ -2778,6 +2778,7 @@ def test_job_worker_wb_min_price_plan_without_approval_has_no_apply_button(tmp_p
                 "safe_to_apply": True,
                 "summary": {
                     "scope_total": 478,
+                    "current_minimum_changed_from_reference": 163,
                     "currently_participating": 11,
                     "offered_any_action": 355,
                     "not_offered": 123,
@@ -2800,6 +2801,7 @@ def test_job_worker_wb_min_price_plan_without_approval_has_no_apply_button(tmp_p
     text, markup = build_job_result_presentation(completed)
 
     assert "Скидка вне подходящих акций: `47%`" in text
+    assert "актуальные минимумы отличаются от основной сетки: `163` товаров" in text
     assert "будут участвовать в лучшей допустимой акции: `11`" in text
     assert markup == {}
 

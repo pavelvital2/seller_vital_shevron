@@ -24,6 +24,7 @@ if str(SRC_ROOT) not in sys.path:
 from scripts.actions.wb_best_price_action_plan import (  # noqa: E402
     build_plan,
     json_ready,
+    price_plan_with_fresh_minimums,
     read_json,
     read_promo_rows,
 )
@@ -154,8 +155,7 @@ def run_command(command: list[str], *, timeout: int = 900) -> dict[str, Any]:
 def fresh_minimum_verify(
     *,
     run_dir: Path,
-    price_plan_path: Path,
-    price_plan_hash: str,
+    expected_products: list[dict[str, Any]],
 ) -> dict[str, Any]:
     out_dir = ensure_dir(run_dir / "raw" / "minimum")
     command_result = run_command(
@@ -171,8 +171,18 @@ def fresh_minimum_verify(
     workbook = out_dir / "fresh_source.xlsx"
     if not workbook.exists():
         raise RuntimeError("fresh WB minimum-price workbook was not created")
-    price_plan = validate_plan_hash(price_plan_path, price_plan_hash)
-    verify = verify_minimum_targets(price_plan, workbook)
+    expected_plan = {
+        "rows": [
+            {
+                "nm_id": int(row["nm_id"]),
+                "target_minimum": int(as_decimal(row["minimum"])),
+            }
+            for row in expected_products
+        ]
+    }
+    verify = verify_minimum_targets(expected_plan, workbook)
+    verify["expected_source"] = "owner_approved_report"
+    verify["source_xlsx"] = str(workbook)
     write_json(run_dir / "processed" / "minimum_verify.json", verify)
     write_json(
         run_dir / "raw" / "minimum_download_result.json",
@@ -219,7 +229,11 @@ def build_fresh_report(
     price_plan: dict[str, Any],
     outside_discount: int,
 ) -> dict[str, Any]:
-    promos, promo_rows = read_promo_rows(snapshot_path)
+    scope_nm_ids = {int(row["nm_id"]) for row in price_plan.get("rows", [])}
+    promos, promo_rows = read_promo_rows(
+        snapshot_path,
+        scope_nm_ids=scope_nm_ids,
+    )
     products, candidates, summary = build_plan(
         snapshot=snapshot,
         prices=snapshot["prices"],
@@ -274,7 +288,10 @@ def verify_action_participation(
         snapshot_path, snapshot = download_action_snapshot(
             run_dir, f"action_verify_{attempt:02d}"
         )
-        _, promo_rows = read_promo_rows(snapshot_path)
+        _, promo_rows = read_promo_rows(
+            snapshot_path,
+            scope_nm_ids={nm_id for nm_id, _action_id in selected},
+        )
         confirmed: set[tuple[int, int]] = set()
         observed: list[dict[str, Any]] = []
         for nm_id, action_id in sorted(selected):
@@ -354,7 +371,7 @@ def main() -> None:
         raise RuntimeError("WB price-grid plan checksum mismatch")
 
     approved = read_json(approved_path)
-    if approved.get("schema") != "wb_best_price_action_plan.v1":
+    if approved.get("schema") != "wb_best_price_action_plan.v2":
         raise RuntimeError("unsupported approved report schema")
     if int(approved.get("outside_action_discount")) != int(args.outside_discount):
         raise RuntimeError("outside-action discount differs from approved report")
@@ -388,14 +405,19 @@ def main() -> None:
     if preflight["overall_status"] != "ok":
         raise RuntimeError(f"WB preflight failed: {preflight['overall_status']}")
 
-    minimum_verify = fresh_minimum_verify(
-        run_dir=run_dir,
-        price_plan_path=args.price_plan.resolve(),
-        price_plan_hash=args.price_plan_sha256,
-    )
-    price_plan = validate_plan_hash(
+    reference_price_plan = validate_plan_hash(
         args.price_plan.resolve(), args.price_plan_sha256
     )
+    minimum_verify = fresh_minimum_verify(
+        run_dir=run_dir,
+        expected_products=approved["products"],
+    )
+    price_plan, minimum_snapshot = price_plan_with_fresh_minimums(
+        reference_price_plan,
+        Path(str(minimum_verify["source_xlsx"])),
+    )
+    write_json(run_dir / "processed" / "effective_price_plan.json", json_ready(price_plan))
+    write_json(run_dir / "processed" / "minimum_snapshot.json", minimum_snapshot)
     fresh_snapshot_path, fresh_snapshot = download_action_snapshot(
         run_dir, "fresh_plan"
     )
