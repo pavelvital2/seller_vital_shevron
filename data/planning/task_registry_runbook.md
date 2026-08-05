@@ -369,6 +369,10 @@ approved card batch, card create/remove и seller SKU update. Legacy
 - `wb-liquidation-stage2-apply`: требует `plan_run_id` и
   `confirmed_by_user=true`; fresh checksum и полный payload должны совпасть с
   owner-approved планом, после одного upload обязателен Prices API verify;
+- `liquidation-stop-apply`: требует `plan_run_id` и
+  `confirmed_by_user=true`; удаляет только exact Ozon SKU/WB nmID из
+  согласованных CPC-кампаний, проверяет полный состав остальных товаров и не
+  меняет ставки, бюджеты, цены, minimum или акции;
 - `wb-best-price-action-apply`: требует `plan_run_id` и
   `confirmed_by_user=true`; использует owner-reviewed план выбора акций от
   минимальной цены и отдельный read-only verify;

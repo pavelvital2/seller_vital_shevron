@@ -3,7 +3,6 @@ from __future__ import annotations
 import csv
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
-from html import escape
 import json
 from pathlib import Path
 from typing import Any
@@ -17,6 +16,13 @@ from seller_agent.marketplaces.wb.prices_adapter import WbPricesAdapter
 from seller_agent.marketplaces.wb.statistics_adapter import WbStatisticsAdapter
 from seller_agent.reports.writer import ensure_dir, write_json
 from seller_agent.safety.approvals import action_rows_checksum
+from seller_agent.tasks.liquidation_report import (
+    build_business_analysis,
+    collect_parser_visibility,
+    enrich_products_with_visibility,
+    render_management_html,
+    render_management_markdown,
+)
 from seller_agent.tasks.wb_promotion_report import run_wb_promotion_report
 
 
@@ -53,6 +59,9 @@ WB_STAGE2_APPLIED_NM_IDS = frozenset(
         707892603,
     }
 )
+WB_STAGE2_ALREADY_TARGET_NM_IDS = frozenset({690790447})
+WB_STAGE2_COMPLETED_NM_IDS = WB_STAGE2_APPLIED_NM_IDS | WB_STAGE2_ALREADY_TARGET_NM_IDS
+OZON_MINIMUM_REFERENCE_SUPERSEDED_BY = "ozon_full_price_grid_restore_apply_20260803T195149"
 
 
 def _decimal(value: Any) -> Decimal:
@@ -131,7 +140,7 @@ def _wb_active_cpc_nm_ids(campaigns_payload: Any) -> set[int]:
     return result
 
 
-def _ozon_seller_orders(postings: list[dict[str, Any]], cohort_offer_ids: set[str]) -> dict[str, dict[str, Decimal | int]]:
+def _ozon_seller_orders(postings: list[dict[str, Any]], cohort_skus: set[str]) -> dict[str, dict[str, Decimal | int]]:
     totals: dict[str, dict[str, Decimal | int]] = {}
     for posting in postings:
         if str(posting.get("status") or "").lower() == "cancelled":
@@ -139,10 +148,10 @@ def _ozon_seller_orders(postings: list[dict[str, Any]], cohort_offer_ids: set[st
         for product in posting.get("products") or []:
             if not isinstance(product, dict):
                 continue
-            offer_id = str(product.get("offer_id") or "").strip()
-            if offer_id not in cohort_offer_ids:
+            sku = str(product.get("sku") or "").strip()
+            if sku not in cohort_skus:
                 continue
-            item = totals.setdefault(offer_id, {"units": 0, "value": Decimal("0")})
+            item = totals.setdefault(sku, {"units": 0, "value": Decimal("0")})
             quantity = _integer(product.get("quantity"))
             item["units"] = int(item["units"]) + quantity
             item["value"] = Decimal(item["value"]) + _decimal(product.get("price")) * quantity
@@ -184,7 +193,7 @@ def _ozon_ad_rows(
             if not isinstance(row, dict):
                 continue
             sku = str(row.get("sku") or "").strip()
-            day = str(row.get("date") or "").strip()
+            day = _normalize_report_date(row.get("date"))
             if not sku or not day:
                 continue
             metrics = {
@@ -198,6 +207,18 @@ def _ozon_ad_rows(
             _add_metrics(totals.setdefault(sku, _empty_metrics()), metrics)
             _add_metrics(daily.setdefault((sku, day), _empty_metrics()), metrics)
     return totals, daily
+
+
+def _normalize_report_date(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    for pattern in ("%Y-%m-%d", "%d.%m.%Y"):
+        try:
+            return datetime.strptime(text[:10], pattern).date().isoformat()
+        except ValueError:
+            continue
+    return text[:10]
 
 
 def _wb_ad_rows(stats_rows: list[dict[str, Any]]) -> tuple[dict[int, dict[str, Decimal | int]], dict[tuple[int, str], dict[str, Decimal | int]]]:
@@ -252,8 +273,8 @@ def build_liquidation_rows(
     wb_ad_totals: dict[int, dict[str, Decimal | int]],
     wb_orders: dict[int, dict[str, Decimal | int]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
-    ozon_stock_map = {str(row.get("offer_id") or ""): _stock_from_ozon_row(row) for row in ozon_stocks}
-    ozon_price_map = {str(row.get("offer_id") or ""): row for row in ozon_prices}
+    ozon_stock_map = {str(row.get("product_id") or row.get("id") or ""): row for row in ozon_stocks}
+    ozon_price_map = {str(row.get("product_id") or ""): row for row in ozon_prices}
     wb_stock_map: dict[int, dict[str, int]] = {}
     wb_price_map = {_integer(row.get("nmID")): row for row in wb_prices}
     for row in wb_stocks:
@@ -266,26 +287,33 @@ def build_liquidation_rows(
     ozon_rows: list[dict[str, Any]] = []
     stop_rows: list[dict[str, Any]] = []
     for source in ozon_cohort:
-        offer_id = str(source.get("offer_id") or "").strip()
+        source_offer_id = str(source.get("offer_id") or "").strip()
+        product_id = str(source.get("product_id") or "").strip()
         sku = str(source.get("ozon_sku") or "").strip()
         pack_qty = max(_integer(source.get("pack_qty")), 1)
         ad = ozon_ad_totals.get(sku, _empty_metrics())
-        seller = ozon_orders.get(offer_id, {"units": 0, "value": Decimal("0")})
+        seller = ozon_orders.get(sku, {"units": 0, "value": Decimal("0")})
         stop_spend = Decimal("50") * pack_qty
         hard_stop = int(seller["units"]) == 0 and Decimal(ad["spend"]) >= stop_spend
-        stock, reserved = ozon_stock_map.get(offer_id, (0, 0))
-        price_row = ozon_price_map.get(offer_id, {})
+        stock_row = ozon_stock_map.get(product_id, {})
+        stock, reserved = _stock_from_ozon_row(stock_row)
+        price_row = ozon_price_map.get(product_id, {})
+        offer_id = str(price_row.get("offer_id") or stock_row.get("offer_id") or source_offer_id).strip()
+        cpc_current = sku in ozon_current_cpc_skus
+        stop_action_required = hard_stop and cpc_current
         row = {
             "decision_group": source.get("decision_group", ""),
+            "cohort_status": source.get("cohort_status", "approved_liquidation_cohort"),
             "offer_id": offer_id,
-            "product_id": source.get("product_id", ""),
+            "source_offer_id": source_offer_id,
+            "product_id": product_id,
             "ozon_sku": sku,
             "title": source.get("title", ""),
             "pack_qty": pack_qty,
             "stock_fbo": stock,
             "reserved_fbo": reserved,
             "elastic_active": _ozon_elastic_active(price_row),
-            "cpc_current": sku in ozon_current_cpc_skus,
+            "cpc_current": cpc_current,
             "callsign": "позывн" in str(source.get("title") or "").lower(),
             "views": int(ad["views"]),
             "clicks": int(ad["clicks"]),
@@ -297,14 +325,29 @@ def build_liquidation_rows(
             "seller_order_value": float(Decimal(seller["value"])),
             "stop_spend": float(stop_spend),
             "hard_stop_reached": hard_stop,
+            "stop_action_required": stop_action_required,
             "live_min_price": float(_ozon_min_price(price_row)),
             "documented_target_min_price": float(_decimal(source.get("target_min_price"))),
+            "target_min_price_source": source.get("target_min_price_source", "approved_liquidation_plan"),
             "min_price_document_mismatch": _ozon_min_price(price_row) != _decimal(source.get("target_min_price")),
-            "decision": "review_stop" if hard_stop else "keep_monitoring",
+            "min_price_reference_status": "superseded_plan_reference",
+            "min_price_reference_superseded_by": OZON_MINIMUM_REFERENCE_SUPERSEDED_BY,
+            "min_price_actionable_mismatch": False,
+            "decision": "review_stop" if stop_action_required else ("hard_stop_already_inactive" if hard_stop else "keep_monitoring"),
         }
         ozon_rows.append(row)
-        if hard_stop:
-            stop_rows.append({"marketplace": "ozon", "product_id": sku, "offer_id": offer_id, "reason": "spend_limit_without_seller_order", "threshold": float(stop_spend), "observed": row["ad_spend"]})
+        if stop_action_required:
+            stop_rows.append(
+                {
+                    "marketplace": "ozon",
+                    "product_id": product_id,
+                    "ozon_sku": sku,
+                    "offer_id": offer_id,
+                    "reason": "spend_limit_without_seller_order",
+                    "threshold": float(stop_spend),
+                    "observed": row["ad_spend"],
+                }
+            )
 
     wb_rows: list[dict[str, Any]] = []
     for source in wb_cohort:
@@ -318,8 +361,21 @@ def build_liquidation_rows(
         stock = wb_stock_map.get(nm_id, {"quantity": 0, "to": 0, "from": 0})
         price = wb_price_map.get(nm_id, {})
         current_discount = _integer(price.get("discount")) if price else 0
+        active_cpc = nm_id in wb_active_cpc_nm_ids
+        stop_action_required = hard_stop and active_cpc
         stage2_configured = str(source.get("requires_second_price_stage") or "").lower() == "true"
-        stage2_applied = stage2_configured and current_discount == _integer(source.get("target_discount"))
+        stage2_target_discount = _integer(source.get("target_discount"))
+        stage2_historically_completed = nm_id in WB_STAGE2_COMPLETED_NM_IDS
+        stage2_live_target_matches = stage2_configured and current_discount == stage2_target_discount
+        stage2_live_drift = stage2_historically_completed and not stage2_live_target_matches
+        if stage2_live_drift:
+            stage2_state = "applied_then_overwritten"
+        elif stage2_historically_completed:
+            stage2_state = "historically_completed_live_target"
+        elif stage2_configured:
+            stage2_state = "not_historically_completed"
+        else:
+            stage2_state = "documented_stage1"
         row = {
             "group": source.get("group", ""),
             "nm_id": nm_id,
@@ -331,13 +387,15 @@ def build_liquidation_rows(
             "in_way_to_client": stock["to"],
             "in_way_from_client": stock["from"],
             "price_mode": source.get("price_mode", ""),
-            "action_state": "verified_stage2" if stage2_applied else ("pending_stage2" if stage2_configured else "documented_stage1"),
+            "action_state": stage2_state,
             "live_discount": current_discount,
-            "active_cpc": nm_id in wb_active_cpc_nm_ids,
+            "active_cpc": active_cpc,
             "recommended_bid": float(_decimal(source.get("target_bid_recalc") or source.get("recommended_bid"))),
             "second_price_stage_configured": stage2_configured,
-            "second_price_stage_applied": stage2_applied,
-            "requires_second_price_stage": stage2_configured and not stage2_applied,
+            "second_price_stage_applied": stage2_historically_completed,
+            "second_price_stage_live_target_matches": stage2_live_target_matches,
+            "second_price_stage_live_drift": stage2_live_drift,
+            "requires_second_price_stage": stage2_configured and not stage2_historically_completed,
             "monitor_from": WB_STAGE2_FULL_DAY_FROM.isoformat() if nm_id in WB_STAGE2_APPLIED_NM_IDS else WB_APPLY_STARTED_AT.date().isoformat(),
             "views": int(ad["views"]),
             "clicks": int(ad["clicks"]),
@@ -350,51 +408,13 @@ def build_liquidation_rows(
             "stop_clicks": _integer(source.get("post_apply_click_stop") or 10),
             "stop_spend": float(_decimal(source.get("post_apply_spend_stop") or 20)),
             "hard_stop_reached": hard_stop,
-            "decision": "review_stop" if hard_stop else "keep_monitoring",
+            "stop_action_required": stop_action_required,
+            "decision": "review_stop" if stop_action_required else ("hard_stop_already_inactive" if hard_stop else "keep_monitoring"),
         }
         wb_rows.append(row)
-        if hard_stop:
+        if stop_action_required:
             stop_rows.append({"marketplace": "wb", "product_id": nm_id, "offer_id": source.get("internal_sku", ""), "reason": "click_or_spend_limit_without_seller_order", "threshold": f"{row['stop_clicks']} clicks / {row['stop_spend']} RUB", "observed": f"{row['clicks']} clicks / {row['ad_spend']} RUB"})
     return ozon_rows, wb_rows, stop_rows
-
-
-def _render_markdown(summary: dict[str, Any]) -> str:
-    ozon = summary["ozon"]
-    wb = summary["wb"]
-    return "\n".join(
-        [
-            "# Ежедневный контроль распродажи Ozon и WB",
-            "",
-            f"Run ID: `{summary['run_id']}`",
-            f"Период: `{summary['period']['date_from']} - {summary['period']['date_to']}`; только завершённые дни.",
-            "",
-            "## Ozon",
-            f"- когорта: **{ozon['cohort']} SKU**; остаток: **{ozon['stock_products']} товаров / {ozon['stock_physical_items']} изделий**;",
-            f"- Elastic: **{ozon['elastic_active']}/{ozon['cohort']}**; CPC: **{ozon['cpc_active']}/{ozon['cohort']}**;",
-            f"- Seller API заказы: **{ozon['seller_order_units']}**; рекламная атрибуция: **{ozon['ad_orders']}**; расход CPC: **{ozon['ad_spend']:.2f} руб.**;",
-            f"- hard-stop review: **{ozon['hard_stop_candidates']}**; расхождения minimum с документом: **{ozon['min_price_mismatches']}**.",
-            "",
-            "## Wildberries",
-            f"- когорта: **{wb['cohort']} nmID**; остаток: **{wb['stock_goods']} товаров / {wb['stock_physical_items']} изделий**;",
-            f"- CPC: **{wb['cpc_active']}/{wb['cohort']}**;",
-            f"- Statistics API заказы: **{wb['seller_order_units']}**; рекламная атрибуция: **{wb['ad_orders']}**; расход CPC: **{wb['ad_spend']:.2f} руб.**;",
-            f"- hard-stop review: **{wb['hard_stop_candidates']}**; второй ценовой шаг: **{wb['second_price_stage_pending']}**.",
-            "",
-            "## Решение",
-            "Hard-stop строки являются только review-кандидатами. Цены, акции, ставки и состав кампаний не изменялись.",
-        ]
-    )
-
-
-def _render_html(summary: dict[str, Any], ozon_rows: list[dict[str, Any]], wb_rows: list[dict[str, Any]]) -> str:
-    def table(rows: list[dict[str, Any]], id_key: str) -> str:
-        body = "".join(
-            f"<tr><td>{escape(str(row[id_key]))}</td><td>{escape(str(row['title']))}</td><td>{row.get('pack_qty')}</td><td>{row.get('stock_fbo', row.get('stock_goods', 0))}</td><td>{row.get('clicks')}</td><td>{row.get('ad_spend')}</td><td>{row.get('seller_order_units')}</td><td>{escape(str(row.get('decision')))}</td></tr>"
-            for row in rows
-        )
-        return f"<div class='wrap'><table><thead><tr><th>ID</th><th>Товар</th><th>Изделий</th><th>Остаток</th><th>Клики</th><th>Расход</th><th>Заказы</th><th>Решение</th></tr></thead><tbody>{body}</tbody></table></div>"
-
-    return f"""<!doctype html><html lang='ru'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Контроль распродажи</title><style>body{{margin:0;background:#f3f5f7;color:#17212b;font:14px/1.45 Arial,sans-serif;letter-spacing:0}}main{{max-width:1400px;margin:auto;padding:20px}}section{{background:#fff;border:1px solid #d8dee6;border-radius:6px;padding:16px;margin:12px 0}}.grid{{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}}.m{{border-left:4px solid #176b55;padding:10px;background:#f7faf9}}.m b{{display:block;font-size:22px}}.wrap{{overflow:auto;max-height:620px}}table{{border-collapse:collapse;width:100%;min-width:980px}}th,td{{padding:8px;border-bottom:1px solid #e1e5ea;text-align:right}}th:nth-child(2),td:nth-child(2){{text-align:left}}th{{position:sticky;top:0;background:#eef2f5}}@media(max-width:800px){{.grid{{grid-template-columns:repeat(2,1fr)}}}}</style></head><body><main><h1>Ежедневный контроль распродажи</h1><p>Run ID: {escape(summary['run_id'])}. Read-only, завершённые дни {summary['period']['date_from']}–{summary['period']['date_to']}.</p><section><h2>Сводка</h2><div class='grid'><div class='m'>Ozon когорта<b>{summary['ozon']['cohort']}</b></div><div class='m'>Ozon stop-review<b>{summary['ozon']['hard_stop_candidates']}</b></div><div class='m'>WB когорта<b>{summary['wb']['cohort']}</b></div><div class='m'>WB stop-review<b>{summary['wb']['hard_stop_candidates']}</b></div></div></section><section><h2>Ozon</h2>{table(ozon_rows, 'ozon_sku')}</section><section><h2>Wildberries</h2>{table(wb_rows, 'nm_id')}</section></main></body></html>"""
 
 
 def run_liquidation_daily_control(
@@ -417,7 +437,6 @@ def run_liquidation_daily_control(
     ozon_cohort = _read_csv(ozon_cohort_path)
     wb_cohort = _read_csv(wb_cohort_path)
 
-    ozon_offer_ids = [str(row.get("offer_id") or "") for row in ozon_cohort]
     ozon_product_ids = [str(row.get("product_id") or "") for row in ozon_cohort]
     ozon_skus = {str(row.get("ozon_sku") or "") for row in ozon_cohort}
     wb_nm_ids = {_integer(row.get("nm_id")) for row in wb_cohort}
@@ -428,7 +447,7 @@ def run_liquidation_daily_control(
     wb_prices_adapter = WbPricesAdapter(credentials.wb)
     wb_statistics = WbStatisticsAdapter(credentials.wb)
 
-    ozon_prices = ozon_seller.fetch_product_info_prices_by_offer_ids(ozon_offer_ids)
+    ozon_prices = ozon_seller.fetch_product_info_prices_by_product_ids(ozon_product_ids)
     ozon_stocks = ozon_seller.fetch_product_stocks(ozon_product_ids)
     period_to = datetime.combine(completed_to + timedelta(days=1), time.min, tzinfo=OZON_APPLY_STARTED_AT.tzinfo)
     ozon_postings = ozon_seller.fetch_fbo_postings(since=OZON_APPLY_STARTED_AT.isoformat(), to=period_to.isoformat())
@@ -455,7 +474,7 @@ def run_liquidation_daily_control(
     current_wb_cpc = _wb_active_cpc_nm_ids(wb_campaigns_raw)
     wb_ad_totals, wb_daily = _wb_ad_rows(wb_stats_raw)
 
-    ozon_orders = _ozon_seller_orders(ozon_postings, set(ozon_offer_ids))
+    ozon_orders = _ozon_seller_orders(ozon_postings, ozon_skus)
     wb_orders = _wb_seller_orders(wb_orders_raw, wb_nm_ids)
     stage2_nm_ids = wb_nm_ids & WB_STAGE2_APPLIED_NM_IDS
     stage2_orders = _wb_seller_orders(
@@ -499,6 +518,30 @@ def run_liquidation_daily_control(
             metrics = wb_daily.get((nm_id, day.isoformat()), _empty_metrics())
             daily_rows.append({"marketplace": "wb", "date": day.isoformat(), "product_id": nm_id, **{key: float(value) if isinstance(value, Decimal) else value for key, value in metrics.items()}})
 
+    for row in ozon_rows:
+        row["monitoring_full_days"] = max((completed_to - OZON_APPLY_STARTED_AT.date()).days + 1, 0)
+    for row in wb_rows:
+        monitor_from = date.fromisoformat(str(row.get("monitor_from") or WB_APPLY_STARTED_AT.date().isoformat()))
+        row["monitoring_full_days"] = max((completed_to - monitor_from).days + 1, 0)
+
+    visibility = collect_parser_visibility(ozon_rows=ozon_rows, wb_rows=wb_rows)
+    ozon_rows = enrich_products_with_visibility(
+        ozon_rows,
+        marketplace="ozon",
+        visibility=visibility.get("marketplaces", {}).get("ozon", {}),
+    )
+    wb_rows = enrich_products_with_visibility(
+        wb_rows,
+        marketplace="wb",
+        visibility=visibility.get("marketplaces", {}).get("wb", {}),
+    )
+    analysis = build_business_analysis(
+        ozon_rows=ozon_rows,
+        wb_rows=wb_rows,
+        daily_rows=daily_rows,
+        visibility=visibility,
+    )
+
     stop_review = {
         "schema": "liquidation_stop_review.v1",
         "run_id": run_id,
@@ -515,6 +558,8 @@ def run_liquidation_daily_control(
         "ozon_by_product": str(processed_dir / "ozon_by_product.csv"),
         "wb_by_product": str(processed_dir / "wb_by_product.csv"),
         "daily_by_product": str(processed_dir / "daily_by_product.csv"),
+        "business_analysis": str(processed_dir / "business_analysis.json"),
+        "parser_visibility": str(processed_dir / "parser_visibility.json"),
         "stop_review": str(processed_dir / "stop_review.json"),
     }
     summary = {
@@ -532,8 +577,12 @@ def run_liquidation_daily_control(
             "ad_spend": sum(row["ad_spend"] for row in ozon_rows),
             "elastic_active": sum(bool(row["elastic_active"]) for row in ozon_rows),
             "cpc_active": sum(bool(row["cpc_current"]) for row in ozon_rows),
-            "hard_stop_candidates": sum(bool(row["hard_stop_reached"]) for row in ozon_rows),
+            "hard_stop_candidates": sum(bool(row["stop_action_required"]) for row in ozon_rows),
+            "hard_stop_already_inactive": sum(bool(row["hard_stop_reached"]) and not bool(row["stop_action_required"]) for row in ozon_rows),
             "min_price_mismatches": sum(bool(row["min_price_document_mismatch"]) for row in ozon_rows),
+            "min_price_actionable_mismatches": sum(bool(row["min_price_actionable_mismatch"]) for row in ozon_rows),
+            "min_price_reference_status": "superseded_plan_reference",
+            "min_price_reference_superseded_by": OZON_MINIMUM_REFERENCE_SUPERSEDED_BY,
         },
         "wb": {
             "cohort": len(wb_rows),
@@ -543,17 +592,27 @@ def run_liquidation_daily_control(
             "ad_orders": sum(row["ad_orders"] for row in wb_rows),
             "ad_spend": sum(row["ad_spend"] for row in wb_rows),
             "cpc_active": sum(bool(row["active_cpc"]) for row in wb_rows),
-            "hard_stop_candidates": sum(bool(row["hard_stop_reached"]) for row in wb_rows),
+            "hard_stop_candidates": sum(bool(row["stop_action_required"]) for row in wb_rows),
+            "hard_stop_already_inactive": sum(bool(row["hard_stop_reached"]) and not bool(row["stop_action_required"]) for row in wb_rows),
             "second_price_stage_pending": sum(bool(row["requires_second_price_stage"]) for row in wb_rows),
+            "second_price_stage_historically_completed": sum(bool(row["second_price_stage_applied"]) for row in wb_rows),
+            "second_price_stage_live_drift": sum(bool(row["second_price_stage_live_drift"]) for row in wb_rows),
         },
         "stop_review_checksum": stop_review["actions_checksum"],
         "apply_performed": False,
-        "sources": [str(ozon_cohort_path), str(wb_cohort_path), "Ozon Seller API", "Ozon Performance API", "WB Statistics API", "WB Promotion API", "WB Analytics API"],
+        "sources": [str(ozon_cohort_path), str(wb_cohort_path), "Ozon Seller API", "Ozon Performance API", "WB Statistics API", "WB Promotion API", "WB Analytics API", "Parser Data API"],
         "artifacts": artifacts,
+    }
+    summary["analysis"] = {
+        "ozon": {key: value for key, value in analysis["ozon"].items() if key != "top_sellers"},
+        "wb": {key: value for key, value in analysis["wb"].items() if key != "top_sellers"},
+        "parser_visibility_status": visibility.get("status"),
     }
     _write_csv(Path(artifacts["ozon_by_product"]), ozon_rows)
     _write_csv(Path(artifacts["wb_by_product"]), wb_rows)
     _write_csv(Path(artifacts["daily_by_product"]), daily_rows)
+    write_json(Path(artifacts["business_analysis"]), analysis)
+    write_json(Path(artifacts["parser_visibility"]), visibility)
     write_json(Path(artifacts["stop_review"]), stop_review)
     write_json(raw_dir / "ozon_prices.json", ozon_prices)
     write_json(raw_dir / "ozon_stocks.json", ozon_stocks)
@@ -562,8 +621,11 @@ def run_liquidation_daily_control(
     write_json(raw_dir / "wb_orders.json", wb_orders_raw)
     write_json(raw_dir / "wb_stocks.json", wb_stocks)
     write_json(raw_dir / "wb_prices.json", wb_prices)
-    Path(artifacts["report"]).write_text(_render_markdown(summary), encoding="utf-8")
-    Path(artifacts["report_html"]).write_text(_render_html(summary, ozon_rows, wb_rows), encoding="utf-8")
+    Path(artifacts["report"]).write_text(render_management_markdown(summary, analysis), encoding="utf-8")
+    Path(artifacts["report_html"]).write_text(
+        render_management_html(summary, analysis, ozon_rows, wb_rows),
+        encoding="utf-8",
+    )
     write_json(Path(artifacts["summary"]), summary)
     summary["artifacts"].update(write_summary_run_manifest(data_dir=data_dir, run_dir=run_dir, summary=summary, task="liquidation-daily-control", mode="read_only", risk="low", marketplaces=["ozon", "wb"], inputs={"date_to": completed_to.isoformat(), "ozon_cohort": str(ozon_cohort_path), "wb_cohort": str(wb_cohort_path)}, lifecycle_status="closed", closed=True))
     write_json(Path(artifacts["summary"]), summary)

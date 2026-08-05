@@ -171,6 +171,60 @@ description: "Use for Ozon/Wildberries marketplace action monitoring after promo
   `17/17`, Prices API `17/17`, base price unchanged. Start effectiveness
   evaluation from the new final-price window, not the earlier intermediate
   price stage.
+- Confirmed on 2026-08-02 for WB CPC/action follow-ups: before attributing a
+  result to an approved cohort, compare every current bid/discount with the
+  verified apply value. Report unchanged and drifted rows separately; a
+  mixed cohort is not a clean experiment. If Parser Data API has no
+  comparable pre-apply regional run, show the latest regional visibility only
+  as current state and never convert missing baseline rows into lost
+  positions. Vital Shevron reference:
+  `wb_cpc_autoactions_control_20260802T074849`.
+- Confirmed on 2026-08-02 for owner-facing liquidation reports: cohort size,
+  spend and stop counters alone are not an actionable report. Show sold SKU
+  share, physical units, order value, daily funnel, spend per seller order,
+  explicit problem/action groups and a per-product recommendation. Join the
+  exact cohort with Parser Data API visibility only for semantically relevant
+  queries, and expose the query name, best position, query coverage and
+  visible regions. Keep `query_pack_gap` separate from `not_visible`. Normalize
+  localized marketplace report dates before building daily rows; a correct
+  aggregate does not prove that per-day rows are populated.
+- Confirmed on 2026-08-03 for Ozon liquidation monitoring: seller `offer_id`
+  is mutable and must not be the join key for a saved cohort. Join prices and
+  stocks by stable `product_id`, seller postings and CPC metrics by Ozon SKU,
+  and use fresh `offer_id` only as display metadata. Before a new stop/apply
+  decision, rebuild the dormant cohort from the full live catalog for the
+  exact completed-day window; never use the previous cohort count as an input
+  filter. Vital Shevron validation rebuilt legacy `138` into current `142`
+  (`128` retained, `10` exited after buyouts, `14` entered).
+- Confirmed on 2026-08-04 for early Ozon CPC visibility control: compare the
+  next published regional SERP by exact applied cohorts, not only by the total
+  store. Split increased bids, decreased regular products, decreased dormant
+  products, unchanged CPC and outside-CPC products; apply an in-stock gate to
+  the regular growth portfolio. Report visible SKUs, query-region pairs and
+  top-100 pairs separately. A 5-7 hour post-apply SERP is an early signal only;
+  require three full days of SERP plus orders, CPA, DRR and available ad CPO
+  before a new bid apply. Reference:
+  `ozon_post_change_visibility_review_20260804T182433`.
+- Confirmed on 2026-08-05 for liquidation CPC hard stops: Ozon card
+  `product_id` and advertising `ozon_sku` are different identifiers and must
+  be carried separately through stop-review, plan, apply and verify. Remove
+  Ozon campaign membership only by `ozon_sku`; use `product_id` to verify the
+  card and current display `offer_id`. For WB use exact `nmID`. Before apply,
+  rebuild live membership for every reviewed target; after apply, compare the
+  full non-target campaign membership and bids with the baseline. A product
+  that already reached hard stop but is no longer in active CPC is historical
+  evidence, not a new stop action. Vital Shevron reference:
+  `liquidation_stop_apply_20260805T105837` and
+  `liquidation_stop_verify_20260805T105856`.
+- Confirmed on 2026-08-05 for liquidation price follow-ups: do not infer an
+  outstanding WB second price step from a later live-discount mismatch. First
+  read the original apply/verify receipt, then run a fresh best-price action
+  calculation. The confirmed `18/18` stage-2 cohort had been completed
+  historically, and the fresh run `wb_best_price_actions_plan_50_20260805T110508`
+  found every row already in its highest-price eligible action with `0`
+  discount changes. Likewise, an Ozon liquidation minimum reference that was
+  superseded by a later owner-approved full price-grid restore is audit history,
+  not an actionable minimum error.
 
 ## Baseline Pattern
 

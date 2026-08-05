@@ -21,6 +21,11 @@ from seller_agent.tasks.inbox_workflow import (
     run_wb_inbox_verify,
 )
 from seller_agent.tasks.liquidation_daily_control import run_liquidation_daily_control
+from seller_agent.tasks.liquidation_stop import (
+    run_liquidation_stop_apply,
+    run_liquidation_stop_plan,
+    run_liquidation_stop_verify,
+)
 from seller_agent.tasks.marketplace_period_report import run_marketplace_period_report
 from seller_agent.tasks.ozon_actions_optimizer_apply import (
     run_ozon_actions_optimizer_apply,
@@ -265,6 +270,9 @@ def default_workflow_handlers() -> dict[str, WorkflowHandler]:
     return {
         "daily-morning-report": _daily_morning_report_handler,
         "liquidation-daily-control": _liquidation_daily_control_handler,
+        "liquidation-stop-plan": _liquidation_stop_plan_handler,
+        "liquidation-stop-apply": _liquidation_stop_apply_handler,
+        "liquidation-stop-verify": _liquidation_stop_verify_handler,
         "wb-liquidation-stage2-plan": _wb_liquidation_stage2_plan_handler,
         "wb-liquidation-stage2-apply": _wb_liquidation_stage2_apply_handler,
         "wb-liquidation-stage2-verify": _wb_liquidation_stage2_verify_handler,
@@ -355,6 +363,60 @@ def _liquidation_daily_control_handler(
         date_to=_optional_str(inputs.get("date_to")),
         ozon_cohort_path=Path(inputs.get("ozon_cohort_path") or "data/runs/2026-07-30/ozon_dormant_reset_plan_docs_fixed_20260730T1050/ozon_dormant_reset_plan.csv"),
         wb_cohort_path=Path(inputs.get("wb_cohort_path") or "data/runs/2026-07-30/wb_dormant_liquidation_fresh_preapply_20260730T1421/liquidation_plan.csv"),
+        run_id=_optional_str(inputs.get("run_id")),
+    )
+
+
+def _liquidation_stop_plan_handler(
+    task: RegisteredTask,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    if credentials is None:
+        raise ValueError(f"Task `{task.name}` requires credentials.")
+    result = run_liquidation_stop_plan(
+        credentials=credentials,
+        data_dir=data_dir,
+        source_run_id=_required_str(inputs, "source_run_id", task.name),
+        run_id=_optional_str(inputs.get("run_id")),
+    )
+    return with_plan_approval_candidate(
+        result,
+        action_count=_plan_action_count(result, "actions_count"),
+        source_field="plan_run_id",
+    )
+
+
+def _liquidation_stop_apply_handler(
+    task: RegisteredTask,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    if credentials is None:
+        raise ValueError(f"Task `{task.name}` requires credentials.")
+    return run_liquidation_stop_apply(
+        credentials=credentials,
+        data_dir=data_dir,
+        plan_run_id=_required_str(inputs, "plan_run_id", task.name),
+        confirmed_by_user=_bool_input(inputs, "confirmed_by_user", False),
+        run_id=_optional_str(inputs.get("run_id")),
+    )
+
+
+def _liquidation_stop_verify_handler(
+    task: RegisteredTask,
+    data_dir: Path,
+    credentials: AppCredentials | None,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    if credentials is None:
+        raise ValueError(f"Task `{task.name}` requires credentials.")
+    return run_liquidation_stop_verify(
+        credentials=credentials,
+        data_dir=data_dir,
+        plan_run_id=_required_str(inputs, "plan_run_id", task.name),
         run_id=_optional_str(inputs.get("run_id")),
     )
 
