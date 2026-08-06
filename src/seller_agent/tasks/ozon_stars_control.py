@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+import time
+from typing import Any, Callable, TypeVar
 
 from seller_agent.config import AppCredentials
 from seller_agent.core.run_manifest import write_summary_run_manifest
+from seller_agent.http import ApiError
 from seller_agent.marketplaces.ozon.adapter import OzonSellerAdapter
 from seller_agent.reports.writer import ensure_dir, write_json
 from seller_agent.tasks.liquidation_daily_control import _decimal
@@ -14,6 +16,29 @@ from seller_agent.tasks.marketplace_period_report import run_marketplace_period_
 
 DEACTIVATED_AT_UTC = datetime.fromisoformat("2026-07-29T13:56:22.594+00:00")
 RECONNECT_THRESHOLD_PCT = 21.19
+RATE_LIMIT_RETRY_DELAYS_SECONDS = (5.0, 10.0, 20.0)
+SELLER_API_PHASE_COOLDOWN_SECONDS = 1.0
+
+
+T = TypeVar("T")
+
+
+def retry_ozon_read_after_rate_limit(
+    operation: Callable[[], T],
+    *,
+    sleep: Callable[[float], None] = time.sleep,
+    delays: tuple[float, ...] = RATE_LIMIT_RETRY_DELAYS_SECONDS,
+) -> tuple[T, int]:
+    """Retry a read-only Ozon operation only after an explicit HTTP 429."""
+    retries_used = 0
+    while True:
+        try:
+            return operation(), retries_used
+        except ApiError as exc:
+            if exc.status != 429 or retries_used >= len(delays):
+                raise
+            sleep(delays[retries_used])
+            retries_used += 1
 
 
 def stars_fee_breakdown(operations: list[dict[str, Any]]) -> dict[str, Any]:
@@ -77,9 +102,36 @@ def run_ozon_stars_control(
     run_id = run_id or f"ozon_stars_{window_days}d_control_{started:%Y%m%dT%H%M%S}"
     run_dir = ensure_dir(data_dir / "runs" / started.strftime("%Y-%m-%d") / run_id)
 
-    current = run_marketplace_period_report(credentials=credentials, data_dir=data_dir, marketplace="ozon", report_type="financial", date_from=current_from.isoformat(), date_to=current_to.isoformat(), run_id=f"{run_id}_current")
-    baseline = run_marketplace_period_report(credentials=credentials, data_dir=data_dir, marketplace="ozon", report_type="financial", date_from=baseline_from.isoformat(), date_to=baseline_to.isoformat(), run_id=f"{run_id}_baseline")
-    operations = OzonSellerAdapter(credentials.ozon_seller).fetch_finance_transactions(date_from=current_from.isoformat(), date_to=current_to.isoformat())
+    current, current_retries = retry_ozon_read_after_rate_limit(
+        lambda: run_marketplace_period_report(
+            credentials=credentials,
+            data_dir=data_dir,
+            marketplace="ozon",
+            report_type="financial",
+            date_from=current_from.isoformat(),
+            date_to=current_to.isoformat(),
+            run_id=f"{run_id}_current",
+        )
+    )
+    time.sleep(SELLER_API_PHASE_COOLDOWN_SECONDS)
+    baseline, baseline_retries = retry_ozon_read_after_rate_limit(
+        lambda: run_marketplace_period_report(
+            credentials=credentials,
+            data_dir=data_dir,
+            marketplace="ozon",
+            report_type="financial",
+            date_from=baseline_from.isoformat(),
+            date_to=baseline_to.isoformat(),
+            run_id=f"{run_id}_baseline",
+        )
+    )
+    time.sleep(SELLER_API_PHASE_COOLDOWN_SECONDS)
+    operations, finance_retries = retry_ozon_read_after_rate_limit(
+        lambda: OzonSellerAdapter(credentials.ozon_seller).fetch_finance_transactions(
+            date_from=f"{current_from.isoformat()}T00:00:00.000Z",
+            date_to=f"{current_to.isoformat()}T23:59:59.999Z",
+        )
+    )
     fees = stars_fee_breakdown(operations)
     current_metrics = current.get("metrics") or {}
     baseline_metrics = baseline.get("metrics") or {}
@@ -101,6 +153,12 @@ def run_ozon_stars_control(
         "stars_fees": fees,
         "reconnect_review_required": reconnect,
         "reconnect_threshold_pct": RECONNECT_THRESHOLD_PCT,
+        "rate_limit_retries": {
+            "current_report": current_retries,
+            "baseline_report": baseline_retries,
+            "finance_check": finance_retries,
+            "total": current_retries + baseline_retries + finance_retries,
+        },
         "decision": "owner_review_reconnect" if reconnect else "keep_disabled",
         "apply_performed": False,
         "artifacts": {"report": str(run_dir / "report.md"), "summary": str(run_dir / "summary.json"), "raw_finance": str(run_dir / "raw_finance.json"), "current_report": str(current.get("artifacts", {}).get("report", "")), "baseline_report": str(baseline.get("artifacts", {}).get("report", ""))},

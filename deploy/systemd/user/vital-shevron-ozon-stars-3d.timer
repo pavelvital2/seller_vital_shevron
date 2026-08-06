@@ -2,7 +2,7 @@
 Description=Queue Ozon Stars 3-day control
 
 [Timer]
-OnCalendar=2026-08-02 09:00:00 Europe/Moscow
+OnCalendar=2026-08-02 09:15:00 Europe/Moscow
 Persistent=true
 Unit=vital-shevron-ozon-stars-control@3.service
 

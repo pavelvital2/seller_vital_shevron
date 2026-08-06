@@ -225,6 +225,14 @@ description: "Use for Ozon/Wildberries marketplace action monitoring after promo
   discount changes. Likewise, an Ozon liquidation minimum reference that was
   superseded by a later owner-approved full price-grid restore is audit history,
   not an actionable minimum error.
+- Confirmed on 2026-08-06 for scheduled Ozon monitoring: do not place a
+  multi-request Stars control at the same minute as the daily liquidation
+  control. Ozon Seller API may return `HTTP 429` with a two-request-per-second
+  limit even when the jobs are serialized. For `ozon-stars-control`, retry
+  only the read operation that raised an explicit 429, using bounded
+  `5/10/20` second pauses; never generalize this retry to marketplace writes.
+  Keep a one-second cooldown between the current report, baseline report and
+  finance check, and schedule future Stars one-shot controls at `09:15 MSK`.
 
 ## Baseline Pattern
 
